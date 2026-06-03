@@ -14,6 +14,7 @@
 #include "hardware/OutputManager.h"
 #include "hardware/SensorManager.h"
 #include "hardware/DisplayManager.h"
+#include "api/ApiServer.h"
 
 static constexpr const char* TAG = "Main";
 
@@ -46,6 +47,7 @@ void setup() {
     OutputManager::instance().begin();
     SensorManager::instance().begin();
     DisplayManager::instance().begin();
+    ApiServer::instance().begin(webServer);
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
@@ -64,5 +66,6 @@ void loop() {
     OutputManager::instance().loop();
     SensorManager::instance().loop();
     DisplayManager::instance().loop();
+    ApiServer::instance().loop();
     delay(10);
 }

@@ -179,11 +179,11 @@ All other modules depend on these subsystems.
 
 ## Phase 5 — REST & WebSocket API
 
-- [ ] `ApiServer` on ESPAsyncWebServer
+- [x] `ApiServer` on ESPAsyncWebServer
 - [ ] REST endpoints:
-  - `GET /api/status` — device health
-  - `GET/POST /api/config` — configuration
-  - `GET/POST /api/variables`
+  - [x] `GET /api/status` — device health
+  - [x] `GET/POST /api/config` — configuration
+  - [x] `GET/POST /api/variables`
   - `GET/POST /api/inputs`
   - `GET/POST /api/outputs`
   - `GET/POST /api/sensors`
@@ -193,12 +193,12 @@ All other modules depend on these subsystems.
   - `GET/POST /api/profiles`
   - `GET/POST /api/templates`
   - `GET/POST /api/modules`
-  - `GET /api/logs`
+  - [x] `GET /api/logs`
   - `POST /api/ota/upload`
-  - `GET /api/ota/check`
-- [ ] WebSocket endpoint `/ws`
-  - Broadcast: sensor values, variable changes, log entries, device health
-  - Receive: action triggers, config changes, page navigation
+  - [x] `GET /api/ota/check`
+- [x] WebSocket endpoint `/ws`
+  - [x] Broadcast: sensor values, variable changes, log entries, device health
+  - [x] Receive: action triggers, config changes, page navigation
 
 ---
 
@@ -213,15 +213,15 @@ All other modules depend on these subsystems.
 
 ### Views
 
-- [ ] **Dashboard** — device status, memory, CPU, uptime, WiFi, firmware version
+- [x] **Dashboard** — device status, memory, CPU, uptime, WiFi, firmware version
 - [ ] **Device Layout Designer** — drag-and-drop hardware editor, real-time state
 - [ ] **Screen Designer** — visual display page editor, widget binding to variables/sensors
 - [ ] **Sensor Dashboard** — live values, historical graphs, min/max, export
 - [ ] **Action Manager** — create/edit actions, macros, conditions
 - [ ] **Module Manager** — discovered modules, diagnostics
 - [ ] **Home Assistant Manager** — entity mapping, discovery toggle
-- [ ] **Logs Viewer** — debug log stream, action history
-- [ ] **Settings** — WiFi, MQTT, OTA, system
+- [x] **Logs Viewer** — debug log stream, action history
+- [x] **Settings** — WiFi, MQTT, OTA, system
 
 ---
 

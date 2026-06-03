@@ -54,11 +54,18 @@ export const useWebSocketStore = defineStore('websocket', () => {
       case 'sensor_update':
         Object.assign(sensors, payload)
         break
+      case 'variable_snapshot':
+        Object.keys(variables).forEach((key) => delete variables[key])
+        Object.assign(variables, payload || {})
+        break
       case 'variable_change':
         Object.assign(variables, payload)
         break
       case 'health':
         Object.assign(health, payload)
+        break
+      case 'log_snapshot':
+        logs.value = Array.isArray(payload) ? payload : []
         break
       case 'log':
         logs.value.unshift(payload)
@@ -77,5 +84,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
   }
 
-  return { connected, sensors, variables, health, logs, events, connect, send }
+  function setLogsSnapshot(entries) {
+    logs.value = Array.isArray(entries) ? entries : []
+  }
+
+  return { connected, sensors, variables, health, logs, events, connect, send, setLogsSnapshot }
 })
