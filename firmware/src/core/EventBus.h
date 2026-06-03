@@ -11,6 +11,7 @@ enum class EventType : uint16_t {
     // Input
     InputDigitalChanged = 100,
     InputAnalogChanged,
+    OutputStateChanged,
 
     // Sensors
     SensorValueUpdated = 200,
