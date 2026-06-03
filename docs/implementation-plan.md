@@ -126,8 +126,9 @@ All other modules depend on these subsystems.
 
 ### Display Manager
 
-- [ ] Abstract `DisplayProvider` interface
-- [ ] OLED driver (SSD1306, SH1106, SSD1327) via U8g2 or Adafruit
+- [x] Abstract `DisplayProvider` interface
+- [x] OLED driver (SSD1306 via Adafruit)
+- [ ] Additional OLED variants (SH1106, SSD1327)
 - [ ] TFT driver (ST7789, ILI9341, ILI9488) via TFT_eSPI
 - [ ] Nextion smart display driver:
   - [ ] UART communication
@@ -136,7 +137,7 @@ All other modules depend on these subsystems.
   - [ ] Touch event forwarding to Event Bus
   - [ ] Live component updates
   - Primary target: NX4827T043_011
-- [ ] Display pages and widgets loaded from LittleFS JSON (no hardcoded layouts)
+- [x] Display pages and widgets loaded from LittleFS JSON (no hardcoded layouts)
 
 ### Touch Manager
 

@@ -13,6 +13,7 @@
 #include "hardware/InputManager.h"
 #include "hardware/OutputManager.h"
 #include "hardware/SensorManager.h"
+#include "hardware/DisplayManager.h"
 
 static constexpr const char* TAG = "Main";
 
@@ -44,13 +45,13 @@ void setup() {
     InputManager::instance().begin();
     OutputManager::instance().begin();
     SensorManager::instance().begin();
+    DisplayManager::instance().begin();
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
 
     LOG_I(TAG, "Connectivity subsystems initialised");
 
-    // TODO Phase 3: Hardware — DisplayManager
     // TODO Phase 4: ActionEngine, MacroManager
     // TODO Phase 5: ApiServer (REST + WebSocket)
 }
@@ -62,5 +63,6 @@ void loop() {
     InputManager::instance().loop();
     OutputManager::instance().loop();
     SensorManager::instance().loop();
+    DisplayManager::instance().loop();
     delay(10);
 }
