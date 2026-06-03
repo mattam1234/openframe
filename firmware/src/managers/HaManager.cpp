@@ -34,6 +34,7 @@ void HaManager::registerEntity(const HaEntity& entity) {
                        t == HaEntityType::Text);
     if (hasCommand) {
         String cmdTopic = commandTopic(entity.id);
+        _cmdTopicToEntityId[cmdTopic] = entity.id;
         MqttManager::instance().subscribeRaw(cmdTopic, [this](const String& topic, const String& payload) {
             handleCommand(topic, payload);
         });
@@ -170,26 +171,26 @@ void HaManager::buildDiscoveryPayload(const HaEntity& e, JsonDocument& doc) cons
 }
 
 void HaManager::handleCommand(const String& topic, const String& payload) {
-    // Resolve entity ID from command topic
-    for (auto& kv : _entities) {
-        if (commandTopic(kv.first) == topic) {
-            LOG_D(TAG, "HA cmd [" + kv.first + "]: " + payload);
-
-            // Fire registered callback
-            auto it = _callbacks.find(kv.first);
-            if (it != _callbacks.end()) {
-                it->second(kv.first, payload);
-            }
-
-            // Emit to EventBus — payload carries JSON with entityId + value
-            JsonDocument doc;
-            doc["entity"] = kv.first;
-            doc["value"]  = payload;
-            String evtPayload;
-            serializeJson(doc, evtPayload);
-            EventBus::instance().publish(EventType::ActionTriggered, kv.first, evtPayload);
-            return;
-        }
+    auto it = _cmdTopicToEntityId.find(topic);
+    if (it == _cmdTopicToEntityId.end()) {
+        LOG_W(TAG, "Unmatched HA command topic: " + topic);
+        return;
     }
-    LOG_W(TAG, "Unmatched HA command topic: " + topic);
+
+    const String& entityId = it->second;
+    LOG_D(TAG, "HA cmd [" + entityId + "]: " + payload);
+
+    // Fire registered callback
+    auto cbIt = _callbacks.find(entityId);
+    if (cbIt != _callbacks.end()) {
+        cbIt->second(entityId, payload);
+    }
+
+    // Emit to EventBus
+    JsonDocument doc;
+    doc["entity"] = entityId;
+    doc["value"]  = payload;
+    String evtPayload;
+    serializeJson(doc, evtPayload);
+    EventBus::instance().publish(EventType::ActionTriggered, entityId, evtPayload);
 }

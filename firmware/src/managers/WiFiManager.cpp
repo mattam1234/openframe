@@ -37,21 +37,29 @@ void WiFiManager::loop() {
     // Reconnect back-off
     if (!_connected && !_apMode) {
         uint32_t now = millis();
-        if (now - _lastAttempt >= RETRY_INTERVAL_MS) {
-            _lastAttempt = now;
+
+        // Check if a pending reconnect attempt has now succeeded
+        if (_reconnecting && WiFi.status() == WL_CONNECTED) {
+            _reconnecting = false;
+            _retryCount   = 0;
+            onConnected();
+            return;
+        }
+
+        // Check if a pending attempt has timed out
+        if (_reconnecting && now - _lastAttempt >= RECONNECT_TIMEOUT_MS) {
+            _reconnecting = false;
+            LOG_W(TAG, "Reconnect attempt " + String(_retryCount) + " timed out");
+        }
+
+        // Start a new attempt after the back-off interval
+        if (!_reconnecting && now - _lastAttempt >= RETRY_INTERVAL_MS) {
             if (_retryCount < MAX_RETRIES) {
-                LOG_I(TAG, "Reconnect attempt " + String(_retryCount + 1) + "/" + String(MAX_RETRIES));
-                WiFi.reconnect();
                 _retryCount++;
-                // Wait briefly for connection
-                uint32_t waitStart = millis();
-                while (WiFi.status() != WL_CONNECTED && millis() - waitStart < 5000) {
-                    delay(100);
-                }
-                if (WiFi.status() == WL_CONNECTED) {
-                    _retryCount = 0;
-                    onConnected();
-                }
+                _lastAttempt  = now;
+                _reconnecting = true;
+                LOG_I(TAG, "Reconnect attempt " + String(_retryCount) + "/" + String(MAX_RETRIES));
+                WiFi.reconnect();
             } else {
                 LOG_W(TAG, "Max retries reached — falling back to AP");
                 startAP();
@@ -104,7 +112,7 @@ void WiFiManager::startSTA() {
     LOG_I(TAG, "Connecting to: " + cfg.ssid);
 
     uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
         delay(500);
         LOG_T(TAG, ".");
     }

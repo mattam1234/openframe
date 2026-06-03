@@ -79,6 +79,7 @@ private:
     void handleCommand(const String& topic, const String& payload);
 
     std::map<String, HaEntity>          _entities;
+    std::map<String, String>            _cmdTopicToEntityId;  // command topic → entity ID
     std::map<String, CommandCallback>   _callbacks;
 
     static constexpr const char* TAG = "HA";

@@ -89,6 +89,7 @@ bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) 
 
 void OtaManager::onOtaStart() {
     LOG_I(TAG, "OTA update started");
+    _otaProgressPct = 0;
     EventBus::instance().publish(EventType::OtaStarted, "ota", "");
 }
 
@@ -97,10 +98,9 @@ void OtaManager::onOtaProgress(size_t current, size_t total) {
     uint8_t pct = (uint8_t)((current * 100UL) / total);
 
     // Only log every 10%
-    static uint8_t lastPct = 0;
-    if (pct >= lastPct + 10 || pct == 100) {
+    if (pct >= _otaProgressPct + 10 || pct == 100) {
         LOG_I(TAG, "OTA progress: " + String(pct) + "%");
-        lastPct = pct;
+        _otaProgressPct = pct;
     }
 
     JsonDocument doc;

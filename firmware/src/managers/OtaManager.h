@@ -39,6 +39,8 @@ private:
     void onOtaProgress(size_t current, size_t total);
     void onOtaEnd(bool success);
 
+    uint8_t _otaProgressPct = 0;
+
     static constexpr const char* GITHUB_RELEASES_API =
         "https://api.github.com/repos/%s/releases/latest";
     static constexpr const char* TAG = "OTA";
