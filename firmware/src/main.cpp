@@ -11,6 +11,7 @@
 #include "managers/HaManager.h"
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
+#include "hardware/OutputManager.h"
 
 static constexpr const char* TAG = "Main";
 
@@ -40,13 +41,14 @@ void setup() {
     HaManager::instance().begin();
     OtaManager::instance().begin(webServer);
     InputManager::instance().begin();
+    OutputManager::instance().begin();
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
 
     LOG_I(TAG, "Connectivity subsystems initialised");
 
-    // TODO Phase 3: Hardware — OutputManager, SensorManager, DisplayManager
+    // TODO Phase 3: Hardware — SensorManager, DisplayManager
     // TODO Phase 4: ActionEngine, MacroManager
     // TODO Phase 5: ApiServer (REST + WebSocket)
 }
@@ -56,5 +58,6 @@ void loop() {
     MqttManager::instance().loop();
     OtaManager::instance().loop();
     InputManager::instance().loop();
+    OutputManager::instance().loop();
     delay(10);
 }

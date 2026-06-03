@@ -102,12 +102,12 @@ All other modules depend on these subsystems.
 
 ### Output Manager
 
-- [ ] LED driver (digital on/off, PWM brightness)
-- [ ] RGB LED driver
-- [ ] WS2812 driver (via FastLED or NeoPixel)
-- [ ] Relay driver
-- [ ] Buzzer driver (tone + beep patterns)
-- [ ] Output config loaded from LittleFS JSON
+- [x] LED driver (digital on/off, PWM brightness)
+- [x] RGB LED driver
+- [x] WS2812 driver (via FastLED or NeoPixel)
+- [x] Relay driver
+- [x] Buzzer driver (tone + beep patterns)
+- [x] Output config loaded from LittleFS JSON
 
 ### Sensor Manager
 
