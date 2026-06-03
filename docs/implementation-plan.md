@@ -29,32 +29,32 @@ All other modules depend on these subsystems.
 
 ### Logger
 
-- [ ] `Logger` class with log levels: Trace, Debug, Info, Warning, Error, Fatal
-- [ ] Output to Serial
-- [ ] Ring buffer storing latest 1000 entries
-- [ ] Expose log entries over WebSocket for web UI
+- [x] `Logger` class with log levels: Trace, Debug, Info, Warning, Error, Fatal
+- [x] Output to Serial
+- [x] Ring buffer storing latest 1000 entries
+- [ ] Expose log entries over WebSocket for web UI (Phase 5)
 
 ### Event Bus
 
-- [ ] Publish/subscribe event bus (`EventBus`)
-- [ ] Typed event definitions (e.g. `InputEvent`, `SensorEvent`, `ActionEvent`)
+- [x] Publish/subscribe event bus (`EventBus`)
+- [x] Typed event definitions (e.g. `InputEvent`, `SensorEvent`, `ActionEvent`)
 
 ### Storage Manager
 
-- [ ] `StorageManager` wrapping LittleFS
-- [ ] `readJson()` / `writeJson()` helpers
-- [ ] Default config file creation on first boot
+- [x] `StorageManager` wrapping LittleFS
+- [x] `readJson()` / `writeJson()` helpers
+- [x] Default config file creation on first boot
 
 ### Configuration Manager
 
-- [ ] `ConfigManager` that loads/saves device settings from LittleFS JSON
-- [ ] Schema: WiFi, MQTT, HA, device name, board type
+- [x] `ConfigManager` that loads/saves device settings from LittleFS JSON
+- [x] Schema: WiFi, MQTT, HA, device name, board type
 
 ### Variable Manager
 
-- [ ] Global `VariableManager` supporting Integer, Float, Boolean, String variables
-- [ ] `get()`, `set()`, `subscribe()` API
-- [ ] Persist variables to LittleFS
+- [x] Global `VariableManager` supporting Integer, Float, Boolean, String variables
+- [x] `get()`, `set()`, `subscribe()` API
+- [x] Persist variables to LittleFS
 
 ---
 
@@ -62,30 +62,30 @@ All other modules depend on these subsystems.
 
 ### WiFi Manager
 
-- [ ] First-boot AP + captive portal (SSID: `OpenFrame-XXXX`)
-- [ ] Connect to stored credentials on subsequent boots
-- [ ] Retry logic with AP fallback on failure
-- [ ] Broadcast `WifiConnected` / `WifiDisconnected` events
+- [x] First-boot AP + captive portal (SSID: `OpenFrame-XXXX`)
+- [x] Connect to stored credentials on subsequent boots
+- [x] Retry logic with AP fallback on failure
+- [x] Broadcast `WifiConnected` / `WifiDisconnected` events
 
 ### MQTT Manager
 
-- [ ] Connect to configured broker
-- [ ] `publish()` / `subscribe()` helpers
-- [ ] Reconnect with back-off
-- [ ] Route incoming messages to Event Bus
+- [x] Connect to configured broker
+- [x] `publish()` / `subscribe()` helpers
+- [x] Reconnect with back-off
+- [x] Route incoming messages to Event Bus
 
 ### Home Assistant Manager
 
-- [ ] MQTT Discovery: auto-publish discovery payloads for all entities
-- [ ] Supported entity types: sensor, binary_sensor, button, switch, select, number, text
-- [ ] Receive HA commands and emit internal events
+- [x] MQTT Discovery: auto-publish discovery payloads for all entities
+- [x] Supported entity types: sensor, binary_sensor, button, switch, select, number, text
+- [x] Receive HA commands and emit internal events
 
 ### OTA Manager
 
-- [ ] Local firmware upload via ESPAsyncWebServer + ElegantOTA
-- [ ] GitHub release check endpoint
-- [ ] Progress events to WebSocket
-- [ ] Rollback support via partition scheme
+- [x] Local firmware upload via ESPAsyncWebServer + ElegantOTA
+- [x] GitHub release check endpoint
+- [x] Progress events to WebSocket
+- [x] Rollback support via partition scheme
 
 ---
 
@@ -276,29 +276,29 @@ Cross-reference with [product-specifications.md § Version 1.0](product-specific
 
 | Feature | Phase | Status |
 |---|---|---|
-| ESP32 support | 0 | ⬜ |
-| ESP32-S3 support | 0 | ⬜ |
-| WiFi + captive portal | 2 | ⬜ |
-| OTA updates | 2 | ⬜ |
+| ESP32 support | 0 | ✅ |
+| ESP32-S3 support | 0 | ✅ |
+| WiFi + captive portal | 2 | ✅ |
+| OTA updates | 2 | ✅ |
 | SSD1306 display | 3 | ⬜ |
 | Nextion NX4827T043_011 | 3 | ⬜ |
 | Buttons | 3 | ⬜ |
 | Potentiometers | 3 | ⬜ |
 | LDR sensors | 3 | ⬜ |
-| Variable system | 1 | ⬜ |
+| Variable system | 1 | ✅ |
 | Action engine | 4 | ⬜ |
 | Conditional actions | 4 | ⬜ |
 | Macro support | 4 | ⬜ |
-| MQTT integration | 2 | ⬜ |
-| Home Assistant MQTT Discovery | 2 | ⬜ |
+| MQTT integration | 2 | ✅ |
+| Home Assistant MQTT Discovery | 2 | ✅ |
 | Device Layout Designer | 6 | ⬜ |
 | Screen Designer | 6 | ⬜ |
 | Sensor Dashboard | 6 | ⬜ |
 | Action History | 4 | ⬜ |
-| Debug Logging | 1 | ⬜ |
+| Debug Logging | 1 | ✅ |
 | I2C Module Support | 3 | ⬜ |
 | Device Templates | 7 | ⬜ |
 | Device Health Monitoring | 8 | ⬜ |
 | WebSocket live updates | 5 | ⬜ |
-| JSON config storage | 1 | ⬜ |
-| LittleFS storage | 1 | ⬜ |
+| JSON config storage | 1 | ✅ |
+| LittleFS storage | 1 | ✅ |
