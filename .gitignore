@@ -1,0 +1,15 @@
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
+firmware/data/www/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,0 +1,2 @@
+# This directory is uploaded to the ESP32 LittleFS filesystem.
+# Default JSON config files will be generated here during the build process.
