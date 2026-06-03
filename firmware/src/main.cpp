@@ -50,7 +50,7 @@ void setup() {
 
     LOG_I(TAG, "Connectivity subsystems initialised");
 
-    // TODO Phase 3: Hardware — SensorManager, DisplayManager
+    // TODO Phase 3: Hardware — DisplayManager
     // TODO Phase 4: ActionEngine, MacroManager
     // TODO Phase 5: ApiServer (REST + WebSocket)
 }
