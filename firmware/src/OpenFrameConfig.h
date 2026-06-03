@@ -28,6 +28,7 @@
 #define OF_VARIABLES_PATH "/variables.json"
 #define OF_INPUTS_PATH "/inputs.json"
 #define OF_OUTPUTS_PATH "/outputs.json"
+#define OF_SENSORS_PATH "/sensors.json"
 #define OF_PROFILES_PATH "/profiles"
 #define OF_TEMPLATES_PATH "/templates"
 #define OF_DISPLAY_PAGES_PATH "/pages"

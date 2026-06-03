@@ -12,6 +12,7 @@
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
 #include "hardware/OutputManager.h"
+#include "hardware/SensorManager.h"
 
 static constexpr const char* TAG = "Main";
 
@@ -42,6 +43,7 @@ void setup() {
     OtaManager::instance().begin(webServer);
     InputManager::instance().begin();
     OutputManager::instance().begin();
+    SensorManager::instance().begin();
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
@@ -59,5 +61,6 @@ void loop() {
     OtaManager::instance().loop();
     InputManager::instance().loop();
     OutputManager::instance().loop();
+    SensorManager::instance().loop();
     delay(10);
 }

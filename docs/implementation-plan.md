@@ -10,16 +10,16 @@ See [product-specifications.md](product-specifications.md) for full requirements
 
 Set up the project structure so every subsequent phase has a clean foundation to build on.
 
-- [ ] Create PlatformIO project (`firmware/`) with `esp32dev` and `esp32s3dev` environments
-- [ ] Add core library dependencies to `platformio.ini`:
+- [x] Create PlatformIO project (`firmware/`) with `esp32dev` and `esp32s3dev` environments
+- [x] Add core library dependencies to `platformio.ini`:
   - ArduinoJson
   - AsyncTCP + ESPAsyncWebServer
   - ElegantOTA
   - LittleFS
-- [ ] Create `main.cpp` entry point that initialises all subsystem managers
-- [ ] Create Vue 3 + Vite + Pinia + Vuetify frontend scaffold (`frontend/`)
-- [ ] Add `.gitignore` for PlatformIO build artefacts and node_modules
-- [ ] Add `docs/` directory with `product-specifications.md` and this file
+- [x] Create `main.cpp` entry point that initialises all subsystem managers
+- [x] Create Vue 3 + Vite + Pinia + Vuetify frontend scaffold (`frontend/`)
+- [x] Add `.gitignore` for PlatformIO build artefacts and node_modules
+- [x] Add `docs/` directory with `product-specifications.md` and this file
 
 ---
 
@@ -111,9 +111,9 @@ All other modules depend on these subsystems.
 
 ### Sensor Manager
 
-- [ ] Extensible sensor registry (`registerSensor()`)
+- [x] Extensible sensor registry (`registerSensor()`)
 - [ ] Driver implementations:
-  - [ ] BME280
+  - [x] BME280
   - [ ] BMP280
   - [ ] DHT22
   - [ ] DS18B20
@@ -121,8 +121,8 @@ All other modules depend on these subsystems.
   - [ ] BH1750
   - [ ] INA219
   - [ ] MPU6050
-- [ ] Polling loop with configurable intervals
-- [ ] Sensor values published to VariableManager and Event Bus
+- [x] Polling loop with configurable intervals
+- [x] Sensor values published to VariableManager and Event Bus
 
 ### Display Manager
 
@@ -205,10 +205,10 @@ All other modules depend on these subsystems.
 
 ### Scaffold
 
-- [ ] Vue 3 + Vite project with Vuetify and Pinia
-- [ ] Router setup for all views
-- [ ] WebSocket store (Pinia) receiving live data
-- [ ] REST API client module
+- [x] Vue 3 + Vite project with Vuetify and Pinia
+- [x] Router setup for all views
+- [x] WebSocket store (Pinia) receiving live data
+- [x] REST API client module
 
 ### Views
 
