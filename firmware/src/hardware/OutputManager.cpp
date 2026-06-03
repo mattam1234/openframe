@@ -252,6 +252,8 @@ bool OutputManager::initWs2812(size_t index) {
     leds.assign(cfg.ledCount, CRGB::Black);
 
     bool attached = false;
+    // FastLED clockless WS2812 driver uses compile-time pin templates, so runtime pin
+    // selection is implemented through this explicit supported-pin mapping.
     switch (cfg.pin) {
         case 2:  FastLED.addLeds<WS2812B, 2, GRB>(leds.data(), cfg.ledCount); attached = true; break;
         case 4:  FastLED.addLeds<WS2812B, 4, GRB>(leds.data(), cfg.ledCount); attached = true; break;
@@ -276,7 +278,6 @@ bool OutputManager::initWs2812(size_t index) {
     }
 
     if (!attached) return false;
-    FastLED.setBrightness(cfg.brightness);
     FastLED.show();
     state.wsReady = true;
     return true;
@@ -288,11 +289,13 @@ void OutputManager::updateWs2812(size_t index) {
     auto& leds = _wsLedsPerOutput[index];
     if (cfg.type != OutputType::Ws2812 || !state.wsReady || leds.empty()) return;
 
-    const CRGB color(state.red, state.green, state.blue);
+    auto scale = [&](uint8_t value) -> uint8_t {
+        return static_cast<uint8_t>((static_cast<uint16_t>(value) * static_cast<uint16_t>(cfg.brightness)) / 255u);
+    };
+    const CRGB color(scale(state.red), scale(state.green), scale(state.blue));
     for (auto& led : leds) {
         led = color;
     }
-    FastLED.setBrightness(cfg.brightness);
     FastLED.show();
 }
 
