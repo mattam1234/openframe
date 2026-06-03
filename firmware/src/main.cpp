@@ -12,6 +12,9 @@
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
 #include "hardware/OutputManager.h"
+#include "hardware/SensorManager.h"
+#include "hardware/DisplayManager.h"
+#include "api/ApiServer.h"
 
 static constexpr const char* TAG = "Main";
 
@@ -42,13 +45,15 @@ void setup() {
     OtaManager::instance().begin(webServer);
     InputManager::instance().begin();
     OutputManager::instance().begin();
+    SensorManager::instance().begin();
+    DisplayManager::instance().begin();
+    ApiServer::instance().begin(webServer);
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
 
     LOG_I(TAG, "Connectivity subsystems initialised");
 
-    // TODO Phase 3: Hardware — SensorManager, DisplayManager
     // TODO Phase 4: ActionEngine, MacroManager
     // TODO Phase 5: ApiServer (REST + WebSocket)
 }
@@ -59,5 +64,8 @@ void loop() {
     OtaManager::instance().loop();
     InputManager::instance().loop();
     OutputManager::instance().loop();
+    SensorManager::instance().loop();
+    DisplayManager::instance().loop();
+    ApiServer::instance().loop();
     delay(10);
 }

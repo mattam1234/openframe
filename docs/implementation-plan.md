@@ -10,16 +10,16 @@ See [product-specifications.md](product-specifications.md) for full requirements
 
 Set up the project structure so every subsequent phase has a clean foundation to build on.
 
-- [ ] Create PlatformIO project (`firmware/`) with `esp32dev` and `esp32s3dev` environments
-- [ ] Add core library dependencies to `platformio.ini`:
+- [x] Create PlatformIO project (`firmware/`) with `esp32dev` and `esp32s3dev` environments
+- [x] Add core library dependencies to `platformio.ini`:
   - ArduinoJson
   - AsyncTCP + ESPAsyncWebServer
   - ElegantOTA
   - LittleFS
-- [ ] Create `main.cpp` entry point that initialises all subsystem managers
-- [ ] Create Vue 3 + Vite + Pinia + Vuetify frontend scaffold (`frontend/`)
-- [ ] Add `.gitignore` for PlatformIO build artefacts and node_modules
-- [ ] Add `docs/` directory with `product-specifications.md` and this file
+- [x] Create `main.cpp` entry point that initialises all subsystem managers
+- [x] Create Vue 3 + Vite + Pinia + Vuetify frontend scaffold (`frontend/`)
+- [x] Add `.gitignore` for PlatformIO build artefacts and node_modules
+- [x] Add `docs/` directory with `product-specifications.md` and this file
 
 ---
 
@@ -111,23 +111,24 @@ All other modules depend on these subsystems.
 
 ### Sensor Manager
 
-- [ ] Extensible sensor registry (`registerSensor()`)
+- [x] Extensible sensor registry (`registerSensor()`)
 - [ ] Driver implementations:
-  - [ ] BME280
-  - [ ] BMP280
+  - [x] BME280
+  - [x] BMP280
   - [ ] DHT22
   - [ ] DS18B20
   - [ ] SHT31
   - [ ] BH1750
   - [ ] INA219
   - [ ] MPU6050
-- [ ] Polling loop with configurable intervals
-- [ ] Sensor values published to VariableManager and Event Bus
+- [x] Polling loop with configurable intervals
+- [x] Sensor values published to VariableManager and Event Bus
 
 ### Display Manager
 
-- [ ] Abstract `DisplayProvider` interface
-- [ ] OLED driver (SSD1306, SH1106, SSD1327) via U8g2 or Adafruit
+- [x] Abstract `DisplayProvider` interface
+- [x] OLED driver (SSD1306 via Adafruit)
+- [ ] Additional OLED variants (SH1106, SSD1327)
 - [ ] TFT driver (ST7789, ILI9341, ILI9488) via TFT_eSPI
 - [ ] Nextion smart display driver:
   - [ ] UART communication
@@ -136,7 +137,7 @@ All other modules depend on these subsystems.
   - [ ] Touch event forwarding to Event Bus
   - [ ] Live component updates
   - Primary target: NX4827T043_011
-- [ ] Display pages and widgets loaded from LittleFS JSON (no hardcoded layouts)
+- [x] Display pages and widgets loaded from LittleFS JSON (no hardcoded layouts)
 
 ### Touch Manager
 
@@ -178,11 +179,11 @@ All other modules depend on these subsystems.
 
 ## Phase 5 — REST & WebSocket API
 
-- [ ] `ApiServer` on ESPAsyncWebServer
+- [x] `ApiServer` on ESPAsyncWebServer
 - [ ] REST endpoints:
-  - `GET /api/status` — device health
-  - `GET/POST /api/config` — configuration
-  - `GET/POST /api/variables`
+  - [x] `GET /api/status` — device health
+  - [x] `GET/POST /api/config` — configuration
+  - [x] `GET/POST /api/variables`
   - `GET/POST /api/inputs`
   - `GET/POST /api/outputs`
   - `GET/POST /api/sensors`
@@ -192,12 +193,12 @@ All other modules depend on these subsystems.
   - `GET/POST /api/profiles`
   - `GET/POST /api/templates`
   - `GET/POST /api/modules`
-  - `GET /api/logs`
+  - [x] `GET /api/logs`
   - `POST /api/ota/upload`
-  - `GET /api/ota/check`
-- [ ] WebSocket endpoint `/ws`
-  - Broadcast: sensor values, variable changes, log entries, device health
-  - Receive: action triggers, config changes, page navigation
+  - [x] `GET /api/ota/check`
+- [x] WebSocket endpoint `/ws`
+  - [x] Broadcast: sensor values, variable changes, log entries, device health
+  - [x] Receive: action triggers, config changes, page navigation
 
 ---
 
@@ -205,22 +206,22 @@ All other modules depend on these subsystems.
 
 ### Scaffold
 
-- [ ] Vue 3 + Vite project with Vuetify and Pinia
-- [ ] Router setup for all views
-- [ ] WebSocket store (Pinia) receiving live data
-- [ ] REST API client module
+- [x] Vue 3 + Vite project with Vuetify and Pinia
+- [x] Router setup for all views
+- [x] WebSocket store (Pinia) receiving live data
+- [x] REST API client module
 
 ### Views
 
-- [ ] **Dashboard** — device status, memory, CPU, uptime, WiFi, firmware version
+- [x] **Dashboard** — device status, memory, CPU, uptime, WiFi, firmware version
 - [ ] **Device Layout Designer** — drag-and-drop hardware editor, real-time state
 - [ ] **Screen Designer** — visual display page editor, widget binding to variables/sensors
 - [ ] **Sensor Dashboard** — live values, historical graphs, min/max, export
 - [ ] **Action Manager** — create/edit actions, macros, conditions
 - [ ] **Module Manager** — discovered modules, diagnostics
 - [ ] **Home Assistant Manager** — entity mapping, discovery toggle
-- [ ] **Logs Viewer** — debug log stream, action history
-- [ ] **Settings** — WiFi, MQTT, OTA, system
+- [x] **Logs Viewer** — debug log stream, action history
+- [x] **Settings** — WiFi, MQTT, OTA, system
 
 ---
 
