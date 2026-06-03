@@ -282,8 +282,8 @@ Cross-reference with [product-specifications.md § Version 1.0](product-specific
 | OTA updates | 2 | ✅ |
 | SSD1306 display | 3 | ⬜ |
 | Nextion NX4827T043_011 | 3 | ⬜ |
-| Buttons | 3 | ⬜ |
-| Potentiometers | 3 | ⬜ |
+| Buttons | 3 | ✅ |
+| Potentiometers | 3 | ✅ |
 | LDR sensors | 3 | ⬜ |
 | Variable system | 1 | ✅ |
 | Action engine | 4 | ⬜ |

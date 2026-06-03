@@ -1,4 +1,5 @@
 #include "InputManager.h"
+#include <map>
 
 InputManager& InputManager::instance() {
     static InputManager inst;
@@ -27,6 +28,26 @@ void InputManager::loop() {
 bool InputManager::loadConfig() {
     _digitalConfigs.clear();
     _analogConfigs.clear();
+    std::map<String, uint16_t> idUsage;
+
+    auto ensureUniqueId = [&](const String& requested, const String& fallbackPrefix, uint8_t pin) {
+        String base = requested;
+        if (!base.length()) base = fallbackPrefix + "_" + String(pin);
+        if (!idUsage.count(base)) {
+            idUsage[base] = 1;
+            return base;
+        }
+
+        uint16_t suffix = idUsage[base];
+        String candidate;
+        do {
+            candidate = base + "_" + String(suffix++);
+        } while (idUsage.count(candidate));
+        idUsage[base] = suffix;
+        idUsage[candidate] = 1;
+        LOG_W(TAG, "Duplicate input id '" + base + "' remapped to '" + candidate + "'");
+        return candidate;
+    };
 
     JsonDocument doc;
     if (!StorageManager::instance().readJson(OF_INPUTS_PATH, doc)) {
@@ -47,7 +68,7 @@ bool InputManager::loadConfig() {
             cfg.multiPressWindowMs= item["multi_press_window_ms"] | 350;
             cfg.repeatStartMs     = item["repeat_start_ms"] | 800;
             cfg.repeatIntervalMs  = item["repeat_interval_ms"] | 250;
-            if (!cfg.id.length()) cfg.id = "din_" + String(cfg.pin);
+            cfg.id = ensureUniqueId(cfg.id, "din", cfg.pin);
             _digitalConfigs.push_back(cfg);
         }
     }
@@ -66,7 +87,7 @@ bool InputManager::loadConfig() {
             cfg.rangeMin           = item["range_min"] | 0;
             cfg.rangeMax           = item["range_max"] | 4095;
             cfg.pollIntervalMs     = item["poll_interval_ms"] | 30;
-            if (!cfg.id.length()) cfg.id = "ain_" + String(cfg.pin);
+            cfg.id = ensureUniqueId(cfg.id, "ain", cfg.pin);
             _analogConfigs.push_back(cfg);
         }
     }
@@ -212,6 +233,7 @@ void InputManager::updateAnalogInput(size_t index, uint32_t nowMs) {
     }
 
     if (cfg.thresholdEnabled) {
+        // Sticky hysteresis band: enter-above at threshold + hysteresis, exit-above at threshold - hysteresis.
         const bool nowAbove = state.aboveThreshold
             ? (value >= (cfg.threshold - cfg.thresholdHysteresis))
             : (value >= (cfg.threshold + cfg.thresholdHysteresis));
