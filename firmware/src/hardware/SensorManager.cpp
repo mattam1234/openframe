@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
 #include <math.h>
 
 namespace {
@@ -47,6 +48,45 @@ private:
     SensorConfig    _config;
 };
 
+class Bmp280SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _config = config;
+        if (!_sensor.begin(config.address)) {
+            error = "BMP280 not found at 0x" + String(config.address, HEX);
+            error.toUpperCase();
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "temperature_c", "pressure_hpa", "altitude_m" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+
+        const float temperatureC = _sensor.readTemperature() + _config.temperatureOffsetC;
+        const float pressureHpa = _sensor.readPressure() / 100.0f;
+        const float altitudeM = _sensor.readAltitude(_config.seaLevelPressureHpa);
+
+        if (isnan(temperatureC) || isnan(pressureHpa) || isnan(altitudeM)) {
+            error = "BMP280 returned invalid readings";
+            return false;
+        }
+
+        values.push_back({ "temperature_c", temperatureC });
+        values.push_back({ "pressure_hpa", pressureHpa });
+        values.push_back({ "altitude_m", altitudeM });
+        return true;
+    }
+
+private:
+    Adafruit_BMP280 _sensor;
+    SensorConfig    _config;
+};
+
 }  // namespace
 
 SensorManager& SensorManager::instance() {
@@ -80,10 +120,17 @@ void SensorManager::registerSensor(const String& type, SensorFactory factory) {
 }
 
 void SensorManager::registerBuiltInSensors() {
-    if (_registry.count("bme280")) return;
-    registerSensor("bme280", []() {
-        return std::unique_ptr<SensorDriver>(new Bme280SensorDriver());
-    });
+    if (!_registry.count("bme280")) {
+        registerSensor("bme280", []() {
+            return std::unique_ptr<SensorDriver>(new Bme280SensorDriver());
+        });
+    }
+
+    if (!_registry.count("bmp280")) {
+        registerSensor("bmp280", []() {
+            return std::unique_ptr<SensorDriver>(new Bmp280SensorDriver());
+        });
+    }
 }
 
 bool SensorManager::loadConfig() {
@@ -120,6 +167,7 @@ bool SensorManager::loadConfig() {
     for (auto item : doc["sensors"].as<JsonArray>()) {
         SensorConfig cfg;
         cfg.type               = item["type"] | String("");
+        cfg.type.toLowerCase();
         if (!cfg.type.length()) continue;
 
         cfg.id                 = item["id"] | String("");

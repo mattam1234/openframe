@@ -114,7 +114,7 @@ All other modules depend on these subsystems.
 - [x] Extensible sensor registry (`registerSensor()`)
 - [ ] Driver implementations:
   - [x] BME280
-  - [ ] BMP280
+  - [x] BMP280
   - [ ] DHT22
   - [ ] DS18B20
   - [ ] SHT31
