@@ -145,9 +145,9 @@ bool VariableManager::fromJson(const JsonDocument& doc) {
         v.label      = item["label"] | String("");
         v.persistent = item["persistent"] | true;
         switch (v.type) {
-            case VarType::Integer: v.valueInt    = item["value"] | 0;       break;
-            case VarType::Float:   v.valueFloat  = item["value"] | 0.0f;   break;
-            case VarType::Boolean: v.valueBool   = item["value"] | false;   break;
+            case VarType::Integer: v.valueInt    = item["value"] | 0;          break;
+            case VarType::Float:   v.valueFloat  = item["value"] | 0.0f;      break;
+            case VarType::Boolean: v.valueBool   = item["value"] | false;      break;
             case VarType::String:  v.valueString = item["value"] | String(""); break;
         }
         if (v.id.length()) _vars[v.id] = v;
