@@ -93,12 +93,12 @@ All other modules depend on these subsystems.
 
 ### Input Manager
 
-- [ ] Digital input driver (buttons, toggles, keypads, encoder buttons)
+- [x] Digital input driver (buttons, toggles, keypads, encoder buttons)
   - Events: Press, Release, Hold, Long Press, Double Press, Triple Press, Repeat
-- [ ] Analog input driver (potentiometers, sliders, LDR, joystick)
+- [x] Analog input driver (potentiometers, sliders, LDR, joystick)
   - Events: Value Changed, Threshold Reached, Range Entered / Exited
-- [ ] Input config loaded from LittleFS JSON
-- [ ] Inputs publish events to Event Bus
+- [x] Input config loaded from LittleFS JSON
+- [x] Inputs publish events to Event Bus
 
 ### Output Manager
 
