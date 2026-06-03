@@ -128,7 +128,7 @@ bool SensorManager::loadConfig() {
         cfg.variablePrefix     = item["variable_prefix"] | String("");
         cfg.address            = item["address"] | 0x76;
         cfg.temperatureOffsetC = item["temperature_offset_c"] | 0.0f;
-        cfg.seaLevelPressureHpa= item["sea_level_pressure_hpa"] | 1013.25f;
+        cfg.seaLevelPressureHpa = item["sea_level_pressure_hpa"] | 1013.25f;
         cfg.id = ensureUniqueId(cfg.id, cfg.type);
         _configs.push_back(cfg);
     }
