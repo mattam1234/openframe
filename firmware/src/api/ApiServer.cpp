@@ -21,7 +21,7 @@ String formatUptime(uint32_t uptimeMs) {
 
     char buffer[32];
     if (days > 0) {
-        snprintf(buffer, sizeof(buffer), "%lud %02lu:%02lu:%02lu",
+        snprintf(buffer, sizeof(buffer), "%lu d %02lu:%02lu:%02lu",
             static_cast<unsigned long>(days),
             static_cast<unsigned long>(hours),
             static_cast<unsigned long>(minutes),
