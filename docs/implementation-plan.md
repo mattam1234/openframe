@@ -10,7 +10,7 @@ See [product-specifications.md](product-specifications.md) for full requirements
 
 Set up the project structure so every subsequent phase has a clean foundation to build on.
 
-- [x] Create PlatformIO project (`firmware/`) with `esp32dev` and `esp32s3dev` environments
+- [x] Create PlatformIO project (`firmware/`) with `esp32dev`, `esp32s3dev`, and `esp8266dev` environments
 - [x] Add core library dependencies to `platformio.ini`:
   - ArduinoJson
   - AsyncTCP + ESPAsyncWebServer
@@ -129,13 +129,13 @@ All other modules depend on these subsystems.
 - [x] Abstract `DisplayProvider` interface
 - [x] OLED driver (SSD1306 via Adafruit)
 - [x] Additional OLED variant: SH1106 (via Adafruit_SH110X)
-- [ ] TFT driver (ST7789, ILI9341, ILI9488) via TFT_eSPI
-- [ ] Nextion smart display driver:
-  - [ ] UART communication
-  - [ ] Page synchronisation
-  - [ ] Component binding to variables
-  - [ ] Touch event forwarding to Event Bus
-  - [ ] Live component updates
+- [x] TFT driver (ST7789, ILI9341) via Adafruit
+- [x] Nextion smart display driver:
+  - [x] UART communication
+  - [x] Page synchronisation
+  - [x] Component binding to variables
+  - [x] Touch event forwarding to Event Bus
+  - [x] Live component updates
   - Primary target: NX4827T043_011
 - [x] Display pages and widgets loaded from LittleFS JSON (no hardcoded layouts)
 
@@ -152,7 +152,7 @@ All other modules depend on these subsystems.
 - [x] I2C bus scan for expansion modules
 - [x] Module registry with auto-discovery
 - [x] Hot-plug detection
-- [ ] Module type handlers: buttons, potentiometers, encoders, displays, sensors, relays, LEDs
+- [x] Module type handlers: buttons, potentiometers, encoders, displays, sensors, relays, LEDs
 
 ---
 
@@ -251,23 +251,24 @@ All other modules depend on these subsystems.
 
 ## Phase 9 — Notification System
 
-- [ ] `NotificationManager` with named notification types
-- [ ] Render notifications on connected displays
-- [ ] Push notification events over WebSocket to web UI
-- [ ] Notification types: firmware update, sensor disconnect, WiFi disconnect, HA disconnect, MQTT disconnect
+- [x] `NotificationManager` with named notification types
+- [x] Render notifications on connected displays
+- [x] Push notification events over WebSocket to web UI
+- [x] Notification types: firmware update, sensor disconnect, WiFi disconnect, HA disconnect, MQTT disconnect
+- [x] `GET /api/notifications` and `POST /api/notifications/read` REST endpoints
 
 ---
 
 ## Phase 10 — Plugin Architecture (Foundation)
 
-- [ ] Define registration interfaces for each extension point:
+- [x] Define registration interfaces for each extension point:
   - `SensorRegistry::registerDriver()`
   - `DisplayRegistry::registerProvider()`
-  - `ActionRegistry::registerAction()`
-  - `ModuleRegistry::registerModule()`
-  - `ProtocolRegistry::registerProtocol()`
-- [ ] Document plugin interface contracts
-- [ ] Ensure all built-in implementations use the same registration path
+  - `ActionRegistry::registerExecutor()`
+  - `ModuleRegistry::registerHandler()`
+  - `ProtocolRegistry` (stub — planned)
+- [x] Document plugin interface contracts (`docs/plugin-architecture.md`)
+- [x] Ensure all built-in implementations use the same registration path
 
 ---
 
@@ -279,11 +280,13 @@ Cross-reference with [product-specifications.md § Version 1.0](product-specific
 |---|---|---|
 | ESP32 support | 0 | ✅ |
 | ESP32-S3 support | 0 | ✅ |
+| ESP8266 support | 0 | ✅ |
 | WiFi + captive portal | 2 | ✅ |
 | OTA updates | 2 | ✅ |
 | SSD1306 display | 3 | ✅ |
 | SH1106 display | 3 | ✅ |
-| Nextion NX4827T043_011 | 3 | ⬜ |
+| ILI9341 / ST7789 TFT display | 3 | ✅ |
+| Nextion NX4827T043_011 | 3 | ✅ |
 | Buttons | 3 | ✅ |
 | Potentiometers | 3 | ✅ |
 | LDR sensors | 3 | ⬜ |
@@ -302,6 +305,8 @@ Cross-reference with [product-specifications.md § Version 1.0](product-specific
 | Touch Manager | 3 | ✅ |
 | Device Templates | 7 | ✅ |
 | Device Health Monitoring | 8 | ✅ |
+| Notification System | 9 | ✅ |
+| Plugin Architecture | 10 | ✅ |
 | WebSocket live updates | 5 | ✅ |
 | JSON config storage | 1 | ✅ |
 | LittleFS storage | 1 | ✅ |

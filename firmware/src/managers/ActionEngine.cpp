@@ -1,7 +1,7 @@
 #include "ActionEngine.h"
 
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
+#include "../core/PlatformCompat.h"
 #include "../hardware/DisplayManager.h"
 #include "../managers/HaManager.h"
 #include "../managers/MqttManager.h"

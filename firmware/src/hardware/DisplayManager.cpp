@@ -337,8 +337,14 @@ public:
 private:
     static HardwareSerial& _selectSerial(uint8_t num) {
         if (num == 0) return Serial;
+#if !defined(ESP8266)
         if (num == 1) return Serial1;
         return Serial2;
+#else
+        // ESP8266 has Serial1 (TX-only at GPIO2, no RX). For Nextion (bidirectional)
+        // only UART0 (Serial) is fully usable; fall back gracefully.
+        return Serial1;
+#endif
     }
 
     void sendCommand(const String& cmd) {

@@ -7,6 +7,9 @@
 #elif defined(ESP32_BOARD)
     #define OF_BOARD_TYPE "ESP32"
     #define OF_USB_HID_SUPPORTED 0
+#elif defined(ESP8266_BOARD)
+    #define OF_BOARD_TYPE "ESP8266"
+    #define OF_USB_HID_SUPPORTED 0
 #else
     #define OF_BOARD_TYPE "Unknown"
     #define OF_USB_HID_SUPPORTED 0

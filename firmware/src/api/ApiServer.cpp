@@ -2,7 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <LittleFS.h>
-#include <WiFi.h>
+#include "../core/PlatformCompat.h"
 #include "../OpenFrameConfig.h"
 #include "../core/ConfigManager.h"
 #include "../hardware/InputManager.h"
@@ -380,6 +380,37 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         serializeJson(doc, s);
         request->send(200, "application/json", s);
     });
+
+    // ── Notifications ─────────────────────────────────────────────────────────
+    server.on("/api/notifications", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendNotifications(request);
+    });
+    server.on("/api/notifications/read", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                JsonDocument doc;
+                if (deserializeJson(doc, *body) == DeserializationError::Ok && doc["id"].is<const char*>()) {
+                    NotificationManager::instance().markRead(doc["id"].as<String>());
+                } else {
+                    NotificationManager::instance().markAllRead();
+                }
+                delete body;
+                request->_tempObject = nullptr;
+                JsonDocument resp;
+                resp["ok"] = true;
+                String s;
+                serializeJson(resp, s);
+                request->send(200, "application/json", s);
+            }
+        });
 }
 
 void ApiServer::registerWebSocket(AsyncWebServer& server) {
@@ -684,9 +715,9 @@ String ApiServer::buildStatusJson() const {
     doc["uptime_ms"] = uptimeMs;
     doc["uptime"] = formatUptime(uptimeMs);
     doc["freeHeap"] = ESP.getFreeHeap();
-    doc["minFreeHeap"] = ESP.getMinFreeHeap();
-    doc["freePsram"] = ESP.getFreePsram();
-    doc["psramSize"] = ESP.getPsramSize();
+    doc["minFreeHeap"] = of_min_free_heap();
+    doc["freePsram"] = of_free_psram();
+    doc["psramSize"] = of_psram_size();
     doc["cpuLoadPercent"] = static_cast<int>(HealthMonitor::instance().getCpuLoadPercent());
     doc["rebootReason"] = HealthMonitor::instance().getRebootReason();
     doc["wifiConnected"] = wifiConnected;
@@ -1203,4 +1234,19 @@ void ApiServer::handleTemplateImport(AsyncWebServerRequest* request, const Strin
     JsonDocument response;
     response["ok"] = true;
     sendJson(request, response);
+}
+
+void ApiServer::sendNotifications(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["notifications"].to<JsonArray>();
+    for (const auto& n : NotificationManager::instance().notifications()) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"]          = n.id;
+        obj["type"]        = n.type;
+        obj["message"]     = n.message;
+        obj["timestampMs"] = n.timestampMs;
+        obj["read"]        = n.read;
+    }
+    doc["unreadCount"] = NotificationManager::instance().unreadCount();
+    sendJson(request, doc);
 }

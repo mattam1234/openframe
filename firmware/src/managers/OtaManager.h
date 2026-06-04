@@ -3,11 +3,11 @@
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include "../core/Logger.h"
 #include "../core/EventBus.h"
 #include "../core/ConfigManager.h"
+#include "../core/PlatformCompat.h"
 #include "../OpenFrameConfig.h"
 
 // ── OtaManager ────────────────────────────────────────────────────────────────

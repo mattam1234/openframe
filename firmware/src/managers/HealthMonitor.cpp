@@ -1,6 +1,6 @@
 #include "HealthMonitor.h"
 
-#include <esp_system.h>
+#include "../core/PlatformCompat.h"
 
 HealthMonitor& HealthMonitor::instance() {
     static HealthMonitor inst;
@@ -12,19 +12,8 @@ void HealthMonitor::begin() {
     _windowBusyMs   = 0;
     _cpuLoadPercent = 0.0f;
 
-    // Determine reboot reason once at startup
-    switch (esp_reset_reason()) {
-        case ESP_RST_POWERON:   _rebootReason = "Power-on";          break;
-        case ESP_RST_SW:        _rebootReason = "Software reset";     break;
-        case ESP_RST_PANIC:     _rebootReason = "Panic / crash";      break;
-        case ESP_RST_INT_WDT:   _rebootReason = "Interrupt watchdog"; break;
-        case ESP_RST_TASK_WDT:  _rebootReason = "Task watchdog";      break;
-        case ESP_RST_WDT:       _rebootReason = "Watchdog";           break;
-        case ESP_RST_DEEPSLEEP: _rebootReason = "Deep sleep wake";    break;
-        case ESP_RST_BROWNOUT:  _rebootReason = "Brownout";           break;
-        case ESP_RST_SDIO:      _rebootReason = "SDIO reset";         break;
-        default:                _rebootReason = "Unknown";            break;
-    }
+    // Determine reboot reason once at startup (platform-abstracted)
+    _rebootReason = of_reboot_reason();
 
     LOG_I(TAG, "Initialised — reboot reason: " + _rebootReason);
 }
