@@ -838,7 +838,7 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
             ActionEngine::instance().registerAction(action);
             updated = true;
         }
-    } else if (doc.is<JsonObjectConst>() && doc["id"].is<const char*>()) {
+    } else if (doc["id"].is<const char*>()) {
         ActionConfig action;
         parseActionObject(doc.as<JsonObjectConst>(), action);
         if (action.id.length()) {
@@ -881,7 +881,7 @@ void ApiServer::handleMacrosUpdate(AsyncWebServerRequest* request, const String&
             MacroManager::instance().registerMacro(macro);
             updated = true;
         }
-    } else if (doc.is<JsonObjectConst>() && doc["id"].is<const char*>()) {
+    } else if (doc["id"].is<const char*>()) {
         MacroConfig macro;
         parseMacroObject(doc.as<JsonObjectConst>(), macro);
         if (macro.id.length()) {

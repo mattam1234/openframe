@@ -20,7 +20,7 @@ struct SensorConfig {
     uint8_t  address              = 0x76;
     float    temperatureOffsetC   = 0.0f;
     float    seaLevelPressureHpa  = 1013.25f;
-    uint8_t  pin                  = 0;
+    uint8_t  pin                  = 0;        // for pin-based sensors (DHT22, DS18B20)
 };
 
 struct SensorMetricValue {
