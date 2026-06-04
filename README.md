@@ -1,70 +1,110 @@
 # OpenFrame
 
-> A modular ESP32-based hardware automation and control platform.
+> A modular hardware automation and control platform with ESP firmware and a browser-based UI.
 
-OpenFrame lets you connect sensors, buttons, displays, touchscreens, and expansion modules and configure everything through a browser — no firmware reflash required.
+OpenFrame lets you wire up inputs, outputs, sensors, displays, touch interactions, and expansion modules, then configure and monitor the device from a web interface without reflashing for every change.
 
 ---
 
-## Features
+## Project Status
 
-- **ESP32 / ESP32-S3** support via PlatformIO + Arduino Framework
-- **Visual web UI** — Device Layout Designer, Screen Designer, Sensor Dashboard
-- **Action Engine** — chainable, conditional actions and macros
-- **Variable System** — global integer / float / boolean / string variables
-- **Display Support** — SSD1306, SH1106, TFT (ST7789, ILI9341, ILI9488), Nextion smart displays
-- **Sensor Support** — BME280, DHT22, DS18B20, BH1750, INA219, MPU6050 and more
-- **Home Assistant** — MQTT Discovery, entity binding, service calls
-- **MQTT** — publish, subscribe, variable sync
-- **OTA Updates** — local upload, remote GitHub release checks, rollback
-- **WiFi** — captive-portal first-boot setup, AP fallback
-- **LittleFS** storage — JSON configuration, profiles, templates, action history
-- **I2C Module System** — auto-discovery of expansion modules
-- **USB HID** — keyboard / media control on ESP32-S3 (future)
+OpenFrame has completed the planned MVP implementation through phases 0–10.
+
+- ✅ ESP32, ESP32-S3, and ESP8266 firmware targets
+- ✅ Core runtime: logging, event bus, storage, configuration, variables
+- ✅ Connectivity: WiFi captive portal, MQTT, Home Assistant, OTA
+- ✅ Hardware layer: inputs, outputs, sensors, displays, touch, I2C modules
+- ✅ Automation: action engine, conditions, macros, notifications
+- ✅ Device API: REST endpoints, WebSocket updates, LittleFS-backed config
+- ✅ Web UI: dashboard, layout designer, screen designer, action manager, settings
+- ✅ Profiles, templates, device health monitoring, and plugin architecture foundations
+
+See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detailed completion checklist.
+
+---
+
+## Implemented Features
+
+### Firmware
+
+- PlatformIO firmware for `esp32dev`, `esp32s3dev`, and `esp8266dev`
+- JSON-backed configuration and variable persistence with LittleFS
+- WiFi first-boot AP + captive portal with reconnect and fallback logic
+- MQTT integration and Home Assistant MQTT discovery/service handling
+- OTA upload support and GitHub release check endpoint
+- Action engine with delays, HTTP, MQTT, variable, Home Assistant, page, and notification actions
+- Macro execution and action history tracking
+- Health monitoring for heap, PSRAM, CPU, WiFi RSSI, reboot reason, and uptime
+- Notification delivery to displays and the web UI
+
+### Hardware Support
+
+- Inputs: buttons, toggles, encoders, analog controls
+- Outputs: LEDs, PWM, RGB, WS2812, relays, buzzers
+- Sensors: BME280, BMP280, DHT22, DS18B20, SHT31, BH1750, INA219, MPU6050
+- Displays: SSD1306, SH1106, ST7789, ILI9341, Nextion
+- Touch routing, gestures, page navigation, and widget interaction
+- I2C module discovery and module handler registry
+
+### Web UI
+
+- Dashboard for live device status and health
+- Device Layout Designer
+- Screen Designer
+- Sensor Dashboard
+- Action Manager and macro editor
+- Module Manager
+- Home Assistant Manager
+- Logs Viewer
+- Settings, profile management, and template import/export
 
 ---
 
 ## Repository Layout
 
-```
+```text
 openframe/
-├── firmware/               # PlatformIO ESP32 firmware
+├── firmware/               # PlatformIO firmware and LittleFS assets
 │   ├── platformio.ini
+│   ├── data/               # Built frontend assets served by the device
 │   └── src/
-│       ├── main.cpp
-│       ├── core/           # Logger, EventBus, ConfigManager, StorageManager
-│       ├── managers/       # WiFi, MQTT, OTA, HA, Variables
-│       ├── hardware/       # Input, Output, Sensor, Display, Touch, Module
-│       └── api/            # REST + WebSocket handlers
-├── frontend/               # Vue 3 + Pinia + Vuetify web UI
+│       ├── api/
+│       ├── core/
+│       ├── hardware/
+│       ├── managers/
+│       └── plugin/
+├── frontend/               # Vue 3 + Vite + Pinia + Vuetify UI
 │   ├── package.json
 │   └── src/
-│       ├── views/          # Dashboard, LayoutDesigner, ScreenDesigner, etc.
-│       ├── components/
-│       ├── stores/         # Pinia stores
-│       └── api/            # WebSocket + REST client
 └── docs/
-    ├── product-specifications.md
-    └── implementation-plan.md
+    ├── implementation-plan.md
+    ├── plugin-architecture.md
+    └── product-specifications.md
 ```
 
 ---
 
-## Getting Started
+## Build and Run
 
 ### Firmware
 
-1. Install [PlatformIO](https://platformio.org/).
-2. Open the `firmware/` folder in VS Code with the PlatformIO extension.
-3. Select your target environment (`esp32dev` or `esp32s3dev`).
-4. Build and upload:
+```bash
+cd firmware
+python -m platformio run -e esp32dev
+python -m platformio run -e esp32s3dev
+python -m platformio run -e esp8266dev
+```
+
+To upload instead of only building:
 
 ```bash
 cd firmware
-pio run -t upload
+python -m platformio run -e esp32dev -t upload
 ```
 
-### Frontend (development)
+### Frontend
+
+For local development:
 
 ```bash
 cd frontend
@@ -72,12 +112,19 @@ npm install
 npm run dev
 ```
 
-The dev server proxies API calls to the device IP configured in `frontend/.env`.
+For a production build served from the device:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+The frontend build outputs to `firmware/data/www`, which is served by the firmware from LittleFS. The dev server proxies `/api` and `/ws` to the device IP configured in `frontend/.env`.
 
 ### First Boot
 
-On first boot the device starts an Access Point named `OpenFrame-XXXX`.  
-Connect to it and open `http://192.168.4.1` to configure WiFi and basic settings.
+On first boot the device creates an `OpenFrame-XXXX` access point. Connect to it and open `http://192.168.4.1` to configure WiFi and device settings.
 
 ---
 
@@ -85,6 +132,7 @@ Connect to it and open `http://192.168.4.1` to configure WiFi and basic settings
 
 - [Product Specifications](docs/product-specifications.md)
 - [Implementation Plan](docs/implementation-plan.md)
+- [Plugin Architecture](docs/plugin-architecture.md)
 
 ---
 
@@ -92,18 +140,12 @@ Connect to it and open `http://192.168.4.1` to configure WiFi and basic settings
 
 | Layer | Technology |
 |---|---|
-| Firmware MCU | ESP32 / ESP32-S3 |
-| Firmware Framework | Arduino + FreeRTOS via PlatformIO |
-| Firmware Libraries | ArduinoJson, AsyncTCP, ESPAsyncWebServer, ElegantOTA |
+| Firmware targets | ESP32, ESP32-S3, ESP8266 |
+| Firmware framework | Arduino via PlatformIO |
+| Firmware services | Async WebServer, ElegantOTA, ArduinoJson, PubSubClient |
 | Storage | LittleFS + JSON |
 | Frontend | Vue 3, Vite, Pinia, Vuetify |
 | Communication | REST API, WebSocket, MQTT |
-
----
-
-## Contributing
-
-See the [implementation plan](docs/implementation-plan.md) for the current development roadmap and open tasks.
 
 ---
 
