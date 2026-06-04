@@ -47,8 +47,13 @@ void ModuleManager::scanBus() {
     std::vector<uint8_t> found;
     for (uint8_t addr = 8; addr < 120; ++addr) {
         Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
+        const uint8_t result = Wire.endTransmission();
+        if (result == 0) {
             found.push_back(addr);
+        } else if (result != 2) {
+            // result == 2 means NACK (no device), which is normal.
+            // Any other non-zero result indicates a bus error.
+            _i2cErrorCount++;
         }
     }
 

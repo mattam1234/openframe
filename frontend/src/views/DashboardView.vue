@@ -40,6 +40,8 @@
               <div><strong>IP Address:</strong> {{ status.ip || '—' }}</div>
               <div><strong>Variables:</strong> {{ status.variableCount ?? '—' }}</div>
               <div><strong>Logs:</strong> {{ status.logCount ?? '—' }}</div>
+              <div v-if="status.rebootReason"><strong>Last Reboot:</strong> {{ status.rebootReason }}</div>
+              <div v-if="status.activeProfileId"><strong>Active Profile:</strong> {{ status.activeProfileId }}</div>
             </div>
           </v-card-text>
         </v-card>
@@ -80,6 +82,95 @@
         </v-card>
       </v-col>
     </v-row>
+
+    <!-- ── Phase 8: Extended Health Row ─────────────────────────────────── -->
+    <v-row class="mt-2">
+      <v-col cols="12" md="6">
+        <v-card>
+          <v-card-title>Memory</v-card-title>
+          <v-card-text>
+            <v-table density="compact">
+              <tbody>
+                <tr>
+                  <td class="text-medium-emphasis">Free Heap</td>
+                  <td>{{ formatHeap(status.freeHeap) }}</td>
+                </tr>
+                <tr>
+                  <td class="text-medium-emphasis">Min Free Heap</td>
+                  <td>{{ formatHeap(status.minFreeHeap) }}</td>
+                </tr>
+                <tr v-if="status.psramSize > 0">
+                  <td class="text-medium-emphasis">Free PSRAM</td>
+                  <td>{{ formatHeap(status.freePsram) }}</td>
+                </tr>
+                <tr v-if="status.psramSize > 0">
+                  <td class="text-medium-emphasis">Total PSRAM</td>
+                  <td>{{ formatHeap(status.psramSize) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
+        <v-card>
+          <v-card-title>Diagnostics</v-card-title>
+          <v-card-text>
+            <v-table density="compact">
+              <tbody>
+                <tr>
+                  <td class="text-medium-emphasis">CPU Load</td>
+                  <td>
+                    <v-chip
+                      :color="cpuLoadColor(status.cpuLoadPercent)"
+                      size="small"
+                    >
+                      {{ status.cpuLoadPercent ?? '—' }}%
+                    </v-chip>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="text-medium-emphasis">I²C Errors</td>
+                  <td>
+                    <v-chip :color="status.i2cErrorCount > 0 ? 'warning' : 'success'" size="small">
+                      {{ status.i2cErrorCount ?? 0 }}
+                    </v-chip>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="text-medium-emphasis">Sensor Errors</td>
+                  <td>
+                    <v-chip :color="status.sensorErrorCount > 0 ? 'error' : 'success'" size="small">
+                      {{ status.sensorErrorCount ?? 0 }}
+                    </v-chip>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="text-medium-emphasis">WiFi RSSI</td>
+                  <td>{{ formatRssi(status.rssi) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+
+            <v-alert
+              v-if="sensorFailures.length"
+              type="warning"
+              density="compact"
+              class="mt-3"
+              title="Sensor Issues"
+            >
+              <ul class="text-body-2 mt-1">
+                <li v-for="s in sensorFailures" :key="s.id">
+                  <strong>{{ s.id }}</strong>: {{ s.lastError || 'unhealthy' }}
+                  ({{ s.errorCount }} errors)
+                </li>
+              </ul>
+            </v-alert>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
   </div>
 </template>
 
@@ -98,6 +189,10 @@ const status = computed(() => ({
   ...wsStore.health,
 }))
 
+const sensorFailures = computed(() =>
+  Array.isArray(status.value.sensors) ? status.value.sensors : []
+)
+
 const formatHeap = (value) => (
   value === undefined || value === null
     ? '—'
@@ -109,6 +204,13 @@ const formatRssi = (value) => (
     ? '—'
     : `${value} dBm`
 )
+
+const cpuLoadColor = (pct) => {
+  if (pct === undefined || pct === null) return 'default'
+  if (pct >= 80) return 'error'
+  if (pct >= 50) return 'warning'
+  return 'success'
+}
 
 const statusCards = computed(() => [
   {
@@ -122,6 +224,12 @@ const statusCards = computed(() => [
     value: formatHeap(status.value.freeHeap),
     icon: 'mdi-memory',
     color: 'secondary',
+  },
+  {
+    label: 'CPU Load',
+    value: status.value.cpuLoadPercent !== undefined ? `${status.value.cpuLoadPercent}%` : '—',
+    icon: 'mdi-speedometer',
+    color: cpuLoadColor(status.value.cpuLoadPercent),
   },
   {
     label: 'WiFi RSSI',
@@ -149,3 +257,4 @@ const statusCards = computed(() => [
   },
 ])
 </script>
+

@@ -51,7 +51,10 @@ public:
     struct SensorInstance {
         SensorConfig                  config;
         std::unique_ptr<SensorDriver> driver;
-        uint32_t                      lastPollMs = 0;
+        uint32_t                      lastPollMs   = 0;
+        uint32_t                      errorCount   = 0;
+        String                        lastError;
+        bool                          healthy      = true;
     };
 
     const std::vector<SensorInstance>& sensors() const { return _sensors; }

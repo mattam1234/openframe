@@ -191,8 +191,8 @@ All other modules depend on these subsystems.
   - [x] `GET/POST /api/actions`
   - [x] `GET/POST /api/macros`
   - [x] `GET /api/modules`
-  - `GET/POST /api/profiles`
-  - `GET/POST /api/templates`
+  - [x] `GET/POST /api/profiles`
+  - [x] `GET/POST /api/templates`
   - [x] `GET /api/logs`
   - `POST /api/ota/upload`
   - [x] `GET /api/ota/check`
@@ -227,17 +227,17 @@ All other modules depend on these subsystems.
 
 ## Phase 7 — Profiles & Templates
 
-- [ ] **Profile Manager** — create, switch, and delete profiles
+- [x] **Profile Manager** — create, switch, and delete profiles
   - Each profile stores: layout, display pages, actions, variables, HA mappings
   - Switching profiles does not require reflash
-- [ ] **Template Manager** — export / import complete device templates as JSON
+- [x] **Template Manager** — export / import complete device templates as JSON
   - Templates include everything a profile contains plus hardware config
 
 ---
 
 ## Phase 8 — Device Health Monitoring
 
-- [ ] Periodic health task reporting:
+- [x] Periodic health task reporting:
   - Heap usage, PSRAM usage
   - CPU load (idle task measurement)
   - WiFi RSSI
@@ -245,7 +245,7 @@ All other modules depend on these subsystems.
   - Sensor failure flags
   - Reboot reason
   - Uptime
-- [ ] Health data pushed over WebSocket to Dashboard
+- [x] Health data pushed over WebSocket to Dashboard
 
 ---
 
@@ -300,8 +300,8 @@ Cross-reference with [product-specifications.md § Version 1.0](product-specific
 | Debug Logging | 1 | ✅ |
 | I2C Module Support | 3 | ✅ |
 | Touch Manager | 3 | ✅ |
-| Device Templates | 7 | ⬜ |
-| Device Health Monitoring | 8 | ⬜ |
+| Device Templates | 7 | ✅ |
+| Device Health Monitoring | 8 | ✅ |
 | WebSocket live updates | 5 | ✅ |
 | JSON config storage | 1 | ✅ |
 | LittleFS storage | 1 | ✅ |

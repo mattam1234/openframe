@@ -18,6 +18,8 @@
 #include "hardware/ModuleManager.h"
 #include "managers/ActionEngine.h"
 #include "managers/MacroManager.h"
+#include "managers/ProfileManager.h"
+#include "managers/HealthMonitor.h"
 #include "api/ApiServer.h"
 
 static constexpr const char* TAG = "Main";
@@ -55,17 +57,19 @@ void setup() {
     ModuleManager::instance().begin();
     ActionEngine::instance().begin();
     MacroManager::instance().begin();
+    ProfileManager::instance().begin();
+    HealthMonitor::instance().begin();
     ApiServer::instance().begin(webServer);
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
 
     LOG_I(TAG, "Connectivity subsystems initialised");
-
-    // TODO Phase 5: ApiServer (REST + WebSocket)
 }
 
 void loop() {
+    HealthMonitor::instance().markLoopStart();
+
     WiFiManager::instance().loop();
     MqttManager::instance().loop();
     OtaManager::instance().loop();
@@ -78,5 +82,7 @@ void loop() {
     ActionEngine::instance().loop();
     MacroManager::instance().loop();
     ApiServer::instance().loop();
+
+    HealthMonitor::instance().markLoopEnd();
     delay(10);
 }

@@ -15,6 +15,8 @@
 #include "../managers/OtaManager.h"
 #include "../managers/VariableManager.h"
 #include "../managers/WiFiManager.h"
+#include "../managers/ProfileManager.h"
+#include "../managers/HealthMonitor.h"
 
 namespace {
 
@@ -274,6 +276,104 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
                 request->_tempObject = nullptr;
             }
         });
+
+    // ── Profiles ──────────────────────────────────────────────────────────────
+    server.on("/api/profiles", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendProfiles(request);
+    });
+    server.on("/api/profiles", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleProfileCreate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
+    server.on("/api/profiles/activate", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleProfileActivate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
+    server.on("/api/profiles/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        const String url = request->url();
+        const String profileId = url.substring(url.lastIndexOf('/') + 1);
+        ApiServer::instance().handleProfileDelete(request, profileId);
+    });
+
+    // ── Templates ─────────────────────────────────────────────────────────────
+    server.on("/api/templates", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendTemplates(request);
+    });
+    server.on("/api/templates/export", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleTemplateExport(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
+    server.on("/api/templates/import", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleTemplateImport(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
+    server.on("/api/templates/*", HTTP_GET, [](AsyncWebServerRequest* request) {
+        const String url = request->url();
+        const String templateId = url.substring(url.lastIndexOf('/') + 1);
+        ApiServer::instance().sendTemplateById(request, templateId);
+    });
+    server.on("/api/templates/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        const String url = request->url();
+        const String templateId = url.substring(url.lastIndexOf('/') + 1);
+        // Delegate to a one-off lambda since no dedicated handler method is needed
+        StorageManager::instance().remove("/templates/" + templateId + ".json");
+        JsonDocument doc;
+        doc["ok"] = true;
+        doc["id"] = templateId;
+        request->send(200, "application/json", [doc]() mutable {
+            String s;
+            serializeJson(doc, s);
+            return s;
+        }());
+    });
 }
 
 void ApiServer::registerWebSocket(AsyncWebServer& server) {
@@ -579,6 +679,10 @@ String ApiServer::buildStatusJson() const {
     doc["uptime"] = formatUptime(uptimeMs);
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["minFreeHeap"] = ESP.getMinFreeHeap();
+    doc["freePsram"] = ESP.getFreePsram();
+    doc["psramSize"] = ESP.getPsramSize();
+    doc["cpuLoadPercent"] = static_cast<int>(HealthMonitor::instance().getCpuLoadPercent());
+    doc["rebootReason"] = HealthMonitor::instance().getRebootReason();
     doc["wifiConnected"] = wifiConnected;
     doc["apMode"] = WiFiManager::instance().isApMode();
     doc["ip"] = WiFiManager::instance().localIP();
@@ -589,6 +693,25 @@ String ApiServer::buildStatusJson() const {
     doc["logCount"] = Logger::instance().getEntryCount();
     doc["variableCount"] = VariableManager::instance().all().size();
     doc["moduleCount"] = ModuleManager::instance().modules().size();
+    doc["i2cErrorCount"] = ModuleManager::instance().i2cErrorCount();
+
+    // Sensor failure flags
+    auto sensorArr = doc["sensors"].to<JsonArray>();
+    uint32_t sensorErrorTotal = 0;
+    for (const auto& inst : SensorManager::instance().sensors()) {
+        if (!inst.healthy || inst.errorCount > 0) {
+            auto obj = sensorArr.add<JsonObject>();
+            obj["id"]         = inst.config.id;
+            obj["healthy"]    = inst.healthy;
+            obj["errorCount"] = inst.errorCount;
+            if (inst.lastError.length()) obj["lastError"] = inst.lastError;
+            sensorErrorTotal += inst.errorCount;
+        }
+    }
+    doc["sensorErrorCount"] = sensorErrorTotal;
+
+    doc["activeProfileId"] = ProfileManager::instance().activeId();
+
     return toJsonString(doc);
 }
 
@@ -894,4 +1017,184 @@ void ApiServer::handleMacrosUpdate(AsyncWebServerRequest* request, const String&
         MacroManager::instance().saveMacros();
     }
     sendMacros(request);
+}
+
+// ── Profile handlers ──────────────────────────────────────────────────────────
+
+void ApiServer::sendProfiles(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    doc["activeId"] = ProfileManager::instance().activeId();
+    auto arr = doc["profiles"].to<JsonArray>();
+    for (const auto& p : ProfileManager::instance().profiles()) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"]        = p.id;
+        obj["name"]      = p.name;
+        obj["createdMs"] = p.createdMs;
+        obj["active"]    = (p.id == ProfileManager::instance().activeId());
+    }
+    doc["count"] = ProfileManager::instance().profiles().size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleProfileCreate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const String name = doc["name"] | String("");
+    if (!name.length()) {
+        sendError(request, 400, "Profile name is required");
+        return;
+    }
+
+    String outId;
+    if (!ProfileManager::instance().create(name, outId)) {
+        sendError(request, 500, "Failed to create profile");
+        return;
+    }
+
+    sendProfiles(request);
+}
+
+void ApiServer::handleProfileActivate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const String id = doc["id"] | String("");
+    if (!id.length()) {
+        sendError(request, 400, "Profile id is required");
+        return;
+    }
+
+    String error;
+    if (!ProfileManager::instance().activate(id, error)) {
+        sendError(request, 400, error);
+        return;
+    }
+
+    publishHealthUpdate();
+    sendProfiles(request);
+}
+
+void ApiServer::handleProfileDelete(AsyncWebServerRequest* request, const String& profileId) {
+    if (!profileId.length()) {
+        sendError(request, 400, "Profile id is required");
+        return;
+    }
+
+    String error;
+    if (!ProfileManager::instance().remove(profileId, error)) {
+        sendError(request, 400, error);
+        return;
+    }
+
+    sendProfiles(request);
+}
+
+// ── Template handlers ─────────────────────────────────────────────────────────
+
+void ApiServer::sendTemplates(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["templates"].to<JsonArray>();
+
+    const auto files = StorageManager::instance().listDir("/templates");
+    for (const auto& f : files) {
+        if (!f.endsWith(".json")) continue;
+        JsonDocument tmpl;
+        if (!StorageManager::instance().readJson(f, tmpl)) continue;
+        auto obj = arr.add<JsonObject>();
+        obj["id"]        = tmpl["id"] | String("");
+        obj["name"]      = tmpl["name"] | String("");
+        obj["createdMs"] = tmpl["createdMs"] | 0;
+    }
+
+    doc["count"] = arr.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::sendTemplateById(AsyncWebServerRequest* request, const String& templateId) const {
+    JsonDocument tmpl;
+    const String path = "/templates/" + templateId + ".json";
+    if (!StorageManager::instance().readJson(path, tmpl)) {
+        sendError(request, 404, "Template not found");
+        return;
+    }
+    sendJson(request, tmpl);
+}
+
+void ApiServer::handleTemplateExport(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const String name = doc["name"] | String("Template");
+
+    // Generate a unique ID
+    char idBuf[32];
+    snprintf(idBuf, sizeof(idBuf), "tmpl_%08lx", static_cast<unsigned long>(millis()));
+    const String id = String(idBuf);
+
+    JsonDocument tmplDoc;
+    tmplDoc["id"]        = id;
+    tmplDoc["name"]      = name;
+    tmplDoc["createdMs"] = millis();
+
+    // Embed device config (minus Wi-Fi credentials for security)
+    JsonDocument cfgDoc;
+    ConfigManager::instance().toJson(cfgDoc);
+    cfgDoc.remove("wifi");
+    tmplDoc["config"].set(cfgDoc);
+
+    // Embed current device state
+    JsonDocument stateDoc;
+    ProfileManager::instance().captureState(stateDoc);
+    tmplDoc["state"].set(stateDoc);
+
+    StorageManager::instance().mkdirs("/templates");
+    const String path = "/templates/" + id + ".json";
+    if (!StorageManager::instance().writeJson(path, tmplDoc)) {
+        sendError(request, 500, "Failed to write template");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"]       = true;
+    response["id"]       = id;
+    response["name"]     = name;
+    sendJson(request, response);
+}
+
+void ApiServer::handleTemplateImport(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument tmplDoc;
+    if (deserializeJson(tmplDoc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    const JsonVariantConst stateVariant = tmplDoc["state"];
+    if (!stateVariant.is<JsonObjectConst>()) {
+        sendError(request, 400, "Template has no state data");
+        return;
+    }
+
+    JsonDocument stateDoc;
+    stateDoc.set(stateVariant);
+    String error;
+    if (!ProfileManager::instance().applyState(stateDoc, error)) {
+        sendError(request, 500, error);
+        return;
+    }
+
+    publishHealthUpdate();
+
+    JsonDocument response;
+    response["ok"] = true;
+    sendJson(request, response);
 }

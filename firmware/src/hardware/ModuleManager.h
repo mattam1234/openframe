@@ -52,6 +52,7 @@ public:
     void registerHandler(const String& name, HandlerFactory factory);
 
     const std::vector<DiscoveredModule>& modules() const { return _modules; }
+    uint32_t i2cErrorCount() const { return _i2cErrorCount; }
 
 private:
     ModuleManager() = default;
@@ -65,7 +66,8 @@ private:
     std::map<String, HandlerFactory>            _handlerFactories;
     std::vector<std::unique_ptr<ModuleHandler>> _handlers;
     std::vector<DiscoveredModule>               _modules;
-    uint32_t                                    _lastScanMs = 0;
+    uint32_t                                    _lastScanMs    = 0;
+    uint32_t                                    _i2cErrorCount = 0;
 
     static constexpr uint32_t SCAN_INTERVAL_MS = 5000;
     static constexpr const char* TAG = "ModuleMgr";

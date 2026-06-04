@@ -458,10 +458,15 @@ void SensorManager::pollSensor(SensorInstance& sensor, uint32_t nowMs) {
     String error;
     if (!sensor.driver->read(values, error)) {
         LOG_W(TAG, "Read failed for sensor '" + sensor.config.id + "': " + error);
+        sensor.errorCount++;
+        sensor.lastError = error;
+        sensor.healthy   = false;
         publishError(sensor.config, error, nowMs);
         return;
     }
 
+    sensor.healthy   = true;
+    sensor.lastError = "";
     publishReading(sensor, values, nowMs);
 }
 
