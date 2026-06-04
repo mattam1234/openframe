@@ -1,5 +1,35 @@
 #include "OtaManager.h"
 
+#include <LittleFS.h>
+
+namespace {
+
+struct FilesystemUploadState {
+    bool started = false;
+    bool finished = false;
+    bool success = false;
+    String error;
+};
+
+FilesystemUploadState* uploadState(AsyncWebServerRequest* request) {
+    return static_cast<FilesystemUploadState*>(request->_tempObject);
+}
+
+FilesystemUploadState* ensureUploadState(AsyncWebServerRequest* request) {
+    auto* state = uploadState(request);
+    if (!state) {
+        state = new FilesystemUploadState();
+        request->_tempObject = state;
+    }
+    return state;
+}
+
+String updateErrorString() {
+    return "Update error " + String(Update.getError());
+}
+
+}  // namespace
+
 OtaManager& OtaManager::instance() {
     static OtaManager inst;
     return inst;
@@ -14,6 +44,7 @@ void OtaManager::begin(AsyncWebServer& server) {
     }
 
     ElegantOTA.begin(&server);
+    registerFilesystemUploadRoute(server);
 
     ElegantOTA.onStart([this]() { onOtaStart(); });
     ElegantOTA.onProgress([this](size_t current, size_t total) {
@@ -26,6 +57,11 @@ void OtaManager::begin(AsyncWebServer& server) {
 
 void OtaManager::loop() {
     ElegantOTA.loop();
+
+    if (_restartPending && millis() >= _restartAtMs) {
+        LOG_I(TAG, "Restarting after filesystem upload");
+        ESP.restart();
+    }
 }
 
 bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) {
@@ -86,6 +122,91 @@ bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) 
 }
 
 // ── Private ───────────────────────────────────────────────────────────────────
+
+void OtaManager::registerFilesystemUploadRoute(AsyncWebServer& server) {
+    server.on("/api/ota/filesystem", HTTP_POST,
+        [this](AsyncWebServerRequest* request) {
+            JsonDocument doc;
+            auto* state = uploadState(request);
+
+            if (state && state->success) {
+                doc["status"] = "ok";
+                doc["message"] = "Filesystem uploaded. Rebooting.";
+                _restartPending = true;
+                _restartAtMs = millis() + 1000;
+            } else {
+                doc["status"] = "error";
+                doc["message"] = state ? state->error : "No filesystem image received";
+                LittleFS.begin(false);
+            }
+
+            String body;
+            serializeJson(doc, body);
+            auto* response = request->beginResponse(state && state->success ? 200 : 400, "application/json", body);
+            response->addHeader("Connection", "close");
+            request->send(response);
+
+            delete state;
+            request->_tempObject = nullptr;
+        },
+        [this](AsyncWebServerRequest* request, const String&, size_t index, uint8_t* data, size_t len, bool final) {
+            const size_t total = request->contentLength();
+            handleFilesystemUploadChunk(request, index, data, len, total, final);
+        },
+        [this](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            handleFilesystemUploadChunk(request, index, data, len, total, index + len == total);
+        });
+
+    LOG_I(TAG, "Filesystem upload ready at POST /api/ota/filesystem");
+}
+
+void OtaManager::handleFilesystemUploadChunk(
+    AsyncWebServerRequest* request,
+    size_t index,
+    uint8_t* data,
+    size_t len,
+    size_t total,
+    bool final) {
+    auto* state = ensureUploadState(request);
+    if (!state || state->finished || !state->error.isEmpty()) return;
+
+    if (index == 0) {
+        LOG_I(TAG, "Filesystem upload started");
+        EventBus::instance().publish(EventType::OtaStarted, "filesystem", "");
+
+        LittleFS.end();
+        state->started = Update.begin(total > 0 ? total : UPDATE_SIZE_UNKNOWN, U_SPIFFS);
+        if (!state->started) {
+            state->error = updateErrorString();
+            LOG_E(TAG, "Filesystem update begin failed: " + state->error);
+            EventBus::instance().publish(EventType::OtaError, "filesystem", state->error);
+            return;
+        }
+    }
+
+    if (len > 0 && Update.write(data, len) != len) {
+        state->error = updateErrorString();
+        LOG_E(TAG, "Filesystem update write failed: " + state->error);
+        EventBus::instance().publish(EventType::OtaError, "filesystem", state->error);
+        Update.abort();
+        return;
+    }
+
+    onOtaProgress(index + len, total);
+
+    if (final) {
+        state->finished = true;
+        state->success = Update.end(true);
+        if (state->success) {
+            LOG_I(TAG, "Filesystem upload complete");
+            EventBus::instance().publish(EventType::OtaFinished, "filesystem", "");
+        } else {
+            state->error = updateErrorString();
+            LOG_E(TAG, "Filesystem update end failed: " + state->error);
+            EventBus::instance().publish(EventType::OtaError, "filesystem", state->error);
+        }
+    }
+}
 
 void OtaManager::onOtaStart() {
     LOG_I(TAG, "OTA update started");

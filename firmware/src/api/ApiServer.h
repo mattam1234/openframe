@@ -60,6 +60,7 @@ private:
 
     void sendJson(AsyncWebServerRequest* request, const JsonDocument& doc, int status = 200) const;
     void sendError(AsyncWebServerRequest* request, int status, const String& message) const;
+    void scheduleRestart(uint32_t delayMs = 1500);
     void sendFrame(AsyncWebSocketClient* client, const char* type, const JsonDocument& payload) const;
     void sendRawFrame(AsyncWebSocketClient* client, const char* type, const String& rawPayloadJson) const;
     void broadcastFrame(const char* type, const JsonDocument& payload);
@@ -73,6 +74,8 @@ private:
     AsyncWebSocket _ws;
     bool           _started = false;
     bool           _subscribed = false;
+    bool           _restartPending = false;
+    uint32_t       _restartAtMs = 0;
     uint32_t       _lastHealthPublishMs = 0;
 
     static constexpr uint32_t HEALTH_PUBLISH_INTERVAL_MS = 5000;

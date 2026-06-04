@@ -122,6 +122,54 @@ String toJsonString(const JsonDocument& doc) {
     return body;
 }
 
+const char* contentTypeForPath(const String& path) {
+    if (path.endsWith(".html")) return "text/html";
+    if (path.endsWith(".css")) return "text/css";
+    if (path.endsWith(".js")) return "application/javascript";
+    if (path.endsWith(".json")) return "application/json";
+    if (path.endsWith(".svg")) return "image/svg+xml";
+    if (path.endsWith(".png")) return "image/png";
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+    if (path.endsWith(".webp")) return "image/webp";
+    if (path.endsWith(".ico")) return "image/x-icon";
+    if (path.endsWith(".woff2")) return "font/woff2";
+    if (path.endsWith(".woff")) return "font/woff";
+    if (path.endsWith(".ttf")) return "font/ttf";
+    return "application/octet-stream";
+}
+
+void sendStaticFile(AsyncWebServerRequest* request, const String& path, const char* cacheControl) {
+    String filePath = path;
+    bool gzip = false;
+
+    if (!LittleFS.exists(filePath)) {
+        const String gzipPath = filePath + ".gz";
+        if (LittleFS.exists(gzipPath)) {
+            filePath = gzipPath;
+            gzip = true;
+        }
+    } else if (filePath.endsWith(".gz")) {
+        gzip = true;
+    }
+
+    if (!LittleFS.exists(filePath)) {
+        request->send(404, "text/plain", "Not found");
+        return;
+    }
+
+    String typePath = filePath;
+    if (typePath.endsWith(".gz")) {
+        typePath.remove(typePath.length() - 3);
+    }
+
+    auto* response = request->beginResponse(LittleFS, filePath, contentTypeForPath(typePath));
+    response->addHeader("Cache-Control", cacheControl);
+    if (gzip) {
+        response->addHeader("Content-Encoding", "gzip");
+    }
+    request->send(response);
+}
+
 }  // namespace
 
 ApiServer& ApiServer::instance() {
@@ -140,11 +188,31 @@ void ApiServer::begin(AsyncWebServer& server) {
     registerWebSocket(server);
 
     const bool hasIndexHtml = StorageManager::instance().exists("/www/index.html");
-    const bool hasIndexHtmlGz = StorageManager::instance().exists("/www/index.html.gz");
+    const bool hasIndexHtmlGz = hasIndexHtml ? false : StorageManager::instance().exists("/www/index.html.gz");
 
     if (hasIndexHtml || hasIndexHtmlGz) {
-        auto& staticHandler = server.serveStatic("/", LittleFS, "/www/");
-        staticHandler.setDefaultFile(hasIndexHtml ? "index.html" : "index.html.gz");
+        server.on("/assets/*", HTTP_GET, [](AsyncWebServerRequest* request) {
+            const String path = "/www" + request->url();
+            sendStaticFile(request, path, "public, max-age=31536000, immutable");
+        });
+
+        server.on("/favicon.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
+            sendStaticFile(request, "/www/favicon.svg", "public, max-age=86400");
+        });
+
+        server.on("/", HTTP_GET, [hasIndexHtml](AsyncWebServerRequest* request) {
+            sendStaticFile(request, hasIndexHtml ? "/www/index.html" : "/www/index.html.gz", "no-store");
+        });
+
+        server.onNotFound([hasIndexHtml](AsyncWebServerRequest* request) {
+            const String url = request->url();
+            if (url.startsWith("/api/") || url.startsWith("/assets/") || url.indexOf('.') >= 0) {
+                request->send(404, "text/plain", "Not found");
+                return;
+            }
+
+            sendStaticFile(request, hasIndexHtml ? "/www/index.html" : "/www/index.html.gz", "no-store");
+        });
     } else {
         server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
             request->send(200, "text/html",
@@ -176,6 +244,11 @@ void ApiServer::loop() {
     _ws.cleanupClients();
 
     const uint32_t nowMs = millis();
+    if (_restartPending && nowMs >= _restartAtMs) {
+        LOG_I(TAG, "Restarting to apply updated settings");
+        ESP.restart();
+    }
+
     if (_lastHealthPublishMs == 0 || (nowMs - _lastHealthPublishMs) >= HEALTH_PUBLISH_INTERVAL_MS) {
         publishHealthUpdate();
     }
@@ -574,6 +647,20 @@ void ApiServer::handleConfigUpdate(AsyncWebServerRequest* request, const String&
         return;
     }
 
+    size_t postedWifiNetworks = 0;
+    if (doc["wifi"]["networks"].is<JsonArrayConst>()) {
+        postedWifiNetworks = doc["wifi"]["networks"].as<JsonArrayConst>().size();
+    }
+
+    LOG_I(TAG,
+          "Config POST: bytes=" + String(body.length()) +
+          ", device=" + String(doc["device"]["name"] | "") +
+          ", wifiSsid=" + String(doc["wifi"]["ssid"] | "") +
+          ", wifiNetworks=" + String(postedWifiNetworks) +
+          ", apMode=" + String((doc["wifi"]["ap_mode"] | true) ? "true" : "false") +
+          ", mqtt=" + String((doc["mqtt"]["enabled"] | false) ? "enabled" : "disabled") +
+          ", ha=" + String((doc["ha"]["enabled"] | false) ? "enabled" : "disabled"));
+
     ConfigManager::instance().fromJson(doc);
     if (!ConfigManager::instance().save()) {
         sendError(request, 500, "Failed to save config");
@@ -582,9 +669,13 @@ void ApiServer::handleConfigUpdate(AsyncWebServerRequest* request, const String&
 
     JsonDocument response;
     ConfigManager::instance().toJson(response);
+    response["restartRequired"] = true;
+    response["message"] = "Settings saved. Restarting to apply changes.";
     sendJson(request, response);
     broadcastFrame("config_change", response);
     publishHealthUpdate();
+
+    scheduleRestart();
 }
 
 void ApiServer::handleVariablesUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -773,6 +864,11 @@ void ApiServer::sendError(AsyncWebServerRequest* request, int status, const Stri
     sendJson(request, doc, status);
 }
 
+void ApiServer::scheduleRestart(uint32_t delayMs) {
+    _restartPending = true;
+    _restartAtMs = millis() + delayMs;
+}
+
 void ApiServer::sendFrame(AsyncWebSocketClient* client, const char* type, const JsonDocument& payload) const {
     if (!client) return;
     const String payloadJson = toJsonString(payload);
@@ -911,48 +1007,58 @@ bool ApiServer::applyVariableUpdate(const JsonVariantConst& item, String& error)
 
 void ApiServer::sendInputs(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    doc["inputs"].to<JsonArray>();
-    doc["count"] = 0;
+    if (!StorageManager::instance().readJson(OF_INPUTS_PATH, doc)) {
+        doc["digital"].to<JsonArray>();
+        doc["analog"].to<JsonArray>();
+    }
+    doc["digitalCount"] = doc["digital"].is<JsonArrayConst>() ? doc["digital"].as<JsonArrayConst>().size() : 0;
+    doc["analogCount"] = doc["analog"].is<JsonArrayConst>() ? doc["analog"].as<JsonArrayConst>().size() : 0;
     sendJson(request, doc);
 }
 
 void ApiServer::sendOutputs(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    doc["outputs"].to<JsonArray>();
-    doc["count"] = 0;
+    if (!StorageManager::instance().readJson(OF_OUTPUTS_PATH, doc)) {
+        doc["outputs"].to<JsonArray>();
+    }
+    doc["count"] = doc["outputs"].is<JsonArrayConst>() ? doc["outputs"].as<JsonArrayConst>().size() : 0;
     sendJson(request, doc);
 }
 
 void ApiServer::sendSensors(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    auto arr = doc["sensors"].to<JsonArray>();
-    for (const auto& inst : SensorManager::instance().sensors()) {
-        auto obj = arr.add<JsonObject>();
-        obj["id"] = inst.config.id;
-        obj["type"] = inst.config.type;
-        obj["enabled"] = inst.config.enabled;
-        obj["poll_interval_ms"] = inst.config.pollIntervalMs;
-        obj["variable_prefix"] = inst.config.variablePrefix;
-        obj["address"] = inst.config.address;
-        obj["pin"] = inst.config.pin;
+    if (!StorageManager::instance().readJson(OF_SENSORS_PATH, doc)) {
+        auto arr = doc["sensors"].to<JsonArray>();
+        for (const auto& inst : SensorManager::instance().sensors()) {
+            auto obj = arr.add<JsonObject>();
+            obj["id"] = inst.config.id;
+            obj["type"] = inst.config.type;
+            obj["enabled"] = inst.config.enabled;
+            obj["poll_interval_ms"] = inst.config.pollIntervalMs;
+            obj["variable_prefix"] = inst.config.variablePrefix;
+            obj["address"] = inst.config.address;
+            obj["pin"] = inst.config.pin;
+        }
     }
-    doc["count"] = SensorManager::instance().sensors().size();
+    doc["count"] = doc["sensors"].is<JsonArrayConst>() ? doc["sensors"].as<JsonArrayConst>().size() : 0;
     sendJson(request, doc);
 }
 
 void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    auto arr = doc["displays"].to<JsonArray>();
-    for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
-        auto obj = arr.add<JsonObject>();
-        obj["id"] = cfg.id;
-        obj["type"] = cfg.type;
-        obj["enabled"] = cfg.enabled;
-        obj["width"] = cfg.width;
-        obj["height"] = cfg.height;
-        obj["address"] = cfg.address;
+    if (!StorageManager::instance().readJson(OF_DISPLAYS_PATH, doc)) {
+        auto arr = doc["displays"].to<JsonArray>();
+        for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
+            auto obj = arr.add<JsonObject>();
+            obj["id"] = cfg.id;
+            obj["type"] = cfg.type;
+            obj["enabled"] = cfg.enabled;
+            obj["width"] = cfg.width;
+            obj["height"] = cfg.height;
+            obj["address"] = cfg.address;
+        }
     }
-    doc["count"] = DisplayManager::instance().displayConfigs().size();
+    doc["count"] = doc["displays"].is<JsonArrayConst>() ? doc["displays"].as<JsonArrayConst>().size() : 0;
     sendJson(request, doc);
 }
 
@@ -1057,8 +1163,10 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
 
     JsonDocument response;
     response["ok"] = true;
-    response["message"] = "Inputs saved. Reboot to apply.";
+    response["restartRequired"] = true;
+    response["message"] = "Inputs saved. Restarting to apply.";
     sendJson(request, response);
+    scheduleRestart();
 }
 
 void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -1103,8 +1211,10 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
 
     JsonDocument response;
     response["ok"] = true;
-    response["message"] = "Outputs saved. Reboot to apply.";
+    response["restartRequired"] = true;
+    response["message"] = "Outputs saved. Restarting to apply.";
     sendJson(request, response);
+    scheduleRestart();
 }
 
 void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -1140,8 +1250,10 @@ void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String
 
     JsonDocument response;
     response["ok"] = true;
-    response["message"] = "Sensors saved. Reboot to apply.";
+    response["restartRequired"] = true;
+    response["message"] = "Sensors saved. Restarting to apply.";
     sendJson(request, response);
+    scheduleRestart();
 }
 
 void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -1233,8 +1345,10 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
 
     JsonDocument response;
     response["ok"] = true;
-    response["message"] = "Displays/pages saved. Reboot to apply.";
+    response["restartRequired"] = true;
+    response["message"] = "Displays/pages saved. Restarting to apply.";
     sendJson(request, response);
+    scheduleRestart();
 }
 
 void ApiServer::sendModules(AsyncWebServerRequest* request) const {
@@ -1253,16 +1367,12 @@ void ApiServer::sendModules(AsyncWebServerRequest* request) const {
 
 void ApiServer::sendActions(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    auto arr = doc["actions"].to<JsonArray>();
-    for (const auto& action : ActionEngine::instance().actions()) {
-        auto obj = arr.add<JsonObject>();
-        obj["id"] = action.id;
-        obj["name"] = action.name;
-        obj["enabled"] = action.enabled;
-        obj["step_count"] = action.steps.size();
-        obj["condition_count"] = action.conditions.size();
+    if (!StorageManager::instance().readJson(OF_ACTIONS_PATH, doc)) {
+        doc["actions"].to<JsonArray>();
+    } else if (!doc["actions"].is<JsonArrayConst>()) {
+        doc["actions"].to<JsonArray>();
     }
-    doc["count"] = ActionEngine::instance().actions().size();
+    doc["count"] = doc["actions"].is<JsonArrayConst>() ? doc["actions"].as<JsonArrayConst>().size() : 0;
 
     auto histArr = doc["history"].to<JsonArray>();
     const auto& hist = ActionEngine::instance().history();
@@ -1381,7 +1491,10 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
     }
 
     if (updated) {
-        ActionEngine::instance().saveActions();
+        if (!ActionEngine::instance().saveActions()) {
+            sendError(request, 500, "Failed to save actions");
+            return;
+        }
     }
     sendActions(request);
 }
@@ -1424,7 +1537,10 @@ void ApiServer::handleMacrosUpdate(AsyncWebServerRequest* request, const String&
     }
 
     if (updated) {
-        MacroManager::instance().saveMacros();
+        if (!MacroManager::instance().saveMacros()) {
+            sendError(request, 500, "Failed to save macros");
+            return;
+        }
     }
     sendMacros(request);
 }

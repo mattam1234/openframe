@@ -11,6 +11,9 @@ public:
 
     bool begin();
 
+    // Create known runtime files/directories with empty schemas when missing.
+    bool initializeDefaults();
+
     // Read a JSON file into a JsonDocument. Returns false on error.
     bool readJson(const String& path, JsonDocument& doc);
 

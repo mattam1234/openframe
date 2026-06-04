@@ -139,6 +139,7 @@ void WiFiManager::startSTA() {
 
 void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
     wifi_mode_t originalMode = WiFi.getMode();
+    bool apWasEnabled = originalMode == WIFI_AP || originalMode == WIFI_AP_STA;
     if (originalMode == WIFI_AP) {
         WiFi.mode(WIFI_AP_STA);
     } else if (originalMode == WIFI_MODE_NULL) {
@@ -159,8 +160,8 @@ void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
     }
     WiFi.scanDelete();
 
-    if (originalMode == WIFI_AP) {
-        WiFi.mode(WIFI_AP);
+    if (apWasEnabled && WiFi.getMode() != WIFI_AP_STA) {
+        WiFi.mode(WIFI_AP_STA);
     }
 }
 

@@ -4,6 +4,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
 #include <ArduinoJson.h>
+#include <Update.h>
 #include "../core/Logger.h"
 #include "../core/EventBus.h"
 #include "../core/ConfigManager.h"
@@ -35,11 +36,21 @@ public:
 private:
     OtaManager() = default;
 
+    void registerFilesystemUploadRoute(AsyncWebServer& server);
+    void handleFilesystemUploadChunk(
+        AsyncWebServerRequest* request,
+        size_t index,
+        uint8_t* data,
+        size_t len,
+        size_t total,
+        bool final);
     void onOtaStart();
     void onOtaProgress(size_t current, size_t total);
     void onOtaEnd(bool success);
 
     uint8_t _otaProgressPct = 0;
+    bool    _restartPending = false;
+    uint32_t _restartAtMs = 0;
 
     static constexpr const char* GITHUB_RELEASES_API =
         "https://api.github.com/repos/%s/releases/latest";
