@@ -23,9 +23,18 @@ private:
     void sendVariables(AsyncWebServerRequest* request) const;
     void sendLogs(AsyncWebServerRequest* request) const;
     void sendOtaStatus(AsyncWebServerRequest* request) const;
+    void sendInputs(AsyncWebServerRequest* request) const;
+    void sendOutputs(AsyncWebServerRequest* request) const;
+    void sendSensors(AsyncWebServerRequest* request) const;
+    void sendDisplays(AsyncWebServerRequest* request) const;
+    void sendActions(AsyncWebServerRequest* request) const;
+    void sendMacros(AsyncWebServerRequest* request) const;
+    void sendModules(AsyncWebServerRequest* request) const;
 
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleActionsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);
 
     void handleWebSocketMessage(AsyncWebSocketClient* client, const String& message);
     void sendInitialState(AsyncWebSocketClient* client) const;

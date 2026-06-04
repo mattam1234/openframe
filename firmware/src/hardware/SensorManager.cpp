@@ -3,6 +3,13 @@
 #include <Wire.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_BMP280.h>
+#include <DHT.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <BH1750.h>
+#include <Adafruit_INA219.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_SHT31.h>
 #include <math.h>
 
 namespace {
@@ -87,6 +94,200 @@ private:
     SensorConfig    _config;
 };
 
+class Dht22SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        (void)error;
+        _pin = config.pin;
+        _dht.reset(new DHT(_pin, DHT22));
+        _dht->begin();
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "temperature_c", "humidity_pct" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+        const float temperatureC = _dht->readTemperature();
+        const float humidityPct = _dht->readHumidity();
+        if (isnan(temperatureC) || isnan(humidityPct)) {
+            error = "DHT22 returned invalid readings";
+            return false;
+        }
+        values.push_back({ "temperature_c", temperatureC });
+        values.push_back({ "humidity_pct", humidityPct });
+        return true;
+    }
+
+private:
+    uint8_t              _pin = 0;
+    std::unique_ptr<DHT> _dht;
+};
+
+class Ds18b20SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _pin = config.pin;
+        _oneWire.reset(new OneWire(_pin));
+        _dallas.reset(new DallasTemperature(_oneWire.get()));
+        _dallas->begin();
+        if (_dallas->getDeviceCount() == 0) {
+            error = "No DS18B20 found on pin " + String(_pin);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "temperature_c" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+        _dallas->requestTemperatures();
+        const float temperatureC = _dallas->getTempCByIndex(0);
+        if (temperatureC == DEVICE_DISCONNECTED_C) {
+            error = "DS18B20 disconnected";
+            return false;
+        }
+        values.push_back({ "temperature_c", temperatureC });
+        return true;
+    }
+
+private:
+    uint8_t                               _pin = 0;
+    std::unique_ptr<OneWire>              _oneWire;
+    std::unique_ptr<DallasTemperature>    _dallas;
+};
+
+class Sht31SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _config = config;
+        if (!_sensor.begin(config.address)) {
+            error = "SHT31 not found at 0x" + String(config.address, HEX);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "temperature_c", "humidity_pct" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+        const float temperatureC = _sensor.readTemperature() + _config.temperatureOffsetC;
+        const float humidityPct = _sensor.readHumidity();
+        if (isnan(temperatureC) || isnan(humidityPct)) {
+            error = "SHT31 returned invalid readings";
+            return false;
+        }
+        values.push_back({ "temperature_c", temperatureC });
+        values.push_back({ "humidity_pct", humidityPct });
+        return true;
+    }
+
+private:
+    Adafruit_SHT31 _sensor;
+    SensorConfig   _config;
+};
+
+class Bh1750SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!_sensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, config.address)) {
+            error = "BH1750 not found at 0x" + String(config.address, HEX);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "lux" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+        float lux = 0.0f;
+        if (!_sensor.measurementReady(true) || (lux = _sensor.readLightLevel()) < 0) {
+            error = "BH1750 read failed";
+            return false;
+        }
+        values.push_back({ "lux", lux });
+        return true;
+    }
+
+private:
+    BH1750 _sensor;
+};
+
+class Ina219SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!_sensor.begin(config.address)) {
+            error = "INA219 not found at 0x" + String(config.address, HEX);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "bus_voltage_v", "shunt_voltage_mv", "current_ma", "power_mw" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        (void)error;
+        values.clear();
+        values.push_back({ "bus_voltage_v", _sensor.getBusVoltage_V() });
+        values.push_back({ "shunt_voltage_mv", _sensor.getShuntVoltage_mV() });
+        values.push_back({ "current_ma", _sensor.getCurrent_mA() });
+        values.push_back({ "power_mw", _sensor.getPower_mW() });
+        return true;
+    }
+
+private:
+    Adafruit_INA219 _sensor;
+};
+
+class Mpu6050SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!_mpu.begin(config.address)) {
+            error = "MPU6050 not found at 0x" + String(config.address, HEX);
+            return false;
+        }
+        _mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+        _mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+        _mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        return { "accel_x", "accel_y", "accel_z", "gyro_x", "gyro_y", "gyro_z", "temperature_c" };
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        (void)error;
+        values.clear();
+        sensors_event_t a, g, temp;
+        _mpu.getEvent(&a, &g, &temp);
+        values.push_back({ "accel_x", a.acceleration.x });
+        values.push_back({ "accel_y", a.acceleration.y });
+        values.push_back({ "accel_z", a.acceleration.z });
+        values.push_back({ "gyro_x", g.gyro.x });
+        values.push_back({ "gyro_y", g.gyro.y });
+        values.push_back({ "gyro_z", g.gyro.z });
+        values.push_back({ "temperature_c", temp.temperature });
+        return true;
+    }
+
+private:
+    Adafruit_MPU6050 _mpu;
+};
+
 }  // namespace
 
 SensorManager& SensorManager::instance() {
@@ -131,6 +332,25 @@ void SensorManager::registerBuiltInSensors() {
             return std::unique_ptr<SensorDriver>(new Bmp280SensorDriver());
         });
     }
+
+    if (!_registry.count("dht22")) {
+        registerSensor("dht22", []() { return std::unique_ptr<SensorDriver>(new Dht22SensorDriver()); });
+    }
+    if (!_registry.count("ds18b20")) {
+        registerSensor("ds18b20", []() { return std::unique_ptr<SensorDriver>(new Ds18b20SensorDriver()); });
+    }
+    if (!_registry.count("sht31")) {
+        registerSensor("sht31", []() { return std::unique_ptr<SensorDriver>(new Sht31SensorDriver()); });
+    }
+    if (!_registry.count("bh1750")) {
+        registerSensor("bh1750", []() { return std::unique_ptr<SensorDriver>(new Bh1750SensorDriver()); });
+    }
+    if (!_registry.count("ina219")) {
+        registerSensor("ina219", []() { return std::unique_ptr<SensorDriver>(new Ina219SensorDriver()); });
+    }
+    if (!_registry.count("mpu6050")) {
+        registerSensor("mpu6050", []() { return std::unique_ptr<SensorDriver>(new Mpu6050SensorDriver()); });
+    }
 }
 
 bool SensorManager::loadConfig() {
@@ -174,9 +394,10 @@ bool SensorManager::loadConfig() {
         cfg.enabled            = item["enabled"] | true;
         cfg.pollIntervalMs     = item["poll_interval_ms"] | 5000;
         cfg.variablePrefix     = item["variable_prefix"] | String("");
-        cfg.address            = item["address"] | 0x76;
-        cfg.temperatureOffsetC = item["temperature_offset_c"] | 0.0f;
+        cfg.address             = item["address"] | 0x76;
+        cfg.temperatureOffsetC  = item["temperature_offset_c"] | 0.0f;
         cfg.seaLevelPressureHpa = item["sea_level_pressure_hpa"] | 1013.25f;
+        cfg.pin                 = item["pin"] | 0;
         cfg.id = ensureUniqueId(cfg.id, cfg.type);
         _configs.push_back(cfg);
     }

@@ -2,6 +2,7 @@
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <cstdlib>
@@ -82,8 +83,56 @@ public:
     }
 
 private:
-    DisplayConfig                          _config;
+    DisplayConfig                      _config;
     std::unique_ptr<Adafruit_SSD1306> _display;
+};
+
+class Sh1106DisplayProvider final : public DisplayProvider {
+public:
+    bool begin(const DisplayConfig& config, String& error) override {
+        _config = config;
+        _display.reset(new Adafruit_SH1106G(config.width, config.height, &Wire, config.resetPin));
+
+        if (!_display->begin(config.address, true)) {
+            error = "SH1106 init failed at 0x" + String(config.address, HEX);
+            error.toUpperCase();
+            _display.reset();
+            return false;
+        }
+
+        _display->clearDisplay();
+        _display->setTextWrap(false);
+        _display->setTextColor(SH110X_WHITE);
+        _display->setContrast(config.contrast);
+        _display->display();
+        return true;
+    }
+
+    void clear() override {
+        if (!_display) return;
+        _display->clearDisplay();
+        _display->setTextWrap(false);
+        _display->setTextColor(SH110X_WHITE);
+    }
+
+    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
+        if (!_display) return;
+        _display->setTextSize(textSize > 0 ? textSize : 1);
+        _display->setCursor(x, y);
+        _display->print(text);
+    }
+
+    void present() override {
+        if (_display) _display->display();
+    }
+
+    String describe() const override {
+        return "SH1106 " + String(_config.width) + "x" + String(_config.height);
+    }
+
+private:
+    DisplayConfig                       _config;
+    std::unique_ptr<Adafruit_SH1106G>  _display;
 };
 
 }  // namespace
@@ -137,10 +186,16 @@ bool DisplayManager::setActivePage(const String& displayId, const String& pageId
 }
 
 void DisplayManager::registerBuiltInDisplays() {
-    if (_registry.count("ssd1306")) return;
-    registerDisplay("ssd1306", []() {
-        return std::unique_ptr<DisplayProvider>(new Ssd1306DisplayProvider());
-    });
+    if (!_registry.count("ssd1306")) {
+        registerDisplay("ssd1306", []() {
+            return std::unique_ptr<DisplayProvider>(new Ssd1306DisplayProvider());
+        });
+    }
+    if (!_registry.count("sh1106")) {
+        registerDisplay("sh1106", []() {
+            return std::unique_ptr<DisplayProvider>(new Sh1106DisplayProvider());
+        });
+    }
 }
 
 bool DisplayManager::loadConfig() {

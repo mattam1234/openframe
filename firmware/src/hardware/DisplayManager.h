@@ -50,6 +50,8 @@ public:
     void registerDisplay(const String& type, DisplayFactory factory);
     bool setActivePage(const String& displayId, const String& pageId);
 
+    const std::vector<DisplayConfig>& displayConfigs() const { return _configs; }
+
 private:
     struct DisplayInstance {
         DisplayConfig                   config;

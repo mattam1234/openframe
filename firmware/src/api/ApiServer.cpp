@@ -5,7 +5,13 @@
 #include <WiFi.h>
 #include "../OpenFrameConfig.h"
 #include "../core/ConfigManager.h"
+#include "../hardware/InputManager.h"
+#include "../hardware/OutputManager.h"
+#include "../hardware/SensorManager.h"
 #include "../hardware/DisplayManager.h"
+#include "../hardware/ModuleManager.h"
+#include "../managers/ActionEngine.h"
+#include "../managers/MacroManager.h"
 #include "../managers/OtaManager.h"
 #include "../managers/VariableManager.h"
 #include "../managers/WiFiManager.h"
@@ -208,6 +214,66 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/ota/check", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendOtaStatus(request);
     });
+
+    server.on("/api/inputs", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendInputs(request);
+    });
+
+    server.on("/api/outputs", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendOutputs(request);
+    });
+
+    server.on("/api/sensors", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendSensors(request);
+    });
+
+    server.on("/api/displays", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendDisplays(request);
+    });
+
+    server.on("/api/modules", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendModules(request);
+    });
+
+    server.on("/api/actions", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendActions(request);
+    });
+    server.on("/api/actions", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleActionsUpdate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
+
+    server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendMacros(request);
+    });
+    server.on("/api/macros", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleMacrosUpdate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
 }
 
 void ApiServer::registerWebSocket(AsyncWebServer& server) {
@@ -522,7 +588,7 @@ String ApiServer::buildStatusJson() const {
     doc["otaEnabled"] = config.ota.enabled;
     doc["logCount"] = Logger::instance().getEntryCount();
     doc["variableCount"] = VariableManager::instance().all().size();
-    doc["moduleCount"] = 0;
+    doc["moduleCount"] = ModuleManager::instance().modules().size();
     return toJsonString(doc);
 }
 
@@ -589,4 +655,243 @@ bool ApiServer::applyVariableUpdate(const JsonVariantConst& item, String& error)
 
     error = "Unsupported variable type";
     return false;
+}
+
+void ApiServer::sendInputs(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    doc["inputs"].to<JsonArray>();
+    doc["count"] = 0;
+    sendJson(request, doc);
+}
+
+void ApiServer::sendOutputs(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    doc["outputs"].to<JsonArray>();
+    doc["count"] = 0;
+    sendJson(request, doc);
+}
+
+void ApiServer::sendSensors(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["sensors"].to<JsonArray>();
+    for (const auto& inst : SensorManager::instance().sensors()) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"] = inst.config.id;
+        obj["type"] = inst.config.type;
+        obj["enabled"] = inst.config.enabled;
+        obj["poll_interval_ms"] = inst.config.pollIntervalMs;
+        obj["variable_prefix"] = inst.config.variablePrefix;
+        obj["address"] = inst.config.address;
+        obj["pin"] = inst.config.pin;
+    }
+    doc["count"] = SensorManager::instance().sensors().size();
+    sendJson(request, doc);
+}
+
+void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["displays"].to<JsonArray>();
+    for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"] = cfg.id;
+        obj["type"] = cfg.type;
+        obj["enabled"] = cfg.enabled;
+        obj["width"] = cfg.width;
+        obj["height"] = cfg.height;
+        obj["address"] = cfg.address;
+    }
+    doc["count"] = DisplayManager::instance().displayConfigs().size();
+    sendJson(request, doc);
+}
+
+void ApiServer::sendModules(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["modules"].to<JsonArray>();
+    for (const auto& m : ModuleManager::instance().modules()) {
+        auto obj = arr.add<JsonObject>();
+        obj["address"] = m.address;
+        obj["type"] = m.typeLabel;
+        obj["online"] = m.online;
+        obj["last_seen_ms"] = m.lastSeenMs;
+    }
+    doc["count"] = ModuleManager::instance().modules().size();
+    sendJson(request, doc);
+}
+
+void ApiServer::sendActions(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["actions"].to<JsonArray>();
+    for (const auto& action : ActionEngine::instance().actions()) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"] = action.id;
+        obj["name"] = action.name;
+        obj["enabled"] = action.enabled;
+        obj["step_count"] = action.steps.size();
+        obj["condition_count"] = action.conditions.size();
+    }
+    doc["count"] = ActionEngine::instance().actions().size();
+
+    auto histArr = doc["history"].to<JsonArray>();
+    const auto& hist = ActionEngine::instance().history();
+    const size_t start = hist.size() > 100 ? hist.size() - 100 : 0;
+    for (size_t i = start; i < hist.size(); ++i) {
+        auto hObj = histArr.add<JsonObject>();
+        hObj["action_id"] = hist[i].actionId;
+        hObj["action_name"] = hist[i].actionName;
+        hObj["timestamp_ms"] = hist[i].timestampMs;
+        hObj["success"] = hist[i].success;
+        if (!hist[i].error.isEmpty()) hObj["error"] = hist[i].error;
+    }
+    sendJson(request, doc);
+}
+
+void ApiServer::sendMacros(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["macros"].to<JsonArray>();
+    for (const auto& macro : MacroManager::instance().macros()) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"] = macro.id;
+        obj["name"] = macro.name;
+        obj["enabled"] = macro.enabled;
+        auto acts = obj["action_ids"].to<JsonArray>();
+        for (const auto& id : macro.actionIds) acts.add(id);
+    }
+    doc["count"] = MacroManager::instance().macros().size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    auto parseConditionOp = [](const String& op) -> ConditionOp {
+        if (op == "ne") return ConditionOp::Ne;
+        if (op == "lt") return ConditionOp::Lt;
+        if (op == "lte") return ConditionOp::Lte;
+        if (op == "gt") return ConditionOp::Gt;
+        if (op == "gte") return ConditionOp::Gte;
+        return ConditionOp::Eq;
+    };
+
+    auto parseActionType = [](const String& typeStr) -> ActionType {
+        if (typeStr == "http_request") return ActionType::HttpRequest;
+        if (typeStr == "mqtt_publish") return ActionType::MqttPublish;
+        if (typeStr == "variable_set") return ActionType::VariableSet;
+        if (typeStr == "variable_increment") return ActionType::VariableIncrement;
+        if (typeStr == "variable_toggle") return ActionType::VariableToggle;
+        if (typeStr == "ha_service_call") return ActionType::HaServiceCall;
+        if (typeStr == "page_change") return ActionType::PageChange;
+        if (typeStr == "notification") return ActionType::Notification;
+        if (typeStr == "keyboard_shortcut") return ActionType::KeyboardShortcut;
+        if (typeStr == "media_control") return ActionType::MediaControl;
+        return ActionType::Delay;
+    };
+
+    auto parseActionObject = [&](JsonObjectConst item, ActionConfig& action) {
+        action.id = item["id"] | String("");
+        action.name = item["name"] | String("");
+        action.enabled = item["enabled"] | true;
+
+        if (item["conditions"].is<JsonArrayConst>()) {
+            for (JsonObjectConst cond : item["conditions"].as<JsonArrayConst>()) {
+                Condition c;
+                c.variableId = cond["variable_id"] | String("");
+                c.op = parseConditionOp(cond["op"] | String("eq"));
+                c.value = cond["value"] | String("");
+                if (c.variableId.length()) action.conditions.push_back(c);
+            }
+        }
+
+        if (item["steps"].is<JsonArrayConst>()) {
+            for (JsonObjectConst step : item["steps"].as<JsonArrayConst>()) {
+                ActionStep s;
+                s.type = parseActionType(step["type"] | String("delay"));
+                s.delayMs = step["delay_ms"] | 0;
+                s.url = step["url"] | String("");
+                s.method = step["method"] | String("GET");
+                s.body = step["body"] | String("");
+                s.topic = step["topic"] | String("");
+                s.variableId = step["variable_id"] | String("");
+                s.value = step["value"] | String("");
+                s.increment = step["increment"] | 1.0f;
+                s.haService = step["ha_service"] | String("");
+                s.haEntityId = step["ha_entity_id"] | String("");
+                s.displayId = step["display_id"] | String("");
+                s.pageId = step["page_id"] | String("");
+                s.message = step["message"] | String("");
+                s.keysCombo = step["keys"] | String("");
+                s.mediaCommand = step["media_command"] | String("");
+                action.steps.push_back(s);
+            }
+        }
+    };
+
+    bool updated = false;
+    if (doc["actions"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : doc["actions"].as<JsonArrayConst>()) {
+            ActionConfig action;
+            parseActionObject(item, action);
+            if (!action.id.length()) continue;
+            ActionEngine::instance().registerAction(action);
+            updated = true;
+        }
+    } else if (doc.is<JsonObjectConst>() && doc["id"].is<const char*>()) {
+        ActionConfig action;
+        parseActionObject(doc.as<JsonObjectConst>(), action);
+        if (action.id.length()) {
+            ActionEngine::instance().registerAction(action);
+            updated = true;
+        }
+    }
+
+    if (updated) {
+        ActionEngine::instance().saveActions();
+    }
+    sendActions(request);
+}
+
+void ApiServer::handleMacrosUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    auto parseMacroObject = [&](JsonObjectConst item, MacroConfig& macro) {
+        macro.id = item["id"] | String("");
+        macro.name = item["name"] | String("");
+        macro.enabled = item["enabled"] | true;
+        if (item["action_ids"].is<JsonArrayConst>()) {
+            for (JsonVariantConst v : item["action_ids"].as<JsonArrayConst>()) {
+                const String id = v | String("");
+                if (id.length()) macro.actionIds.push_back(id);
+            }
+        }
+    };
+
+    bool updated = false;
+    if (doc["macros"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : doc["macros"].as<JsonArrayConst>()) {
+            MacroConfig macro;
+            parseMacroObject(item, macro);
+            if (!macro.id.length()) continue;
+            MacroManager::instance().registerMacro(macro);
+            updated = true;
+        }
+    } else if (doc.is<JsonObjectConst>() && doc["id"].is<const char*>()) {
+        MacroConfig macro;
+        parseMacroObject(doc.as<JsonObjectConst>(), macro);
+        if (macro.id.length()) {
+            MacroManager::instance().registerMacro(macro);
+            updated = true;
+        }
+    }
+
+    if (updated) {
+        MacroManager::instance().saveMacros();
+    }
+    sendMacros(request);
 }

@@ -34,6 +34,7 @@
 #define OF_TEMPLATES_PATH "/templates"
 #define OF_DISPLAY_PAGES_PATH "/pages"
 #define OF_ACTIONS_PATH "/actions.json"
+#define OF_MACROS_PATH "/macros.json"
 #define OF_LOGS_PATH "/logs.json"
 
 // Ring buffer sizes
