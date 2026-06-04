@@ -325,7 +325,7 @@ async function doDelete() {
 }
 
 function openExportDialog() {
-  exportName.value = 'Template ' + new Date().toLocaleDateString()
+  exportName.value = 'Template ' + new Date().toISOString().split('T')[0]
   exportDialog.value = true
 }
 

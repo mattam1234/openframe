@@ -363,16 +363,21 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/templates/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
         const String url = request->url();
         const String templateId = url.substring(url.lastIndexOf('/') + 1);
-        // Delegate to a one-off lambda since no dedicated handler method is needed
-        StorageManager::instance().remove("/templates/" + templateId + ".json");
+        const bool removed = StorageManager::instance().remove("/templates/" + templateId + ".json");
         JsonDocument doc;
-        doc["ok"] = true;
-        doc["id"] = templateId;
-        request->send(200, "application/json", [doc]() mutable {
+        if (!removed) {
+            doc["ok"]    = false;
+            doc["error"] = "Template not found";
             String s;
             serializeJson(doc, s);
-            return s;
-        }());
+            request->send(404, "application/json", s);
+            return;
+        }
+        doc["ok"] = true;
+        doc["id"] = templateId;
+        String s;
+        serializeJson(doc, s);
+        request->send(200, "application/json", s);
     });
 }
 
