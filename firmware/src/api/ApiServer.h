@@ -23,9 +23,27 @@ private:
     void sendVariables(AsyncWebServerRequest* request) const;
     void sendLogs(AsyncWebServerRequest* request) const;
     void sendOtaStatus(AsyncWebServerRequest* request) const;
+    void sendInputs(AsyncWebServerRequest* request) const;
+    void sendOutputs(AsyncWebServerRequest* request) const;
+    void sendSensors(AsyncWebServerRequest* request) const;
+    void sendDisplays(AsyncWebServerRequest* request) const;
+    void sendActions(AsyncWebServerRequest* request) const;
+    void sendMacros(AsyncWebServerRequest* request) const;
+    void sendModules(AsyncWebServerRequest* request) const;
+    void sendProfiles(AsyncWebServerRequest* request) const;
+    void sendTemplates(AsyncWebServerRequest* request) const;
+    void sendTemplateById(AsyncWebServerRequest* request, const String& templateId) const;
+    void sendNotifications(AsyncWebServerRequest* request) const;
 
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleActionsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleProfileCreate(AsyncWebServerRequest* request, const String& body);
+    void handleProfileActivate(AsyncWebServerRequest* request, const String& body);
+    void handleProfileDelete(AsyncWebServerRequest* request, const String& profileId);
+    void handleTemplateExport(AsyncWebServerRequest* request, const String& body);
+    void handleTemplateImport(AsyncWebServerRequest* request, const String& body);
 
     void handleWebSocketMessage(AsyncWebSocketClient* client, const String& message);
     void sendInitialState(AsyncWebSocketClient* client) const;

@@ -63,14 +63,15 @@ const wsStore = useWebSocketStore()
 wsStore.connect()
 
 const navItems = [
-  { title: 'Dashboard',       icon: 'mdi-view-dashboard',  to: '/' },
-  { title: 'Layout Designer', icon: 'mdi-developer-board', to: '/layout' },
-  { title: 'Screen Designer', icon: 'mdi-monitor-edit',    to: '/screens' },
-  { title: 'Sensors',         icon: 'mdi-thermometer',     to: '/sensors' },
-  { title: 'Actions',         icon: 'mdi-lightning-bolt',  to: '/actions' },
-  { title: 'Modules',         icon: 'mdi-expansion-card',  to: '/modules' },
-  { title: 'Home Assistant',  icon: 'mdi-home-assistant',  to: '/ha' },
-  { title: 'Logs',            icon: 'mdi-text-box-outline', to: '/logs' },
-  { title: 'Settings',        icon: 'mdi-cog',             to: '/settings' },
+  { title: 'Dashboard',       icon: 'mdi-view-dashboard',         to: '/' },
+  { title: 'Layout Designer', icon: 'mdi-developer-board',        to: '/layout' },
+  { title: 'Screen Designer', icon: 'mdi-monitor-edit',           to: '/screens' },
+  { title: 'Sensors',         icon: 'mdi-thermometer',            to: '/sensors' },
+  { title: 'Actions',         icon: 'mdi-lightning-bolt',         to: '/actions' },
+  { title: 'Modules',         icon: 'mdi-expansion-card',         to: '/modules' },
+  { title: 'Home Assistant',  icon: 'mdi-home-assistant',         to: '/ha' },
+  { title: 'Profiles',        icon: 'mdi-account-box-multiple',   to: '/profiles' },
+  { title: 'Logs',            icon: 'mdi-text-box-outline',       to: '/logs' },
+  { title: 'Settings',        icon: 'mdi-cog',                    to: '/settings' },
 ]
 </script>

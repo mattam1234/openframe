@@ -1,12 +1,19 @@
 #include "StorageManager.h"
 
+#include "../core/PlatformCompat.h"
+
 StorageManager& StorageManager::instance() {
     static StorageManager inst;
     return inst;
 }
 
 bool StorageManager::begin() {
+#if defined(ESP8266)
+    // ESP8266 LittleFS does not accept a format-on-fail argument
+    if (!LittleFS.begin()) {
+#else
     if (!LittleFS.begin(true)) {
+#endif
         LOG_E(TAG, "Failed to mount LittleFS");
         return false;
     }

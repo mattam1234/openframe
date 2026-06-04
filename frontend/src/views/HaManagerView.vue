@@ -7,17 +7,240 @@
           Home Assistant
         </h1>
       </v-col>
+      <v-col cols="auto" class="d-flex align-center ga-2">
+        <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="tonal" @click="refresh" />
+      </v-col>
     </v-row>
-    <v-row>
+
+    <v-row v-if="statusMessage">
       <v-col>
-        <v-alert type="info" variant="tonal">
-          Home Assistant — implementation in progress.
+        <v-alert :type="statusMessage.type" variant="tonal" closable @click:close="statusMessage = null">
+          {{ statusMessage.text }}
         </v-alert>
+      </v-col>
+    </v-row>
+
+    <!-- Integration status card -->
+    <v-row>
+      <v-col cols="12" md="5">
+        <v-card>
+          <v-card-title>Integration Status</v-card-title>
+          <v-list density="compact">
+            <v-list-item>
+              <template #prepend><v-icon color="primary">mdi-transit-connection-variant</v-icon></template>
+              <v-list-item-title>MQTT Connection</v-list-item-title>
+              <template #append>
+                <v-chip :color="health.mqttConnected ? 'success' : 'error'" size="small">
+                  {{ health.mqttConnected ? 'Connected' : 'Disconnected' }}
+                </v-chip>
+              </template>
+            </v-list-item>
+            <v-list-item>
+              <template #prepend><v-icon color="info">mdi-home-assistant</v-icon></template>
+              <v-list-item-title>HA Discovery</v-list-item-title>
+              <template #append>
+                <v-chip :color="health.haEnabled ? 'success' : 'default'" size="small">
+                  {{ health.haEnabled ? 'Enabled' : 'Disabled' }}
+                </v-chip>
+              </template>
+            </v-list-item>
+            <v-list-item>
+              <template #prepend><v-icon color="secondary">mdi-identifier</v-icon></template>
+              <v-list-item-title>Discovery Prefix</v-list-item-title>
+              <template #append>
+                <span class="text-body-2">{{ config?.ha?.discovery_prefix || 'homeassistant' }}</span>
+              </template>
+            </v-list-item>
+            <v-list-item>
+              <template #prepend><v-icon color="secondary">mdi-folder-network</v-icon></template>
+              <v-list-item-title>Base Topic</v-list-item-title>
+              <template #append>
+                <span class="text-body-2">{{ config?.mqtt?.base_topic || 'openframe' }}</span>
+              </template>
+            </v-list-item>
+          </v-list>
+          <v-card-actions>
+            <v-btn variant="tonal" color="primary" prepend-icon="mdi-broadcast" @click="republishDiscovery">
+              Re-publish Discovery
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="7">
+        <v-card>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Variables as HA Entities
+            <v-chip size="small">{{ sensorEntities.length }}</v-chip>
+          </v-card-title>
+          <v-card-subtitle>Variables with a <code>sensor.</code> prefix are automatically published as HA sensors.</v-card-subtitle>
+          <v-card-text class="pa-0">
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th>Variable</th>
+                  <th>Value</th>
+                  <th>HA Topic</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="[id, info] in sensorEntities" :key="id">
+                  <td class="font-weight-medium">{{ id }}</td>
+                  <td>{{ formatValue(info) }}</td>
+                  <td class="text-caption text-medium-emphasis">
+                    {{ haStateTopic(id) }}
+                  </td>
+                </tr>
+                <tr v-if="sensorEntities.length === 0">
+                  <td colspan="3" class="text-medium-emphasis text-center py-4">
+                    No sensor variables available.
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- Entity types overview -->
+    <v-row class="mt-2">
+      <v-col>
+        <v-card>
+          <v-card-title>Supported Entity Types</v-card-title>
+          <v-card-text>
+            <v-row>
+              <v-col
+                v-for="et in entityTypes"
+                :key="et.type"
+                cols="6" sm="4" md="2"
+              >
+                <div class="d-flex flex-column align-center pa-2">
+                  <v-icon :color="et.color" size="32" class="mb-1">{{ et.icon }}</v-icon>
+                  <span class="text-caption">{{ et.label }}</span>
+                </div>
+              </v-col>
+            </v-row>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- Live event feed -->
+    <v-row class="mt-2">
+      <v-col>
+        <v-card>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Live HA Events
+            <v-btn icon="mdi-delete-sweep" size="small" variant="text" @click="clearEvents" />
+          </v-card-title>
+          <v-card-text class="pa-0">
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Source</th>
+                  <th>Payload</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(evt, idx) in haEvents.slice(0, 30)" :key="idx">
+                  <td class="text-caption">{{ evt.event }}</td>
+                  <td class="text-caption">{{ evt.sourceId }}</td>
+                  <td class="text-caption text-medium-emphasis" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                    {{ evt.payload }}
+                  </td>
+                </tr>
+                <tr v-if="haEvents.length === 0">
+                  <td colspan="3" class="text-medium-emphasis text-center py-4">
+                    Waiting for HA events…
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card-text>
+        </v-card>
       </v-col>
     </v-row>
   </div>
 </template>
 
 <script setup>
-// TODO: implement Home Assistant
+import { computed, onMounted, ref, watch } from 'vue'
+import api from '../api/client'
+import { useWebSocketStore } from '../stores/websocket'
+import { useDeviceStore } from '../stores/device'
+
+const wsStore = useWebSocketStore()
+const deviceStore = useDeviceStore()
+const loading = ref(false)
+const statusMessage = ref(null)
+const haEvents = ref([])
+
+const health = computed(() => wsStore.health)
+const config = computed(() => deviceStore.config)
+
+const entityTypes = [
+  { type: 'sensor', label: 'Sensor', icon: 'mdi-eye', color: 'info' },
+  { type: 'binary_sensor', label: 'Binary Sensor', icon: 'mdi-toggle-switch', color: 'success' },
+  { type: 'button', label: 'Button', icon: 'mdi-gesture-tap-button', color: 'primary' },
+  { type: 'switch', label: 'Switch', icon: 'mdi-light-switch', color: 'warning' },
+  { type: 'select', label: 'Select', icon: 'mdi-form-select', color: 'secondary' },
+  { type: 'number', label: 'Number', icon: 'mdi-numeric', color: 'purple' },
+  { type: 'text', label: 'Text', icon: 'mdi-form-textbox', color: 'orange' },
+]
+
+const sensorEntities = computed(() =>
+  Object.entries(wsStore.variables)
+    .filter(([id]) => id.startsWith('sensor.'))
+    .sort(([a], [b]) => a.localeCompare(b))
+)
+
+function formatValue(info) {
+  if (!info) return '—'
+  return info.value !== undefined ? String(info.value) : '—'
+}
+
+function haStateTopic(variableId) {
+  const baseTopic = config.value?.mqtt?.base_topic || 'openframe'
+  const deviceName = config.value?.device?.name || 'openframe'
+  return `${baseTopic}/${deviceName}/${variableId}/state`
+}
+
+function republishDiscovery() {
+  wsStore.send('action_trigger', { id: 'ha_republish_discovery' })
+  statusMessage.value = { type: 'info', text: 'Discovery republish triggered via WebSocket.' }
+}
+
+function clearEvents() {
+  haEvents.value = []
+}
+
+// Track HA-related events from the WebSocket
+watch(() => wsStore.events, (events) => {
+  const haRelated = events.filter(e =>
+    e.event && (
+      e.event.includes('ha_') ||
+      e.event.includes('mqtt_message') ||
+      e.event === 'action_triggered'
+    )
+  )
+  haEvents.value = haRelated
+}, { deep: true })
+
+async function refresh() {
+  loading.value = true
+  statusMessage.value = null
+  try {
+    await deviceStore.fetchConfig()
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Failed to load config' }
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  refresh()
+})
 </script>

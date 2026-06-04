@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include <WiFi.h>
+#include "../core/PlatformCompat.h"
 #include <DNSServer.h>
 #include "../core/Logger.h"
 #include "../core/EventBus.h"

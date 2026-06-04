@@ -10,7 +10,7 @@ WiFiManager& WiFiManager::instance() {
 void WiFiManager::begin() {
     const auto& cfg = ConfigManager::instance().config().wifi;
 
-    WiFi.setHostname(ConfigManager::instance().config().device.name.c_str());
+    of_wifi_set_hostname(ConfigManager::instance().config().device.name.c_str());
     WiFi.mode(WIFI_STA);
 
     if (cfg.apMode || cfg.ssid.isEmpty()) {

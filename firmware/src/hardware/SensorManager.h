@@ -20,6 +20,7 @@ struct SensorConfig {
     uint8_t  address              = 0x76;
     float    temperatureOffsetC   = 0.0f;
     float    seaLevelPressureHpa  = 1013.25f;
+    uint8_t  pin                  = 0;        // for pin-based sensors (DHT22, DS18B20)
 };
 
 struct SensorMetricValue {
@@ -47,13 +48,18 @@ public:
 
     void registerSensor(const String& type, SensorFactory factory);
 
-private:
     struct SensorInstance {
-        SensorConfig                 config;
+        SensorConfig                  config;
         std::unique_ptr<SensorDriver> driver;
-        uint32_t                     lastPollMs = 0;
+        uint32_t                      lastPollMs   = 0;
+        uint32_t                      errorCount   = 0;
+        String                        lastError;
+        bool                          healthy      = true;
     };
 
+    const std::vector<SensorInstance>& sensors() const { return _sensors; }
+
+private:
     SensorManager() = default;
 
     void registerBuiltInSensors();

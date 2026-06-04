@@ -14,6 +14,13 @@
 #include "hardware/OutputManager.h"
 #include "hardware/SensorManager.h"
 #include "hardware/DisplayManager.h"
+#include "hardware/TouchManager.h"
+#include "hardware/ModuleManager.h"
+#include "managers/ActionEngine.h"
+#include "managers/MacroManager.h"
+#include "managers/ProfileManager.h"
+#include "managers/HealthMonitor.h"
+#include "managers/NotificationManager.h"
 #include "api/ApiServer.h"
 
 static constexpr const char* TAG = "Main";
@@ -47,18 +54,24 @@ void setup() {
     OutputManager::instance().begin();
     SensorManager::instance().begin();
     DisplayManager::instance().begin();
+    TouchManager::instance().begin();
+    ModuleManager::instance().begin();
+    ActionEngine::instance().begin();
+    MacroManager::instance().begin();
+    ProfileManager::instance().begin();
+    HealthMonitor::instance().begin();
+    NotificationManager::instance().begin();
     ApiServer::instance().begin(webServer);
 
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
 
     LOG_I(TAG, "Connectivity subsystems initialised");
-
-    // TODO Phase 4: ActionEngine, MacroManager
-    // TODO Phase 5: ApiServer (REST + WebSocket)
 }
 
 void loop() {
+    HealthMonitor::instance().markLoopStart();
+
     WiFiManager::instance().loop();
     MqttManager::instance().loop();
     OtaManager::instance().loop();
@@ -66,6 +79,12 @@ void loop() {
     OutputManager::instance().loop();
     SensorManager::instance().loop();
     DisplayManager::instance().loop();
+    TouchManager::instance().loop();
+    ModuleManager::instance().loop();
+    ActionEngine::instance().loop();
+    MacroManager::instance().loop();
     ApiServer::instance().loop();
+
+    HealthMonitor::instance().markLoopEnd();
     delay(10);
 }

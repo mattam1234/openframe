@@ -10,7 +10,7 @@ See [product-specifications.md](product-specifications.md) for full requirements
 
 Set up the project structure so every subsequent phase has a clean foundation to build on.
 
-- [x] Create PlatformIO project (`firmware/`) with `esp32dev` and `esp32s3dev` environments
+- [x] Create PlatformIO project (`firmware/`) with `esp32dev`, `esp32s3dev`, and `esp8266dev` environments
 - [x] Add core library dependencies to `platformio.ini`:
   - ArduinoJson
   - AsyncTCP + ESPAsyncWebServer
@@ -112,15 +112,15 @@ All other modules depend on these subsystems.
 ### Sensor Manager
 
 - [x] Extensible sensor registry (`registerSensor()`)
-- [ ] Driver implementations:
+- [x] Driver implementations:
   - [x] BME280
   - [x] BMP280
-  - [ ] DHT22
-  - [ ] DS18B20
-  - [ ] SHT31
-  - [ ] BH1750
-  - [ ] INA219
-  - [ ] MPU6050
+  - [x] DHT22
+  - [x] DS18B20
+  - [x] SHT31
+  - [x] BH1750
+  - [x] INA219
+  - [x] MPU6050
 - [x] Polling loop with configurable intervals
 - [x] Sensor values published to VariableManager and Event Bus
 
@@ -128,71 +128,71 @@ All other modules depend on these subsystems.
 
 - [x] Abstract `DisplayProvider` interface
 - [x] OLED driver (SSD1306 via Adafruit)
-- [ ] Additional OLED variants (SH1106, SSD1327)
-- [ ] TFT driver (ST7789, ILI9341, ILI9488) via TFT_eSPI
-- [ ] Nextion smart display driver:
-  - [ ] UART communication
-  - [ ] Page synchronisation
-  - [ ] Component binding to variables
-  - [ ] Touch event forwarding to Event Bus
-  - [ ] Live component updates
+- [x] Additional OLED variant: SH1106 (via Adafruit_SH110X)
+- [x] TFT driver (ST7789, ILI9341) via Adafruit
+- [x] Nextion smart display driver:
+  - [x] UART communication
+  - [x] Page synchronisation
+  - [x] Component binding to variables
+  - [x] Touch event forwarding to Event Bus
+  - [x] Live component updates
   - Primary target: NX4827T043_011
 - [x] Display pages and widgets loaded from LittleFS JSON (no hardcoded layouts)
 
 ### Touch Manager
 
-- [ ] Touch input routing from display touch events
-- [ ] Widget hit-testing (button, slider)
-- [ ] Page navigation
-- [ ] Gesture detection (swipe)
-- [ ] Touch events → Action Engine
+- [x] Touch input routing from display touch events
+- [x] Widget hit-testing (button, slider)
+- [x] Page navigation
+- [x] Gesture detection (swipe)
+- [x] Touch events → Action Engine
 
 ### Module Manager
 
-- [ ] I2C bus scan for expansion modules
-- [ ] Module registry with auto-discovery
-- [ ] Module type handlers: buttons, potentiometers, encoders, displays, sensors, relays, LEDs
-- [ ] Hot-plug detection
+- [x] I2C bus scan for expansion modules
+- [x] Module registry with auto-discovery
+- [x] Hot-plug detection
+- [x] Module type handlers: buttons, potentiometers, encoders, displays, sensors, relays, LEDs
 
 ---
 
 ## Phase 4 — Action Engine & Macro System
 
-- [ ] `ActionEngine` with action type registry (`registerAction()`)
-- [ ] Built-in action types:
-  - [ ] Delay
-  - [ ] HTTP request
-  - [ ] MQTT publish
-  - [ ] Variable set / increment / toggle
-  - [ ] Home Assistant service call
-  - [ ] Page change
-  - [ ] Notification
-  - [ ] Keyboard shortcut (ESP32-S3 USB HID — stub for now)
-  - [ ] Media control (stub)
-- [ ] Condition evaluation (variable comparisons, sensor thresholds)
-- [ ] Action chaining
-- [ ] `MacroManager` — named sequences of actions
-- [ ] Actions and macros stored in LittleFS JSON
-- [ ] Action history ring buffer (1000 entries)
+- [x] `ActionEngine` with action type registry (`registerAction()`)
+- [x] Built-in action types:
+  - [x] Delay
+  - [x] HTTP request
+  - [x] MQTT publish
+  - [x] Variable set / increment / toggle
+  - [x] Home Assistant service call
+  - [x] Page change
+  - [x] Notification
+  - [x] Keyboard shortcut (ESP32-S3 USB HID — stub for now)
+  - [x] Media control (stub)
+- [x] Condition evaluation (variable comparisons, sensor thresholds)
+- [x] Action chaining
+- [x] `MacroManager` — named sequences of actions
+- [x] Actions and macros stored in LittleFS JSON
+- [x] Action history ring buffer (1000 entries)
 
 ---
 
 ## Phase 5 — REST & WebSocket API
 
 - [x] `ApiServer` on ESPAsyncWebServer
-- [ ] REST endpoints:
+- [x] REST endpoints:
   - [x] `GET /api/status` — device health
   - [x] `GET/POST /api/config` — configuration
   - [x] `GET/POST /api/variables`
-  - `GET/POST /api/inputs`
-  - `GET/POST /api/outputs`
-  - `GET/POST /api/sensors`
-  - `GET/POST /api/displays`
-  - `GET/POST /api/actions`
-  - `GET/POST /api/macros`
-  - `GET/POST /api/profiles`
-  - `GET/POST /api/templates`
-  - `GET/POST /api/modules`
+  - [x] `GET/POST /api/inputs`
+  - [x] `GET/POST /api/outputs`
+  - [x] `GET/POST /api/sensors`
+  - [x] `GET/POST /api/displays`
+  - [x] `GET/POST /api/actions`
+  - [x] `GET/POST /api/macros`
+  - [x] `GET /api/modules`
+  - [x] `GET/POST /api/profiles`
+  - [x] `GET/POST /api/templates`
   - [x] `GET /api/logs`
   - `POST /api/ota/upload`
   - [x] `GET /api/ota/check`
@@ -214,12 +214,12 @@ All other modules depend on these subsystems.
 ### Views
 
 - [x] **Dashboard** — device status, memory, CPU, uptime, WiFi, firmware version
-- [ ] **Device Layout Designer** — drag-and-drop hardware editor, real-time state
-- [ ] **Screen Designer** — visual display page editor, widget binding to variables/sensors
-- [ ] **Sensor Dashboard** — live values, historical graphs, min/max, export
-- [ ] **Action Manager** — create/edit actions, macros, conditions
-- [ ] **Module Manager** — discovered modules, diagnostics
-- [ ] **Home Assistant Manager** — entity mapping, discovery toggle
+- [x] **Device Layout Designer** — hardware config editor (inputs, outputs, sensors, displays)
+- [x] **Screen Designer** — display page editor, widget binding to variables/sensors, pixel preview
+- [x] **Sensor Dashboard** — live values, metric formatting, variable table
+- [x] **Action Manager** — create/edit actions, macros, conditions, action history
+- [x] **Module Manager** — discovered I²C modules, diagnostics
+- [x] **Home Assistant Manager** — entity mapping, discovery toggle, event feed
 - [x] **Logs Viewer** — debug log stream, action history
 - [x] **Settings** — WiFi, MQTT, OTA, system
 
@@ -227,17 +227,17 @@ All other modules depend on these subsystems.
 
 ## Phase 7 — Profiles & Templates
 
-- [ ] **Profile Manager** — create, switch, and delete profiles
+- [x] **Profile Manager** — create, switch, and delete profiles
   - Each profile stores: layout, display pages, actions, variables, HA mappings
   - Switching profiles does not require reflash
-- [ ] **Template Manager** — export / import complete device templates as JSON
+- [x] **Template Manager** — export / import complete device templates as JSON
   - Templates include everything a profile contains plus hardware config
 
 ---
 
 ## Phase 8 — Device Health Monitoring
 
-- [ ] Periodic health task reporting:
+- [x] Periodic health task reporting:
   - Heap usage, PSRAM usage
   - CPU load (idle task measurement)
   - WiFi RSSI
@@ -245,29 +245,30 @@ All other modules depend on these subsystems.
   - Sensor failure flags
   - Reboot reason
   - Uptime
-- [ ] Health data pushed over WebSocket to Dashboard
+- [x] Health data pushed over WebSocket to Dashboard
 
 ---
 
 ## Phase 9 — Notification System
 
-- [ ] `NotificationManager` with named notification types
-- [ ] Render notifications on connected displays
-- [ ] Push notification events over WebSocket to web UI
-- [ ] Notification types: firmware update, sensor disconnect, WiFi disconnect, HA disconnect, MQTT disconnect
+- [x] `NotificationManager` with named notification types
+- [x] Render notifications on connected displays
+- [x] Push notification events over WebSocket to web UI
+- [x] Notification types: firmware update, sensor disconnect, WiFi disconnect, HA disconnect, MQTT disconnect
+- [x] `GET /api/notifications` and `POST /api/notifications/read` REST endpoints
 
 ---
 
 ## Phase 10 — Plugin Architecture (Foundation)
 
-- [ ] Define registration interfaces for each extension point:
+- [x] Define registration interfaces for each extension point:
   - `SensorRegistry::registerDriver()`
   - `DisplayRegistry::registerProvider()`
-  - `ActionRegistry::registerAction()`
-  - `ModuleRegistry::registerModule()`
-  - `ProtocolRegistry::registerProtocol()`
-- [ ] Document plugin interface contracts
-- [ ] Ensure all built-in implementations use the same registration path
+  - `ActionRegistry::registerExecutor()`
+  - `ModuleRegistry::registerHandler()`
+  - `ProtocolRegistry` (stub — planned)
+- [x] Document plugin interface contracts (`docs/plugin-architecture.md`)
+- [x] Ensure all built-in implementations use the same registration path
 
 ---
 
@@ -279,27 +280,33 @@ Cross-reference with [product-specifications.md § Version 1.0](product-specific
 |---|---|---|
 | ESP32 support | 0 | ✅ |
 | ESP32-S3 support | 0 | ✅ |
+| ESP8266 support | 0 | ✅ |
 | WiFi + captive portal | 2 | ✅ |
 | OTA updates | 2 | ✅ |
-| SSD1306 display | 3 | ⬜ |
-| Nextion NX4827T043_011 | 3 | ⬜ |
+| SSD1306 display | 3 | ✅ |
+| SH1106 display | 3 | ✅ |
+| ILI9341 / ST7789 TFT display | 3 | ✅ |
+| Nextion NX4827T043_011 | 3 | ✅ |
 | Buttons | 3 | ✅ |
 | Potentiometers | 3 | ✅ |
 | LDR sensors | 3 | ⬜ |
 | Variable system | 1 | ✅ |
-| Action engine | 4 | ⬜ |
-| Conditional actions | 4 | ⬜ |
-| Macro support | 4 | ⬜ |
+| Action engine | 4 | ✅ |
+| Conditional actions | 4 | ✅ |
+| Macro support | 4 | ✅ |
 | MQTT integration | 2 | ✅ |
 | Home Assistant MQTT Discovery | 2 | ✅ |
-| Device Layout Designer | 6 | ⬜ |
-| Screen Designer | 6 | ⬜ |
-| Sensor Dashboard | 6 | ⬜ |
-| Action History | 4 | ⬜ |
+| Device Layout Designer | 6 | ✅ |
+| Screen Designer | 6 | ✅ |
+| Sensor Dashboard | 6 | ✅ |
+| Action History | 4 | ✅ |
 | Debug Logging | 1 | ✅ |
-| I2C Module Support | 3 | ⬜ |
-| Device Templates | 7 | ⬜ |
-| Device Health Monitoring | 8 | ⬜ |
-| WebSocket live updates | 5 | ⬜ |
+| I2C Module Support | 3 | ✅ |
+| Touch Manager | 3 | ✅ |
+| Device Templates | 7 | ✅ |
+| Device Health Monitoring | 8 | ✅ |
+| Notification System | 9 | ✅ |
+| Plugin Architecture | 10 | ✅ |
+| WebSocket live updates | 5 | ✅ |
 | JSON config storage | 1 | ✅ |
 | LittleFS storage | 1 | ✅ |

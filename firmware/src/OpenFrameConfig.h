@@ -7,6 +7,9 @@
 #elif defined(ESP32_BOARD)
     #define OF_BOARD_TYPE "ESP32"
     #define OF_USB_HID_SUPPORTED 0
+#elif defined(ESP8266_BOARD)
+    #define OF_BOARD_TYPE "ESP8266"
+    #define OF_USB_HID_SUPPORTED 0
 #else
     #define OF_BOARD_TYPE "Unknown"
     #define OF_USB_HID_SUPPORTED 0
@@ -34,7 +37,9 @@
 #define OF_TEMPLATES_PATH "/templates"
 #define OF_DISPLAY_PAGES_PATH "/pages"
 #define OF_ACTIONS_PATH "/actions.json"
+#define OF_MACROS_PATH "/macros.json"
 #define OF_LOGS_PATH "/logs.json"
+#define OF_NOTIFICATIONS_PATH "/notifications.json"
 
 // Ring buffer sizes
 #define OF_LOG_BUFFER_SIZE 1000
