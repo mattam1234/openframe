@@ -9,7 +9,7 @@
     "lint": "eslint . --ext .vue,.js,.ts --fix"
   },
   "dependencies": {
-    "@mdi/font": "^7.4.47",
+    "@mdi/js": "^7.4.47",
     "pinia": "^2.1.7",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0",

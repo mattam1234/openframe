@@ -2,16 +2,23 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <vector>
 #include "StorageManager.h"
 #include "Logger.h"
 #include "../OpenFrameConfig.h"
 
 // ── Default configuration schema ─────────────────────────────────────────────
 
+struct WifiNetworkConfig {
+    String ssid;
+    String password;
+};
+
 struct WifiConfig {
     String ssid;
     String password;
     bool   apMode = false;
+    std::vector<WifiNetworkConfig> networks;
 };
 
 struct MqttConfig {

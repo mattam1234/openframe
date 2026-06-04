@@ -60,7 +60,8 @@ public:
         _display->clearDisplay();
         _display->setTextWrap(false);
         _display->setTextColor(SSD1306_WHITE);
-        _display->setContrast(config.contrast);
+        _display->ssd1306_command(SSD1306_SETCONTRAST);
+        _display->ssd1306_command(config.contrast);
         _display->display();
         return true;
     }
@@ -762,7 +763,7 @@ String DisplayManager::resolveWidgetText(const DisplayWidget& widget) const {
                 value = String(var->valueInt);
                 break;
             case VarType::Float:
-                value = String(var->valueFloat, widget.decimals);
+                value = String(var->valueFloat, (unsigned int)widget.decimals);
                 break;
             case VarType::Boolean:
                 value = var->valueBool ? "true" : "false";

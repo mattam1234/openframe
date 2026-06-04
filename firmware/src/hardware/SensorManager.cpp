@@ -43,10 +43,10 @@ public:
             return false;
         }
 
-        values.push_back({ "temperature_c", temperatureC });
-        values.push_back({ "humidity_pct", humidityPct });
-        values.push_back({ "pressure_hpa", pressureHpa });
-        values.push_back({ "altitude_m", altitudeM });
+        values.push_back(SensorMetricValue{ "temperature_c", temperatureC });
+        values.push_back(SensorMetricValue{ "humidity_pct", humidityPct });
+        values.push_back(SensorMetricValue{ "pressure_hpa", pressureHpa });
+        values.push_back(SensorMetricValue{ "altitude_m", altitudeM });
         return true;
     }
 
@@ -83,9 +83,9 @@ public:
             return false;
         }
 
-        values.push_back({ "temperature_c", temperatureC });
-        values.push_back({ "pressure_hpa", pressureHpa });
-        values.push_back({ "altitude_m", altitudeM });
+        values.push_back(SensorMetricValue{ "temperature_c", temperatureC });
+        values.push_back(SensorMetricValue{ "pressure_hpa", pressureHpa });
+        values.push_back(SensorMetricValue{ "altitude_m", altitudeM });
         return true;
     }
 
@@ -118,8 +118,8 @@ public:
             error = "DHT22 returned invalid readings";
             return false;
         }
-        values.push_back({ "temperature_c", temperatureC });
-        values.push_back({ "humidity_pct", humidityPct });
+        values.push_back(SensorMetricValue{ "temperature_c", temperatureC });
+        values.push_back(SensorMetricValue{ "humidity_pct", humidityPct });
         return true;
     }
 
@@ -154,7 +154,7 @@ public:
             error = "DS18B20 disconnected";
             return false;
         }
-        values.push_back({ "temperature_c", temperatureC });
+        values.push_back(SensorMetricValue{ "temperature_c", temperatureC });
         return true;
     }
 
@@ -187,8 +187,8 @@ public:
             error = "SHT31 returned invalid readings";
             return false;
         }
-        values.push_back({ "temperature_c", temperatureC });
-        values.push_back({ "humidity_pct", humidityPct });
+        values.push_back(SensorMetricValue{ "temperature_c", temperatureC });
+        values.push_back(SensorMetricValue{ "humidity_pct", humidityPct });
         return true;
     }
 
@@ -218,7 +218,7 @@ public:
             error = "BH1750 read failed";
             return false;
         }
-        values.push_back({ "lux", lux });
+        values.push_back(SensorMetricValue{ "lux", lux });
         return true;
     }
 
@@ -229,7 +229,8 @@ private:
 class Ina219SensorDriver final : public SensorDriver {
 public:
     bool begin(const SensorConfig& config, String& error) override {
-        if (!_sensor.begin(config.address)) {
+        _sensor.reset(new Adafruit_INA219(config.address));
+        if (!_sensor->begin()) {
             error = "INA219 not found at 0x" + String(config.address, HEX);
             return false;
         }
@@ -243,15 +244,15 @@ public:
     bool read(std::vector<SensorMetricValue>& values, String& error) override {
         (void)error;
         values.clear();
-        values.push_back({ "bus_voltage_v", _sensor.getBusVoltage_V() });
-        values.push_back({ "shunt_voltage_mv", _sensor.getShuntVoltage_mV() });
-        values.push_back({ "current_ma", _sensor.getCurrent_mA() });
-        values.push_back({ "power_mw", _sensor.getPower_mW() });
+        values.push_back(SensorMetricValue{ "bus_voltage_v", _sensor->getBusVoltage_V() });
+        values.push_back(SensorMetricValue{ "shunt_voltage_mv", _sensor->getShuntVoltage_mV() });
+        values.push_back(SensorMetricValue{ "current_ma", _sensor->getCurrent_mA() });
+        values.push_back(SensorMetricValue{ "power_mw", _sensor->getPower_mW() });
         return true;
     }
 
 private:
-    Adafruit_INA219 _sensor;
+    std::unique_ptr<Adafruit_INA219> _sensor;
 };
 
 class Mpu6050SensorDriver final : public SensorDriver {
@@ -276,13 +277,13 @@ public:
         values.clear();
         sensors_event_t a, g, temp;
         _mpu.getEvent(&a, &g, &temp);
-        values.push_back({ "accel_x", a.acceleration.x });
-        values.push_back({ "accel_y", a.acceleration.y });
-        values.push_back({ "accel_z", a.acceleration.z });
-        values.push_back({ "gyro_x", g.gyro.x });
-        values.push_back({ "gyro_y", g.gyro.y });
-        values.push_back({ "gyro_z", g.gyro.z });
-        values.push_back({ "temperature_c", temp.temperature });
+        values.push_back(SensorMetricValue{ "accel_x", a.acceleration.x });
+        values.push_back(SensorMetricValue{ "accel_y", a.acceleration.y });
+        values.push_back(SensorMetricValue{ "accel_z", a.acceleration.z });
+        values.push_back(SensorMetricValue{ "gyro_x", g.gyro.x });
+        values.push_back(SensorMetricValue{ "gyro_y", g.gyro.y });
+        values.push_back(SensorMetricValue{ "gyro_z", g.gyro.z });
+        values.push_back(SensorMetricValue{ "temperature_c", temp.temperature });
         return true;
     }
 

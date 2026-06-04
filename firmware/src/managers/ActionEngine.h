@@ -69,6 +69,10 @@ struct ActionHistoryEntry {
     uint32_t timestampMs = 0;
     bool     success     = true;
     String   error;
+
+    ActionHistoryEntry() = default;
+    ActionHistoryEntry(const String& id, const String& name, uint32_t timestamp, bool ok, const String& err)
+        : actionId(id), actionName(name), timestampMs(timestamp), success(ok), error(err) {}
 };
 
 class ActionRunner {

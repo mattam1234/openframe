@@ -138,7 +138,23 @@ void ApiServer::begin(AsyncWebServer& server) {
 
     registerRoutes(server);
     registerWebSocket(server);
-    server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html");
+
+    const bool hasIndexHtml = StorageManager::instance().exists("/www/index.html");
+    const bool hasIndexHtmlGz = StorageManager::instance().exists("/www/index.html.gz");
+
+    if (hasIndexHtml || hasIndexHtmlGz) {
+        auto& staticHandler = server.serveStatic("/", LittleFS, "/www/");
+        staticHandler.setDefaultFile(hasIndexHtml ? "index.html" : "index.html.gz");
+    } else {
+        server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+            request->send(200, "text/html",
+                "<!doctype html><html><head><meta charset='utf-8'><title>OpenFrame</title></head>"
+                "<body><h1>OpenFrame</h1><p>No web assets were found in /www.</p>"
+                "<p>Upload your filesystem image to flash the UI.</p>"
+                "<p>OTA page: <a href='/update'>/update</a></p></body></html>");
+        });
+        LOG_I(TAG, "No web assets found under /www; static file serving disabled");
+    }
 
     if (!_subscribed) {
         _subscribed = true;
@@ -172,6 +188,9 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
 
     server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendConfig(request);
+    });
+    server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendWifiScan(request);
     });
     server.on("/api/config", HTTP_POST,
         [](AsyncWebServerRequest*) {},
@@ -221,17 +240,84 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/inputs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendInputs(request);
     });
+    server.on("/api/inputs", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleInputsUpdate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
 
     server.on("/api/outputs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendOutputs(request);
     });
+    server.on("/api/outputs", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleOutputsUpdate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
 
     server.on("/api/sensors", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendSensors(request);
     });
+    server.on("/api/sensors", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleSensorsUpdate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
 
     server.on("/api/displays", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendDisplays(request);
+    });
+    server.on("/api/displays", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                ApiServer::instance().handleDisplaysUpdate(request, *body);
+                delete body;
+                request->_tempObject = nullptr;
+            }
+        });
+    server.on("/api/displays/pages", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendDisplayPages(request);
     });
 
     server.on("/api/modules", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -446,6 +532,12 @@ void ApiServer::sendStatus(AsyncWebServerRequest* request) const {
 void ApiServer::sendConfig(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     ConfigManager::instance().toJson(doc);
+    sendJson(request, doc);
+}
+
+void ApiServer::sendWifiScan(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    WiFiManager::instance().scanNearbyNetworks(doc);
     sendJson(request, doc);
 }
 
@@ -693,12 +785,12 @@ void ApiServer::sendRawFrame(AsyncWebSocketClient* client, const char* type, con
     client->text("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
 }
 
-void ApiServer::broadcastFrame(const char* type, const JsonDocument& payload) const {
+void ApiServer::broadcastFrame(const char* type, const JsonDocument& payload) {
     const String payloadJson = toJsonString(payload);
     _ws.textAll("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
 }
 
-void ApiServer::broadcastRawFrame(const char* type, const String& rawPayloadJson) const {
+void ApiServer::broadcastRawFrame(const char* type, const String& rawPayloadJson) {
     const String payloadJson = rawPayloadJson.length() ? rawPayloadJson : String("null");
     _ws.textAll("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
 }
@@ -862,6 +954,287 @@ void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
     }
     doc["count"] = DisplayManager::instance().displayConfigs().size();
     sendJson(request, doc);
+}
+
+void ApiServer::sendDisplayPages(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["pages"].to<JsonArray>();
+
+    const auto files = StorageManager::instance().listDir(OF_DISPLAY_PAGES_PATH);
+    for (const auto& entry : files) {
+        String path = entry;
+        if (!path.startsWith("/")) {
+            path = String(OF_DISPLAY_PAGES_PATH) + "/" + path;
+        }
+
+        JsonDocument pageDoc;
+        if (!StorageManager::instance().readJson(path, pageDoc)) continue;
+
+        auto page = arr.add<JsonObject>();
+        String id = pageDoc["id"] | String("");
+        if (!id.length()) {
+            int slash = path.lastIndexOf('/');
+            String name = slash >= 0 ? path.substring(slash + 1) : path;
+            if (name.endsWith(".json")) name.remove(name.length() - 5);
+            id = name;
+        }
+        page["id"] = id;
+        page["title"] = pageDoc["title"] | id;
+        page["displayId"] = pageDoc["display_id"] | String("");
+
+        auto widgets = page["widgets"].to<JsonArray>();
+        if (pageDoc["widgets"].is<JsonArrayConst>()) {
+            for (JsonObjectConst item : pageDoc["widgets"].as<JsonArrayConst>()) {
+                auto out = widgets.add<JsonObject>();
+                out["id"] = item["id"] | String("");
+                out["type"] = item["type"] | String("text");
+                out["x"] = item["x"] | 0;
+                out["y"] = item["y"] | 0;
+                out["textSize"] = item["text_size"] | 1;
+                out["text"] = item["text"] | String("");
+                out["variableId"] = item["variable"] | String("");
+                out["prefix"] = item["prefix"] | String("");
+                out["suffix"] = item["suffix"] | String("");
+                out["decimals"] = item["decimals"] | 1;
+                out["maxChars"] = item["max_chars"] | 0;
+            }
+        }
+    }
+
+    doc["count"] = arr.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument source;
+    if (deserializeJson(source, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    JsonDocument toSave;
+    auto digital = toSave["digital"].to<JsonArray>();
+    auto analog = toSave["analog"].to<JsonArray>();
+
+    if (source["digital"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : source["digital"].as<JsonArrayConst>()) {
+            auto out = digital.add<JsonObject>();
+            out["id"] = item["id"] | String("");
+            out["pin"] = item["pin"] | 0;
+            out["pullup"] = item["pullup"] | true;
+            out["inverted"] = item["inverted"] | false;
+            if (item["pulldown"].is<bool>()) out["pulldown"] = item["pulldown"].as<bool>();
+            if (item["debounce_ms"].is<int>()) out["debounce_ms"] = item["debounce_ms"].as<int>();
+            if (item["hold_ms"].is<int>()) out["hold_ms"] = item["hold_ms"].as<int>();
+            if (item["long_press_ms"].is<int>()) out["long_press_ms"] = item["long_press_ms"].as<int>();
+            if (item["multi_press_window_ms"].is<int>()) out["multi_press_window_ms"] = item["multi_press_window_ms"].as<int>();
+            if (item["repeat_start_ms"].is<int>()) out["repeat_start_ms"] = item["repeat_start_ms"].as<int>();
+            if (item["repeat_interval_ms"].is<int>()) out["repeat_interval_ms"] = item["repeat_interval_ms"].as<int>();
+        }
+    }
+
+    if (source["analog"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : source["analog"].as<JsonArrayConst>()) {
+            auto out = analog.add<JsonObject>();
+            out["id"] = item["id"] | String("");
+            out["pin"] = item["pin"] | 0;
+            out["inverted"] = item["inverted"] | false;
+            if (item["min_delta"].is<int>()) out["min_delta"] = item["min_delta"].as<int>();
+            if (item["threshold_enabled"].is<bool>()) out["threshold_enabled"] = item["threshold_enabled"].as<bool>();
+            if (item["threshold"].is<int>()) out["threshold"] = item["threshold"].as<int>();
+            if (item["threshold_hysteresis"].is<int>()) out["threshold_hysteresis"] = item["threshold_hysteresis"].as<int>();
+            if (item["range_enabled"].is<bool>()) out["range_enabled"] = item["range_enabled"].as<bool>();
+            if (item["range_min"].is<int>()) out["range_min"] = item["range_min"].as<int>();
+            if (item["range_max"].is<int>()) out["range_max"] = item["range_max"].as<int>();
+            if (item["poll_interval_ms"].is<int>()) out["poll_interval_ms"] = item["poll_interval_ms"].as<int>();
+        }
+    }
+
+    if (!StorageManager::instance().writeJson(OF_INPUTS_PATH, toSave)) {
+        sendError(request, 500, "Failed to save inputs");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"] = true;
+    response["message"] = "Inputs saved. Reboot to apply.";
+    sendJson(request, response);
+}
+
+void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument source;
+    if (deserializeJson(source, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    JsonDocument toSave;
+    auto outputs = toSave["outputs"].to<JsonArray>();
+
+    if (source["outputs"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : source["outputs"].as<JsonArrayConst>()) {
+            auto out = outputs.add<JsonObject>();
+            out["id"] = item["id"] | String("");
+            out["type"] = item["type"] | String("led");
+            out["pin"] = item["pin"] | 0;
+            out["inverted"] = item["inverted"] | false;
+            out["pwm"] = item["pwm"] | false;
+
+            if (item["pwm_channel"].is<int>()) out["pwm_channel"] = item["pwm_channel"].as<int>();
+            if (item["pwm_frequency"].is<int>()) out["pwm_frequency"] = item["pwm_frequency"].as<int>();
+            if (item["pwm_resolution"].is<int>()) out["pwm_resolution"] = item["pwm_resolution"].as<int>();
+
+            if (item["pin_r"].is<int>()) out["pin_r"] = item["pin_r"].as<int>();
+            if (item["pin_g"].is<int>()) out["pin_g"] = item["pin_g"].as<int>();
+            if (item["pin_b"].is<int>()) out["pin_b"] = item["pin_b"].as<int>();
+            if (item["channel_r"].is<int>()) out["channel_r"] = item["channel_r"].as<int>();
+            if (item["channel_g"].is<int>()) out["channel_g"] = item["channel_g"].as<int>();
+            if (item["channel_b"].is<int>()) out["channel_b"] = item["channel_b"].as<int>();
+
+            if (item["led_count"].is<int>()) out["led_count"] = item["led_count"].as<int>();
+            if (item["brightness"].is<int>()) out["brightness"] = item["brightness"].as<int>();
+        }
+    }
+
+    if (!StorageManager::instance().writeJson(OF_OUTPUTS_PATH, toSave)) {
+        sendError(request, 500, "Failed to save outputs");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"] = true;
+    response["message"] = "Outputs saved. Reboot to apply.";
+    sendJson(request, response);
+}
+
+void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument source;
+    if (deserializeJson(source, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    JsonDocument toSave;
+    auto sensors = toSave["sensors"].to<JsonArray>();
+
+    if (source["sensors"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : source["sensors"].as<JsonArrayConst>()) {
+            auto out = sensors.add<JsonObject>();
+            out["id"] = item["id"] | String("");
+            out["type"] = item["type"] | String("");
+            out["enabled"] = item["enabled"] | true;
+            out["poll_interval_ms"] = item["poll_interval_ms"] | 5000;
+            out["variable_prefix"] = item["variable_prefix"] | String("");
+            out["address"] = item["address"] | 0x76;
+            out["pin"] = item["pin"] | 0;
+
+            if (item["temperature_offset_c"].is<float>()) out["temperature_offset_c"] = item["temperature_offset_c"].as<float>();
+            if (item["sea_level_pressure_hpa"].is<float>()) out["sea_level_pressure_hpa"] = item["sea_level_pressure_hpa"].as<float>();
+        }
+    }
+
+    if (!StorageManager::instance().writeJson(OF_SENSORS_PATH, toSave)) {
+        sendError(request, 500, "Failed to save sensors");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"] = true;
+    response["message"] = "Sensors saved. Reboot to apply.";
+    sendJson(request, response);
+}
+
+void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument source;
+    if (deserializeJson(source, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    bool changed = false;
+
+    if (source["displays"].is<JsonArrayConst>()) {
+        JsonDocument cfgDoc;
+        auto displays = cfgDoc["displays"].to<JsonArray>();
+        for (JsonObjectConst item : source["displays"].as<JsonArrayConst>()) {
+            auto out = displays.add<JsonObject>();
+            out["id"] = item["id"] | String("");
+            out["type"] = item["type"] | String("ssd1306");
+            out["enabled"] = item["enabled"] | true;
+            out["width"] = item["width"] | 128;
+            out["height"] = item["height"] | 64;
+            out["address"] = item["address"] | 0x3C;
+
+            if (item["rotation"].is<int>()) out["rotation"] = item["rotation"].as<int>();
+            if (item["refresh_interval_ms"].is<int>()) out["refresh_interval_ms"] = item["refresh_interval_ms"].as<int>();
+            if (item["page"].is<const char*>()) out["page"] = item["page"].as<const char*>();
+            if (item["reset_pin"].is<int>()) out["reset_pin"] = item["reset_pin"].as<int>();
+            if (item["contrast"].is<int>()) out["contrast"] = item["contrast"].as<int>();
+            if (item["cs_pin"].is<int>()) out["cs_pin"] = item["cs_pin"].as<int>();
+            if (item["dc_pin"].is<int>()) out["dc_pin"] = item["dc_pin"].as<int>();
+            if (item["mosi_pin"].is<int>()) out["mosi_pin"] = item["mosi_pin"].as<int>();
+            if (item["sck_pin"].is<int>()) out["sck_pin"] = item["sck_pin"].as<int>();
+            if (item["spi_frequency"].is<int>()) out["spi_frequency"] = item["spi_frequency"].as<int>();
+            if (item["rx_pin"].is<int>()) out["rx_pin"] = item["rx_pin"].as<int>();
+            if (item["tx_pin"].is<int>()) out["tx_pin"] = item["tx_pin"].as<int>();
+            if (item["baud_rate"].is<int>()) out["baud_rate"] = item["baud_rate"].as<int>();
+            if (item["uart_num"].is<int>()) out["uart_num"] = item["uart_num"].as<int>();
+        }
+
+        if (!StorageManager::instance().writeJson(OF_DISPLAYS_PATH, cfgDoc)) {
+            sendError(request, 500, "Failed to save displays");
+            return;
+        }
+        changed = true;
+    }
+
+    if (source["pages"].is<JsonArrayConst>()) {
+        StorageManager::instance().mkdirs(OF_DISPLAY_PAGES_PATH);
+        for (JsonObjectConst item : source["pages"].as<JsonArrayConst>()) {
+            const String pageId = item["id"] | String("");
+            if (!pageId.length()) continue;
+
+            JsonDocument pageDoc;
+            pageDoc["id"] = pageId;
+            pageDoc["title"] = item["title"] | pageId;
+            pageDoc["display_id"] = item["displayId"] | String("");
+
+            auto widgets = pageDoc["widgets"].to<JsonArray>();
+            if (item["widgets"].is<JsonArrayConst>()) {
+                for (JsonObjectConst w : item["widgets"].as<JsonArrayConst>()) {
+                    auto out = widgets.add<JsonObject>();
+                    out["id"] = w["id"] | String("");
+                    out["type"] = w["type"] | String("text");
+                    out["x"] = w["x"] | 0;
+                    out["y"] = w["y"] | 0;
+                    out["text_size"] = w["textSize"] | 1;
+                    out["text"] = w["text"] | String("");
+                    out["variable"] = w["variableId"] | String("");
+                    out["prefix"] = w["prefix"] | String("");
+                    out["suffix"] = w["suffix"] | String("");
+                    out["decimals"] = w["decimals"] | 1;
+                    out["max_chars"] = w["maxChars"] | 0;
+                }
+            }
+
+            const String path = String(OF_DISPLAY_PAGES_PATH) + "/" + pageId + ".json";
+            if (!StorageManager::instance().writeJson(path, pageDoc)) {
+                sendError(request, 500, "Failed to save display page " + pageId);
+                return;
+            }
+        }
+        changed = true;
+    }
+
+    if (!changed) {
+        sendError(request, 400, "Payload must include displays or pages");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"] = true;
+    response["message"] = "Displays/pages saved. Reboot to apply.";
+    sendJson(request, response);
 }
 
 void ApiServer::sendModules(AsyncWebServerRequest* request) const {

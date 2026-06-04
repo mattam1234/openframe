@@ -26,6 +26,10 @@ struct SensorConfig {
 struct SensorMetricValue {
     String key;
     float  value = 0.0f;
+
+    SensorMetricValue() = default;
+    SensorMetricValue(const String& metricKey, float metricValue)
+        : key(metricKey), value(metricValue) {}
 };
 
 class SensorDriver {

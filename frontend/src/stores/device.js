@@ -18,5 +18,9 @@ export const useDeviceStore = defineStore('device', () => {
     config.value = await api.post('/api/config', payload)
   }
 
-  return { status, config, fetchStatus, fetchConfig, saveConfig }
+  async function scanWifi() {
+    return api.get('/api/wifi/scan')
+  }
+
+  return { status, config, fetchStatus, fetchConfig, saveConfig, scanWifi }
 })

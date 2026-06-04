@@ -5,9 +5,9 @@
 #include <map>
 #include <vector>
 #include <functional>
-#include "StorageManager.h"
-#include "EventBus.h"
-#include "Logger.h"
+#include "../core/StorageManager.h"
+#include "../core/EventBus.h"
+#include "../core/Logger.h"
 #include "../OpenFrameConfig.h"
 
 // ── Variable types ────────────────────────────────────────────────────────────

@@ -137,8 +137,9 @@ void VariableManager::toJson(JsonDocument& doc) const {
 }
 
 bool VariableManager::fromJson(const JsonDocument& doc) {
-    if (!doc["variables"].is<JsonArray>()) return false;
-    for (auto item : doc["variables"].as<JsonArray>()) {
+    if (!doc["variables"].is<JsonArrayConst>()) return false;
+    JsonArrayConst variables = doc["variables"].as<JsonArrayConst>();
+    for (JsonVariantConst item : variables) {
         Variable v;
         v.id         = item["id"]    | String("");
         v.type       = static_cast<VarType>(item["type"] | 0);

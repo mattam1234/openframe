@@ -63,7 +63,7 @@ void MqttManager::subscribeRaw(const String& topic, MessageCallback cb) {
     }
 }
 
-bool MqttManager::isConnected() const {
+bool MqttManager::isConnected() {
     return _client.connected();
 }
 

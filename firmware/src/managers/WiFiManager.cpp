@@ -1,5 +1,28 @@
 #include "WiFiManager.h"
 
+#include <vector>
+
+namespace {
+
+std::vector<WifiNetworkConfig> collectConfiguredNetworks(const WifiConfig& cfg) {
+    std::vector<WifiNetworkConfig> out;
+    for (const auto& net : cfg.networks) {
+        if (net.ssid.isEmpty()) continue;
+        out.push_back(net);
+    }
+
+    if (out.empty() && !cfg.ssid.isEmpty()) {
+        WifiNetworkConfig legacy;
+        legacy.ssid = cfg.ssid;
+        legacy.password = cfg.password;
+        out.push_back(legacy);
+    }
+
+    return out;
+}
+
+} // namespace
+
 WiFiManager& WiFiManager::instance() {
     static WiFiManager inst;
     return inst;
@@ -13,7 +36,7 @@ void WiFiManager::begin() {
     of_wifi_set_hostname(ConfigManager::instance().config().device.name.c_str());
     WiFi.mode(WIFI_STA);
 
-    if (cfg.apMode || cfg.ssid.isEmpty()) {
+    if (cfg.apMode || !hasConfiguredNetworks()) {
         LOG_I(TAG, "No STA credentials — starting AP");
         startAP();
     } else {
@@ -34,32 +57,13 @@ void WiFiManager::loop() {
         onDisconnected();
     }
 
-    // Reconnect back-off
+    // Reconnect back-off with strongest-network reselection
     if (!_connected && !_apMode) {
         uint32_t now = millis();
-
-        // Check if a pending reconnect attempt has now succeeded
-        if (_reconnecting && WiFi.status() == WL_CONNECTED) {
-            _reconnecting = false;
-            _retryCount   = 0;
-            onConnected();
-            return;
-        }
-
-        // Check if a pending attempt has timed out
-        if (_reconnecting && now - _lastAttempt >= RECONNECT_TIMEOUT_MS) {
-            _reconnecting = false;
-            LOG_W(TAG, "Reconnect attempt " + String(_retryCount) + " timed out");
-        }
-
-        // Start a new attempt after the back-off interval
-        if (!_reconnecting && now - _lastAttempt >= RETRY_INTERVAL_MS) {
+        if (now - _lastAttempt >= RETRY_INTERVAL_MS) {
             if (_retryCount < MAX_RETRIES) {
-                _retryCount++;
-                _lastAttempt  = now;
-                _reconnecting = true;
-                LOG_I(TAG, "Reconnect attempt " + String(_retryCount) + "/" + String(MAX_RETRIES));
-                WiFi.reconnect();
+                LOG_I(TAG, "Reconnect attempt " + String(_retryCount + 1) + "/" + String(MAX_RETRIES));
+                startSTA();
             } else {
                 LOG_W(TAG, "Max retries reached — falling back to AP");
                 startAP();
@@ -104,12 +108,14 @@ void WiFiManager::startAP() {
 }
 
 void WiFiManager::startSTA() {
-    const auto& cfg = ConfigManager::instance().config().wifi;
-
     WiFi.mode(WIFI_STA);
-    WiFi.begin(cfg.ssid.c_str(), cfg.password.c_str());
-
-    LOG_I(TAG, "Connecting to: " + cfg.ssid);
+    if (!connectToBestConfiguredNetwork()) {
+        LOG_W(TAG, "No valid WiFi credentials configured");
+        _lastAttempt = millis();
+        _retryCount++;
+        onDisconnected();
+        return;
+    }
 
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
@@ -126,7 +132,35 @@ void WiFiManager::startSTA() {
         LOG_W(TAG, "STA connection failed");
         _retryCount++;
         _lastAttempt = millis();
+        _connected = false;
         onDisconnected();
+    }
+}
+
+void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
+    wifi_mode_t originalMode = WiFi.getMode();
+    if (originalMode == WIFI_AP) {
+        WiFi.mode(WIFI_AP_STA);
+    } else if (originalMode == WIFI_MODE_NULL) {
+        WiFi.mode(WIFI_STA);
+    }
+
+    const int found = WiFi.scanNetworks(false, true);
+    auto networks = doc["networks"].to<JsonArray>();
+    for (int i = 0; i < found; ++i) {
+        const String ssid = WiFi.SSID(i);
+        if (ssid.isEmpty()) continue;
+
+        auto entry = networks.add<JsonObject>();
+        entry["ssid"] = ssid;
+        entry["rssi"] = WiFi.RSSI(i);
+        entry["channel"] = WiFi.channel(i);
+        entry["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+    WiFi.scanDelete();
+
+    if (originalMode == WIFI_AP) {
+        WiFi.mode(WIFI_AP);
     }
 }
 
@@ -148,4 +182,47 @@ String WiFiManager::buildApSsid() const {
     char suffix[5];
     snprintf(suffix, sizeof(suffix), "%02X%02X", mac[4], mac[5]);
     return String(OF_AP_SSID_PREFIX) + String(suffix);
+}
+
+bool WiFiManager::hasConfiguredNetworks() const {
+    const auto& cfg = ConfigManager::instance().config().wifi;
+    if (!cfg.networks.empty()) {
+        for (const auto& net : cfg.networks) {
+            if (!net.ssid.isEmpty()) return true;
+        }
+    }
+    return !cfg.ssid.isEmpty();
+}
+
+bool WiFiManager::connectToBestConfiguredNetwork() {
+    const auto configured = collectConfiguredNetworks(ConfigManager::instance().config().wifi);
+    if (configured.empty()) {
+        return false;
+    }
+
+    int bestConfiguredIndex = 0;
+    int bestRssi = -1000;
+    const int found = WiFi.scanNetworks(false, true);
+    if (found > 0) {
+        for (size_t cfgIndex = 0; cfgIndex < configured.size(); ++cfgIndex) {
+            for (int i = 0; i < found; ++i) {
+                if (WiFi.SSID(i) == configured[cfgIndex].ssid && WiFi.RSSI(i) > bestRssi) {
+                    bestConfiguredIndex = static_cast<int>(cfgIndex);
+                    bestRssi = WiFi.RSSI(i);
+                }
+            }
+        }
+        WiFi.scanDelete();
+    }
+
+    const auto& target = configured[bestConfiguredIndex];
+    WiFi.begin(target.ssid.c_str(), target.password.c_str());
+
+    if (bestRssi > -1000) {
+        LOG_I(TAG, "Connecting to strongest saved network: " + target.ssid + " (RSSI " + String(bestRssi) + " dBm)");
+    } else {
+        LOG_I(TAG, "Connecting to saved network: " + target.ssid);
+    }
+
+    return true;
 }

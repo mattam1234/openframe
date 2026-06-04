@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include "../core/PlatformCompat.h"
 #include <DNSServer.h>
 #include "../core/Logger.h"
@@ -37,23 +38,26 @@ public:
     // Attempt STA connection using stored credentials
     void startSTA();
 
+    // Scan nearby WiFi networks for UI selection.
+    void scanNearbyNetworks(JsonDocument& doc);
+
 private:
     WiFiManager() = default;
 
     void     onConnected();
     void     onDisconnected();
     String   buildApSsid() const;
+    bool     connectToBestConfiguredNetwork();
+    bool     hasConfiguredNetworks() const;
 
     DNSServer _dns;
     bool      _apMode       = false;
     bool      _connected    = false;
-    bool      _reconnecting = false;
     uint8_t   _retryCount   = 0;
     uint32_t  _lastAttempt  = 0;
 
     static constexpr uint8_t  MAX_RETRIES         = 5;
     static constexpr uint32_t RETRY_INTERVAL_MS   = 10000;  // 10 s between attempts
-    static constexpr uint32_t RECONNECT_TIMEOUT_MS = 8000;  // 8 s per attempt
     static constexpr uint8_t  DNS_PORT             = 53;
     static constexpr const char* TAG               = "WiFi";
 };

@@ -22,6 +22,11 @@ bool StorageManager::begin() {
 }
 
 bool StorageManager::readJson(const String& path, JsonDocument& doc) {
+    if (!LittleFS.exists(path)) {
+        LOG_W(TAG, "File not found: " + path);
+        return false;
+    }
+
     File f = LittleFS.open(path, "r");
     if (!f) {
         LOG_W(TAG, "File not found: " + path);
@@ -64,6 +69,7 @@ bool StorageManager::mkdirs(const String& path) {
 
 std::vector<String> StorageManager::listDir(const String& path) {
     std::vector<String> files;
+    if (!LittleFS.exists(path)) return files;
     File dir = LittleFS.open(path);
     if (!dir || !dir.isDirectory()) return files;
     File entry = dir.openNextFile();

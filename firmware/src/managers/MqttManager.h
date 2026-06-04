@@ -43,7 +43,7 @@ public:
     // Subscribe to a full (absolute) topic
     void subscribeRaw(const String& topic, MessageCallback cb);
 
-    bool isConnected() const;
+    bool isConnected();
 
     String baseTopic() const;
 

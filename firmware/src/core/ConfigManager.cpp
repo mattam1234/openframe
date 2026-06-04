@@ -46,7 +46,10 @@ void ConfigManager::resetToDefaults() {
 void ConfigManager::applyDefaults() {
     _config.device.name      = "OpenFrame";
     _config.device.boardType = OF_BOARD_TYPE;
+    _config.wifi.ssid        = "";
+    _config.wifi.password    = "";
     _config.wifi.apMode      = true;
+    _config.wifi.networks.clear();
     _config.mqtt.enabled     = false;
     _config.ha.enabled       = false;
     _config.ota.enabled      = true;
@@ -62,6 +65,12 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     wifi["ssid"]     = _config.wifi.ssid;
     wifi["password"] = _config.wifi.password;
     wifi["ap_mode"]  = _config.wifi.apMode;
+    auto wifiNetworks = wifi["networks"].to<JsonArray>();
+    for (const auto& net : _config.wifi.networks) {
+        auto netObj = wifiNetworks.add<JsonObject>();
+        netObj["ssid"] = net.ssid;
+        netObj["password"] = net.password;
+    }
 
     auto mqtt         = doc["mqtt"].to<JsonObject>();
     mqtt["enabled"]   = _config.mqtt.enabled;
@@ -87,9 +96,47 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.device.boardType = doc["device"]["board"] | _config.device.boardType;
     }
     if (doc["wifi"].is<JsonObject>()) {
-        _config.wifi.ssid     = doc["wifi"]["ssid"]     | String("");
-        _config.wifi.password = doc["wifi"]["password"] | String("");
-        _config.wifi.apMode   = doc["wifi"]["ap_mode"]  | true;
+        JsonObjectConst wifiObj = doc["wifi"].as<JsonObjectConst>();
+        const String legacySsid = wifiObj["ssid"] | _config.wifi.ssid;
+        const String legacyPassword = wifiObj["password"] | _config.wifi.password;
+
+        _config.wifi.apMode = wifiObj["ap_mode"] | _config.wifi.apMode;
+
+        if (wifiObj["networks"].is<JsonArrayConst>()) {
+            _config.wifi.networks.clear();
+            for (JsonVariantConst netVar : wifiObj["networks"].as<JsonArrayConst>()) {
+                if (!netVar.is<JsonObjectConst>()) continue;
+                const String ssid = netVar["ssid"] | String("");
+                if (ssid.isEmpty()) continue;
+
+                WifiNetworkConfig net;
+                net.ssid = ssid;
+                net.password = netVar["password"] | String("");
+                _config.wifi.networks.push_back(net);
+            }
+
+            if (_config.wifi.networks.empty() && !legacySsid.isEmpty()) {
+                WifiNetworkConfig fallback;
+                fallback.ssid = legacySsid;
+                fallback.password = legacyPassword;
+                _config.wifi.networks.push_back(fallback);
+            }
+        } else {
+            _config.wifi.ssid = legacySsid;
+            _config.wifi.password = legacyPassword;
+            _config.wifi.networks.clear();
+            if (!_config.wifi.ssid.isEmpty()) {
+                WifiNetworkConfig net;
+                net.ssid = _config.wifi.ssid;
+                net.password = _config.wifi.password;
+                _config.wifi.networks.push_back(net);
+            }
+        }
+
+        if (!_config.wifi.networks.empty()) {
+            _config.wifi.ssid = _config.wifi.networks.front().ssid;
+            _config.wifi.password = _config.wifi.networks.front().password;
+        }
     }
     if (doc["mqtt"].is<JsonObject>()) {
         _config.mqtt.enabled   = doc["mqtt"]["enabled"]    | false;

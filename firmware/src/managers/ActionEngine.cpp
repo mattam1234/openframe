@@ -425,7 +425,7 @@ void ActionEngine::recordHistory(const String& id, const String& name, bool succ
     if (_history.size() >= HISTORY_LIMIT) {
         _history.erase(_history.begin());
     }
-    _history.push_back({ id, name, millis(), success, error });
+    _history.push_back(ActionHistoryEntry{ id, name, millis(), success, error });
 }
 
 void ActionEngine::onEventTriggered(const Event& event) {

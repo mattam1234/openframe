@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include "../core/EventBus.h"
 #include "../core/Logger.h"
@@ -20,6 +21,7 @@ private:
 
     void sendStatus(AsyncWebServerRequest* request) const;
     void sendConfig(AsyncWebServerRequest* request) const;
+    void sendWifiScan(AsyncWebServerRequest* request) const;
     void sendVariables(AsyncWebServerRequest* request) const;
     void sendLogs(AsyncWebServerRequest* request) const;
     void sendOtaStatus(AsyncWebServerRequest* request) const;
@@ -27,6 +29,7 @@ private:
     void sendOutputs(AsyncWebServerRequest* request) const;
     void sendSensors(AsyncWebServerRequest* request) const;
     void sendDisplays(AsyncWebServerRequest* request) const;
+    void sendDisplayPages(AsyncWebServerRequest* request) const;
     void sendActions(AsyncWebServerRequest* request) const;
     void sendMacros(AsyncWebServerRequest* request) const;
     void sendModules(AsyncWebServerRequest* request) const;
@@ -37,6 +40,10 @@ private:
 
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleInputsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleOutputsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleSensorsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body);
     void handleActionsUpdate(AsyncWebServerRequest* request, const String& body);
     void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);
     void handleProfileCreate(AsyncWebServerRequest* request, const String& body);
@@ -55,8 +62,8 @@ private:
     void sendError(AsyncWebServerRequest* request, int status, const String& message) const;
     void sendFrame(AsyncWebSocketClient* client, const char* type, const JsonDocument& payload) const;
     void sendRawFrame(AsyncWebSocketClient* client, const char* type, const String& rawPayloadJson) const;
-    void broadcastFrame(const char* type, const JsonDocument& payload) const;
-    void broadcastRawFrame(const char* type, const String& rawPayloadJson) const;
+    void broadcastFrame(const char* type, const JsonDocument& payload);
+    void broadcastRawFrame(const char* type, const String& rawPayloadJson);
 
     String buildStatusJson() const;
     String buildVariablesJson() const;
