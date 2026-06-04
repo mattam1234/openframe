@@ -17,6 +17,7 @@
 #include "../managers/WiFiManager.h"
 #include "../managers/ProfileManager.h"
 #include "../managers/HealthMonitor.h"
+#include "../managers/NotificationManager.h"
 
 namespace {
 

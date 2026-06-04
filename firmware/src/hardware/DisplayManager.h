@@ -50,6 +50,10 @@ public:
     void registerDisplay(const String& type, DisplayFactory factory);
     bool setActivePage(const String& displayId, const String& pageId);
 
+    // Show a temporary text notification overlay on all active displays for
+    // the given duration. The overlay is rendered on top of the current page.
+    void showNotification(const String& message, uint32_t durationMs = 3000);
+
     const std::vector<DisplayConfig>& displayConfigs() const { return _configs; }
 
 private:
@@ -82,6 +86,10 @@ private:
     std::vector<DisplayPage>         _pages;
     std::vector<DisplayInstance>     _displays;
     bool                             _subscribedToVariableEvents = false;
+
+    // Notification overlay state
+    String   _notifMessage;
+    uint32_t _notifExpireMs = 0;
 
     static constexpr const char* TAG = "DisplayMgr";
 };

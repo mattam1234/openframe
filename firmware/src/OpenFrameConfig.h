@@ -36,6 +36,7 @@
 #define OF_ACTIONS_PATH "/actions.json"
 #define OF_MACROS_PATH "/macros.json"
 #define OF_LOGS_PATH "/logs.json"
+#define OF_NOTIFICATIONS_PATH "/notifications.json"
 
 // Ring buffer sizes
 #define OF_LOG_BUFFER_SIZE 1000

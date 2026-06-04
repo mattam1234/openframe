@@ -33,6 +33,7 @@ private:
     void sendProfiles(AsyncWebServerRequest* request) const;
     void sendTemplates(AsyncWebServerRequest* request) const;
     void sendTemplateById(AsyncWebServerRequest* request, const String& templateId) const;
+    void sendNotifications(AsyncWebServerRequest* request) const;
 
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);

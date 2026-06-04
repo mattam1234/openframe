@@ -20,6 +20,7 @@
 #include "managers/MacroManager.h"
 #include "managers/ProfileManager.h"
 #include "managers/HealthMonitor.h"
+#include "managers/NotificationManager.h"
 #include "api/ApiServer.h"
 
 static constexpr const char* TAG = "Main";
@@ -59,6 +60,7 @@ void setup() {
     MacroManager::instance().begin();
     ProfileManager::instance().begin();
     HealthMonitor::instance().begin();
+    NotificationManager::instance().begin();
     ApiServer::instance().begin(webServer);
 
     webServer.begin();

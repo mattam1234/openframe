@@ -57,6 +57,7 @@ public:
 private:
     ModuleManager() = default;
 
+    void registerBuiltInHandlers();
     void scanBus();
     void checkProbe(uint8_t address);
     DiscoveredModule* findByAddress(uint8_t address);
