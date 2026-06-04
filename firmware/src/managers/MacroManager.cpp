@@ -25,6 +25,8 @@ bool MacroManager::begin() {
 }
 
 void MacroManager::loop() {
+    // MacroManager is event-driven; macros are executed synchronously via runMacro().
+    // No periodic polling is needed.
 }
 
 bool MacroManager::registerMacro(const MacroConfig& macro) {

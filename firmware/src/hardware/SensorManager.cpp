@@ -110,8 +110,10 @@ public:
 
     bool read(std::vector<SensorMetricValue>& values, String& error) override {
         values.clear();
-        const float temperatureC = _dht->readTemperature();
-        const float humidityPct = _dht->readHumidity();
+        // Force a single sensor reading, then read both values from cache
+        _dht->read(true);
+        const float temperatureC = _dht->readTemperature(false, true);
+        const float humidityPct = _dht->readHumidity(true);
         if (isnan(temperatureC) || isnan(humidityPct)) {
             error = "DHT22 returned invalid readings";
             return false;

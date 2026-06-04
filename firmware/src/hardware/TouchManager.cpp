@@ -42,6 +42,8 @@ void TouchManager::injectTouchPoint(const TouchPoint& point) {
 }
 
 bool TouchManager::loadConfig() {
+    // Touch zone configuration is loaded dynamically via registerTouchZones()
+    // when display pages are activated. No static config file is used.
     return false;
 }
 

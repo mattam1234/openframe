@@ -198,16 +198,12 @@ function formatValue(value, key) {
 }
 
 function formatAge(ms) {
-  const age = (millis() - ms) / 1000
+  if (ms === null) return ''
+  const age = (Date.now() - ms) / 1000
+  if (age < 0) return 'just now'
   if (age < 2) return 'just now'
   if (age < 60) return `${Math.round(age)}s ago`
   return `${Math.round(age / 60)}m ago`
-}
-
-// Use device uptime as a monotonic clock proxy
-const _startTime = Date.now()
-function millis() {
-  return Date.now() - _startTime
 }
 
 // Merge WebSocket live data with REST snapshot
@@ -215,7 +211,7 @@ const sensorData = computed(() => {
   const result = {}
   // From WebSocket real-time updates
   for (const [id, data] of Object.entries(wsStore.sensors)) {
-    result[id] = { ...data, online: true, lastUpdatedMs: millis() }
+    result[id] = { ...data, online: true, lastUpdatedMs: Date.now() }
   }
   // From REST snapshot
   for (const s of sensorList.value) {

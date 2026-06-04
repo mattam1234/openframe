@@ -210,6 +210,8 @@ bool ActionEngine::begin() {
 }
 
 void ActionEngine::loop() {
+    // ActionEngine is event-driven; all execution is triggered by run() calls.
+    // No periodic polling is needed.
 }
 
 bool ActionEngine::registerAction(const ActionConfig& action) {

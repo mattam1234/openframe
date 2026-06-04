@@ -138,7 +138,7 @@ function formatAddress(addr) {
 
 function formatTime(ts) {
   if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleTimeString()
+  return new Date(ts).toLocaleTimeString()
 }
 
 async function refresh() {
