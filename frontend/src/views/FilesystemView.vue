@@ -178,8 +178,17 @@
           />
         </v-card-text>
         <v-card-actions>
+          <v-btn
+            v-if="editor.isJson"
+            variant="text"
+            size="small"
+            prepend-icon="mdi-code-json"
+            @click="formatJson"
+          >
+            Format
+          </v-btn>
           <span v-if="editor.isJson" class="text-caption text-medium-emphasis ml-2">
-            JSON is validated before saving
+            validated before saving
           </span>
           <v-spacer />
           <v-btn variant="text" @click="editor.open = false">Close</v-btn>
@@ -325,6 +334,16 @@ async function inspect(entry) {
     editor.error = error.message || 'Failed to read file'
   } finally {
     editor.loading = false
+  }
+}
+
+function formatJson() {
+  editor.error = ''
+  try {
+    editor.content = JSON.stringify(JSON.parse(editor.content), null, 2)
+    editor.dirty = true
+  } catch (e) {
+    editor.error = `Invalid JSON: ${e.message}`
   }
 }
 

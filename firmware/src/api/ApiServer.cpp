@@ -244,6 +244,7 @@ void sendStaticFile(AsyncWebServerRequest* request, const String& path, const ch
 
     auto* response = request->beginResponse(LittleFS, filePath, contentTypeForPath(typePath));
     response->addHeader("Cache-Control", cacheControl);
+    response->addHeader("X-Content-Type-Options", "nosniff");
     if (gzip) {
         response->addHeader("Content-Encoding", "gzip");
     }

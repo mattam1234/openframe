@@ -83,6 +83,32 @@
       </v-col>
     </v-row>
 
+    <v-row class="mt-2">
+      <v-col cols="12">
+        <v-card>
+          <v-card-title class="d-flex align-center justify-space-between">
+            <span>Storage (LittleFS)</span>
+            <span class="text-caption text-medium-emphasis">
+              {{ formatBytes(storage.used) }} used / {{ formatBytes(storage.total) }}
+              ({{ formatBytes(storage.free) }} free)
+            </span>
+          </v-card-title>
+          <v-card-text>
+            <v-progress-linear
+              :model-value="storagePercent"
+              :color="storagePercent > 90 ? 'error' : storagePercent > 75 ? 'warning' : 'primary'"
+              height="10"
+              rounded
+            />
+            <div class="text-caption text-medium-emphasis mt-1">
+              {{ storagePercent }}% used —
+              <router-link to="/files" class="text-decoration-none">browse files</router-link>
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
     <!-- ── Phase 8: Extended Health Row ─────────────────────────────────── -->
     <v-row class="mt-2">
       <v-col cols="12" md="6">
@@ -175,14 +201,31 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
+import api from '../api/client'
 
 const wsStore = useWebSocketStore()
 const deviceStore = useDeviceStore()
 
-onMounted(() => deviceStore.fetchStatus().catch(() => {}))
+const storage = ref({ total: 0, used: 0, free: 0 })
+
+onMounted(() => {
+  deviceStore.fetchStatus().catch(() => {})
+  api.fs.stat().then((s) => { storage.value = s }).catch(() => {})
+})
+
+const storagePercent = computed(() =>
+  storage.value.total > 0 ? Math.round((storage.value.used / storage.value.total) * 100) : 0
+)
+
+const formatBytes = (bytes) => {
+  if (bytes === undefined || bytes === null) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
 
 const status = computed(() => ({
   ...(deviceStore.status ?? {}),
@@ -254,6 +297,12 @@ const statusCards = computed(() => [
     value: status.value.moduleCount ?? '—',
     icon: 'mdi-expansion-card',
     color: 'purple',
+  },
+  {
+    label: 'Storage Used',
+    value: storage.value.total > 0 ? `${storagePercent.value}%` : '—',
+    icon: 'mdi-harddisk',
+    color: storagePercent.value > 90 ? 'error' : storagePercent.value > 75 ? 'warning' : 'teal',
   },
 ])
 </script>
