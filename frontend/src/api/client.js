@@ -53,6 +53,14 @@ const fs = {
     if (!res.ok) throw new Error(`delete ${path} → ${res.status}: ${await res.text()}`)
     return res.json()
   },
+
+  async mkdir(path) {
+    const res = await fetch(`${BASE}/api/fs/mkdir?path=${encodeURIComponent(path)}`, { method: 'POST' })
+    if (!res.ok) throw new Error(`mkdir ${path} → ${res.status}: ${await res.text()}`)
+    return res.json()
+  },
+
+  rename: (from, to) => request('POST', '/api/fs/rename', { from, to }),
 }
 
 export default {

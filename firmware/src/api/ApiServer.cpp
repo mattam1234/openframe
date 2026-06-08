@@ -496,6 +496,12 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/fs", HTTP_DELETE, [](AsyncWebServerRequest* request) {
         ApiServer::instance().handleFsDelete(request);
     });
+    server.on("/api/fs/mkdir", HTTP_POST, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().handleFsMkdir(request);
+    });
+    registerJsonPost(server, "/api/fs/rename", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleFsRename(request, body);
+    });
     // Upload/replace a file. Target path comes from the ?path= query parameter.
     server.on("/api/fs", HTTP_POST,
         [](AsyncWebServerRequest*) {},
@@ -1777,6 +1783,75 @@ void ApiServer::handleFsDelete(AsyncWebServerRequest* request) const {
     doc["ok"]   = true;
     doc["path"] = path;
     sendJson(request, doc);
+}
+
+void ApiServer::handleFsMkdir(AsyncWebServerRequest* request) const {
+    const String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
+    if (!isSafeFsPath(path)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (isProtectedFsPath(path)) {
+        sendError(request, 403, "Path is protected");
+        return;
+    }
+    if (StorageManager::instance().exists(path)) {
+        sendError(request, 409, "Already exists");
+        return;
+    }
+    if (!StorageManager::instance().mkdirs(path)) {
+        sendError(request, 500, "mkdir failed");
+        return;
+    }
+    JsonDocument doc;
+    doc["ok"]   = true;
+    doc["path"] = path;
+    sendJson(request, doc);
+}
+
+void ApiServer::handleFsRename(AsyncWebServerRequest* request, const String& body) const {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+    const String from = doc["from"] | String("");
+    const String to   = doc["to"]   | String("");
+    if (!isSafeFsPath(from) || !isSafeFsPath(to)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (isProtectedFsPath(from) || isProtectedFsPath(to)) {
+        sendError(request, 403, "Path is protected");
+        return;
+    }
+    if (!StorageManager::instance().exists(from)) {
+        sendError(request, 404, "Source not found");
+        return;
+    }
+    if (StorageManager::instance().exists(to)) {
+        sendError(request, 409, "Target already exists");
+        return;
+    }
+
+    // Ensure the destination's parent directory exists before moving.
+    int slash = to.lastIndexOf('/');
+    if (slash > 0) {
+        const String dir = to.substring(0, slash);
+        if (!StorageManager::instance().exists(dir)) {
+            StorageManager::instance().mkdirs(dir);
+        }
+    }
+
+    if (!StorageManager::instance().rename(from, to)) {
+        sendError(request, 500, "Rename failed");
+        return;
+    }
+    JsonDocument resp;
+    resp["ok"]   = true;
+    resp["from"] = from;
+    resp["to"]   = to;
+    sendJson(request, resp);
 }
 
 void ApiServer::handleFsUpload(AsyncWebServerRequest* request, const String& path, const String& body) {

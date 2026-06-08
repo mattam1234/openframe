@@ -13,6 +13,22 @@
       <v-col cols="auto">
         <v-btn
           class="mr-2"
+          prepend-icon="mdi-folder-plus-outline"
+          variant="tonal"
+          @click="openNameDialog('folder')"
+        >
+          New folder
+        </v-btn>
+        <v-btn
+          class="mr-2"
+          prepend-icon="mdi-file-plus-outline"
+          variant="tonal"
+          @click="openNameDialog('file')"
+        >
+          New file
+        </v-btn>
+        <v-btn
+          class="mr-2"
           prepend-icon="mdi-upload"
           variant="tonal"
           :loading="uploadBusy"
@@ -127,6 +143,14 @@
                         @click="inspect(entry)"
                       />
                       <v-btn
+                        icon="mdi-rename-box"
+                        size="x-small"
+                        variant="text"
+                        title="Rename / move"
+                        :disabled="isProtected(entry.path)"
+                        @click="openNameDialog('rename', entry)"
+                      />
+                      <v-btn
                         icon="mdi-download"
                         size="x-small"
                         variant="text"
@@ -205,6 +229,36 @@
       </v-card>
     </v-dialog>
 
+    <!-- New folder / new file / rename -->
+    <v-dialog v-model="nameDialog.open" max-width="480">
+      <v-card>
+        <v-card-title>{{ nameDialog.title }}</v-card-title>
+        <v-card-text>
+          <v-alert v-if="nameDialog.error" type="error" variant="tonal" density="compact" class="mb-2">
+            {{ nameDialog.error }}
+          </v-alert>
+          <v-text-field
+            v-model="nameDialog.value"
+            :label="nameDialog.mode === 'rename' ? 'New path' : 'Name'"
+            :hint="nameDialog.mode === 'rename'
+              ? 'Full path, e.g. /templates/renamed.json'
+              : `Created in ${currentPath}`"
+            persistent-hint
+            variant="outlined"
+            autofocus
+            @keyup.enter="submitNameDialog"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="nameDialog.open = false">Cancel</v-btn>
+          <v-btn color="primary" variant="tonal" :loading="nameDialog.busy" @click="submitNameDialog">
+            {{ nameDialog.mode === 'rename' ? 'Rename' : 'Create' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Delete confirm -->
     <v-dialog v-model="deleteDialog.open" max-width="420">
       <v-card>
@@ -246,6 +300,7 @@ const editor = reactive({
   dirty: false, error: '', isJson: false,
 })
 const deleteDialog = reactive({ open: false, path: '', busy: false })
+const nameDialog = reactive({ open: false, mode: 'folder', title: '', value: '', busy: false, error: '', original: '' })
 const snackbar = reactive({ open: false, text: '', color: 'success' })
 
 const usagePercent = computed(() =>
@@ -387,6 +442,59 @@ async function doDelete() {
     notify(error.message || 'Delete failed', 'error')
   } finally {
     deleteDialog.busy = false
+  }
+}
+
+function joinPath(dir, name) {
+  const base = dir === '/' ? '' : dir
+  return `${base}/${name}`
+}
+
+function openNameDialog(mode, entry = null) {
+  nameDialog.mode = mode
+  nameDialog.error = ''
+  nameDialog.busy = false
+  if (mode === 'rename') {
+    nameDialog.title = `Rename ${entry.name}`
+    nameDialog.value = entry.path
+    nameDialog.original = entry.path
+  } else {
+    nameDialog.title = mode === 'folder' ? 'New folder' : 'New file'
+    nameDialog.value = ''
+    nameDialog.original = ''
+  }
+  nameDialog.open = true
+}
+
+async function submitNameDialog() {
+  const raw = (nameDialog.value || '').trim()
+  if (!raw) {
+    nameDialog.error = 'A name is required'
+    return
+  }
+  nameDialog.busy = true
+  nameDialog.error = ''
+  try {
+    if (nameDialog.mode === 'rename') {
+      const to = raw.startsWith('/') ? raw : joinPath(currentPath.value, raw)
+      await api.fs.rename(nameDialog.original, to)
+      notify(`Renamed to ${to}`)
+    } else if (nameDialog.mode === 'folder') {
+      const target = joinPath(currentPath.value, raw)
+      await api.fs.mkdir(target)
+      notify(`Created folder ${target}`)
+    } else {
+      const target = joinPath(currentPath.value, raw)
+      // Seed new JSON files with {} so they pass the device's JSON validation.
+      await api.fs.upload(target, target.endsWith('.json') ? '{}' : '')
+      notify(`Created ${target}`)
+    }
+    nameDialog.open = false
+    refresh()
+  } catch (error) {
+    nameDialog.error = error.message || 'Operation failed'
+  } finally {
+    nameDialog.busy = false
   }
 }
 

@@ -40,6 +40,9 @@ public:
     // Delete a file
     bool remove(const String& path);
 
+    // Rename/move a file. Returns false on error.
+    bool rename(const String& from, const String& to);
+
     // Check if a file exists
     bool exists(const String& path);
 

@@ -43,6 +43,8 @@ private:
     void sendFsList(AsyncWebServerRequest* request) const;
     void sendFsDownload(AsyncWebServerRequest* request) const;
     void handleFsDelete(AsyncWebServerRequest* request) const;
+    void handleFsMkdir(AsyncWebServerRequest* request) const;
+    void handleFsRename(AsyncWebServerRequest* request, const String& body) const;
     void handleFsUpload(AsyncWebServerRequest* request, const String& path, const String& body);
 
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);

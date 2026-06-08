@@ -433,6 +433,18 @@ bool StorageManager::remove(const String& path) {
     return ok;
 }
 
+bool StorageManager::rename(const String& from, const String& to) {
+    StorageLock lock;
+    if (!LittleFS.rename(from, to)) {
+        LOG_E(TAG, "Rename failed: " + from + " -> " + to);
+        return false;
+    }
+    // The old path's NVS shadow is now stale; the new path will be re-backed-up
+    // on its next writeJson(). Keep the index from resurrecting the old name.
+    purgeJsonBackupFromNvs(from);
+    return true;
+}
+
 bool StorageManager::exists(const String& path) {
     StorageLock lock;
     return LittleFS.exists(path);
