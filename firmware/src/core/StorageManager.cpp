@@ -73,7 +73,8 @@ bool shouldBackupJson(const String& path) {
     return path.endsWith(".json") &&
            !path.startsWith("/www/") &&
            path != OF_LOGS_PATH &&
-           path != OF_NOTIFICATIONS_PATH;
+           path != OF_NOTIFICATIONS_PATH &&
+           path != "/._selftest.json";  // transient self-test artefact
 }
 
 #if defined(ESP32)
@@ -443,9 +444,10 @@ bool StorageManager::removeRecursive(const String& path) {
         const String child = (path == "/" ? String("/") : path + "/") + e.name;
         if (e.isDir) {
             ok = removeRecursive(child) && ok;
+        } else if (LittleFS.remove(child)) {
+            purgeJsonBackupFromNvs(child);  // only drop the shadow once the file is gone
         } else {
-            ok = LittleFS.remove(child) && ok;
-            purgeJsonBackupFromNvs(child);
+            ok = false;
         }
     }
 
