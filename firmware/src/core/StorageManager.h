@@ -43,6 +43,9 @@ public:
     // Rename/move a file. Returns false on error.
     bool rename(const String& from, const String& to);
 
+    // Recursively delete a file, or a directory and all of its contents.
+    bool removeRecursive(const String& path);
+
     // Check if a file exists
     bool exists(const String& path);
 

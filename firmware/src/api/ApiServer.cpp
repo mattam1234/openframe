@@ -1763,7 +1763,8 @@ void ApiServer::sendFsDownload(AsyncWebServerRequest* request) const {
 
 void ApiServer::handleFsDelete(AsyncWebServerRequest* request) const {
     const String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
-    if (!isSafeFsPath(path)) {
+    if (!isSafeFsPath(path) || path == "/") {
+        // Refuse "/" outright — a recursive delete there would wipe /www too.
         sendError(request, 400, "Invalid path");
         return;
     }
@@ -1775,7 +1776,10 @@ void ApiServer::handleFsDelete(AsyncWebServerRequest* request) const {
         sendError(request, 404, "Not found");
         return;
     }
-    if (!StorageManager::instance().remove(path)) {
+    // removeRecursive handles both a plain file and a directory (and its
+    // contents). The only protected tree, /www, is a top-level directory and is
+    // rejected above, so it can never be reached as a child of a deleted dir.
+    if (!StorageManager::instance().removeRecursive(path)) {
         sendError(request, 500, "Delete failed");
         return;
     }

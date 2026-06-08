@@ -167,6 +167,16 @@
                         @click="confirmDelete(entry)"
                       />
                     </template>
+                    <v-btn
+                      v-else
+                      icon="mdi-delete"
+                      size="x-small"
+                      variant="text"
+                      color="error"
+                      title="Delete folder and contents"
+                      :disabled="isProtected(entry.path)"
+                      @click="confirmDelete(entry)"
+                    />
                   </td>
                 </tr>
                 <tr v-if="sortedEntries.length === 0">
@@ -262,9 +272,15 @@
     <!-- Delete confirm -->
     <v-dialog v-model="deleteDialog.open" max-width="420">
       <v-card>
-        <v-card-title>Delete file?</v-card-title>
+        <v-card-title>{{ deleteDialog.isDir ? 'Delete folder?' : 'Delete file?' }}</v-card-title>
         <v-card-text>
-          This permanently removes <code>{{ deleteDialog.path }}</code> from the device.
+          <template v-if="deleteDialog.isDir">
+            This permanently removes the folder <code>{{ deleteDialog.path }}</code>
+            <strong>and all of its contents</strong> from the device.
+          </template>
+          <template v-else>
+            This permanently removes <code>{{ deleteDialog.path }}</code> from the device.
+          </template>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -299,7 +315,7 @@ const editor = reactive({
   open: false, path: '', content: '', loading: false, saving: false,
   dirty: false, error: '', isJson: false,
 })
-const deleteDialog = reactive({ open: false, path: '', busy: false })
+const deleteDialog = reactive({ open: false, path: '', busy: false, isDir: false })
 const nameDialog = reactive({ open: false, mode: 'folder', title: '', value: '', busy: false, error: '', original: '' })
 const snackbar = reactive({ open: false, text: '', color: 'success' })
 
@@ -428,6 +444,7 @@ async function saveEditor() {
 
 function confirmDelete(entry) {
   deleteDialog.path = entry.path
+  deleteDialog.isDir = entry.type === 'dir'
   deleteDialog.open = true
 }
 

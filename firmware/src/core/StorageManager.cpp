@@ -433,6 +433,31 @@ bool StorageManager::remove(const String& path) {
     return ok;
 }
 
+bool StorageManager::removeRecursive(const String& path) {
+    StorageLock lock;  // recursive mutex — safe across the nested self-calls below
+
+    // listEntries returns the directory's children (empty if `path` is a file or
+    // an empty directory). Remove children first, depth-first.
+    bool ok = true;
+    for (const auto& e : listEntries(path)) {
+        const String child = (path == "/" ? String("/") : path + "/") + e.name;
+        if (e.isDir) {
+            ok = removeRecursive(child) && ok;
+        } else {
+            ok = LittleFS.remove(child) && ok;
+            purgeJsonBackupFromNvs(child);
+        }
+    }
+
+    // Remove the now-empty directory, or the plain file.
+    if (LittleFS.rmdir(path)) return ok;
+    if (LittleFS.remove(path)) {
+        purgeJsonBackupFromNvs(path);
+        return ok;
+    }
+    return false;
+}
+
 bool StorageManager::rename(const String& from, const String& to) {
     StorageLock lock;
     if (!LittleFS.rename(from, to)) {
