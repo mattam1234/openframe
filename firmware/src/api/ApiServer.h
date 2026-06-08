@@ -40,6 +40,7 @@ private:
 
     // Filesystem browser
     void sendFsStat(AsyncWebServerRequest* request) const;
+    void sendFsSelfTest(AsyncWebServerRequest* request) const;
     void sendFsList(AsyncWebServerRequest* request) const;
     void sendFsDownload(AsyncWebServerRequest* request) const;
     void handleFsDelete(AsyncWebServerRequest* request) const;

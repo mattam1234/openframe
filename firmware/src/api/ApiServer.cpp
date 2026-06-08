@@ -487,6 +487,9 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/fs/stat", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendFsStat(request);
     });
+    server.on("/api/fs/selftest", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendFsSelfTest(request);
+    });
     server.on("/api/fs/list", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendFsList(request);
     });
@@ -1716,6 +1719,60 @@ void ApiServer::sendFsStat(AsyncWebServerRequest* request) const {
     doc["used"]  = si.used;
     doc["free"]  = si.free;
     sendJson(request, doc);
+}
+
+void ApiServer::sendFsSelfTest(AsyncWebServerRequest* request) const {
+    JsonDocument result;
+    auto steps = result["steps"].to<JsonArray>();
+    auto addStep = [&](const char* name, bool ok, const String& detail) {
+        auto s = steps.add<JsonObject>();
+        s["name"]   = name;
+        s["ok"]     = ok;
+        if (detail.length()) s["detail"] = detail;
+    };
+
+    auto& storage = StorageManager::instance();
+    const char* testPath = "/._selftest.json";
+    bool ok = true;
+
+    // 1. Write a file with a known marker and a per-run nonce.
+    const uint32_t nonce = millis();
+    JsonDocument w;
+    w["marker"] = "openframe-selftest";
+    w["nonce"]  = nonce;
+    const bool wrote = storage.writeJson(testPath, w);
+    addStep("write", wrote, wrote ? String("") : "writeJson reported failure");
+    ok = ok && wrote;
+
+    // 2. Read it back and verify the contents survived the round-trip.
+    bool verified = false;
+    String verifyDetail;
+    if (wrote) {
+        JsonDocument r;
+        if (storage.readJson(testPath, r)) {
+            const bool markerOk = (r["marker"] | String("")) == "openframe-selftest";
+            const bool nonceOk  = (r["nonce"] | 0u) == nonce;
+            verified = markerOk && nonceOk;
+            if (!verified) verifyDetail = "content mismatch after read-back";
+        } else {
+            verifyDetail = "readJson failed";
+        }
+    } else {
+        verifyDetail = "skipped (write failed)";
+    }
+    addStep("read-back", verified, verifyDetail);
+    ok = ok && verified;
+
+    // 3. Clean up the temp file.
+    const bool deleted = storage.remove(testPath);
+    addStep("cleanup", deleted, deleted ? String("") : "remove failed");
+    ok = ok && deleted;
+
+    result["ok"] = ok;
+    const StorageInfo si = storage.info();
+    result["free"]  = si.free;
+    result["total"] = si.total;
+    sendJson(request, result);
 }
 
 void ApiServer::sendFsList(AsyncWebServerRequest* request) const {

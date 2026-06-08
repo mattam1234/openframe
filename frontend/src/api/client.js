@@ -27,6 +27,7 @@ async function request(method, path, body) {
  */
 const fs = {
   stat: () => request('GET', '/api/fs/stat'),
+  selftest: () => request('GET', '/api/fs/selftest'),
   list: (path = '/') => request('GET', `/api/fs/list?path=${encodeURIComponent(path)}`),
 
   // A plain URL the browser can hit directly to download/inspect a file.

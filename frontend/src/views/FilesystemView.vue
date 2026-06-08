@@ -37,6 +37,15 @@
         >
           Upload
         </v-btn>
+        <v-btn
+          class="mr-2"
+          prepend-icon="mdi-stethoscope"
+          variant="tonal"
+          :loading="selfTest.busy"
+          @click="runSelfTest"
+        >
+          Self-test
+        </v-btn>
         <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="tonal" @click="refresh">
           Refresh
         </v-btn>
@@ -292,6 +301,40 @@
       </v-card>
     </v-dialog>
 
+    <!-- Storage self-test result -->
+    <v-dialog v-model="selfTest.open" max-width="460">
+      <v-card>
+        <v-card-title class="d-flex align-center ga-2">
+          <v-icon :color="selfTest.ok ? 'success' : 'error'">
+            {{ selfTest.ok ? 'mdi-check-circle' : 'mdi-alert-circle' }}
+          </v-icon>
+          Storage self-test {{ selfTest.ok ? 'passed' : 'failed' }}
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 text-medium-emphasis mb-2">
+            Wrote a temporary file, read it back, verified the contents, and deleted it.
+          </p>
+          <v-list density="compact">
+            <v-list-item v-for="step in selfTest.steps" :key="step.name">
+              <template #prepend>
+                <v-icon :color="step.ok ? 'success' : 'error'" size="small">
+                  {{ step.ok ? 'mdi-check' : 'mdi-close' }}
+                </v-icon>
+              </template>
+              <v-list-item-title class="text-capitalize">{{ step.name }}</v-list-item-title>
+              <template #append>
+                <span v-if="step.detail" class="text-caption text-medium-emphasis">{{ step.detail }}</span>
+              </template>
+            </v-list-item>
+          </v-list>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="selfTest.open = false">Close</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-snackbar v-model="snackbar.open" :color="snackbar.color" timeout="3000">
       {{ snackbar.text }}
     </v-snackbar>
@@ -318,6 +361,7 @@ const editor = reactive({
 const deleteDialog = reactive({ open: false, path: '', busy: false, isDir: false })
 const nameDialog = reactive({ open: false, mode: 'folder', title: '', value: '', busy: false, error: '', original: '' })
 const snackbar = reactive({ open: false, text: '', color: 'success' })
+const selfTest = reactive({ open: false, busy: false, ok: false, steps: [] })
 
 const usagePercent = computed(() =>
   stat.total > 0 ? Math.round((stat.used / stat.total) * 100) : 0
@@ -512,6 +556,21 @@ async function submitNameDialog() {
     nameDialog.error = error.message || 'Operation failed'
   } finally {
     nameDialog.busy = false
+  }
+}
+
+async function runSelfTest() {
+  selfTest.busy = true
+  try {
+    const result = await api.fs.selftest()
+    selfTest.ok = !!result.ok
+    selfTest.steps = result.steps || []
+    selfTest.open = true
+    refresh()
+  } catch (error) {
+    notify(error.message || 'Self-test failed to run', 'error')
+  } finally {
+    selfTest.busy = false
   }
 }
 
