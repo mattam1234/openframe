@@ -15,8 +15,8 @@ OpenFrame has completed the planned MVP implementation through phases 0–10.
 - ✅ Connectivity: WiFi captive portal, MQTT, Home Assistant, OTA
 - ✅ Hardware layer: inputs, outputs, sensors, displays, touch, I2C modules
 - ✅ Automation: action engine, conditions, macros, notifications
-- ✅ Device API: REST endpoints, WebSocket updates, LittleFS-backed config
-- ✅ Web UI: dashboard, layout designer, screen designer, action manager, settings
+- ✅ Device API: REST endpoints, WebSocket updates, LittleFS-backed config, filesystem browser API
+- ✅ Web UI: dashboard (with storage health), layout designer, screen designer, action manager, filesystem browser, settings
 - ✅ Profiles, templates, device health monitoring, and plugin architecture foundations
 
 See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detailed completion checklist.
@@ -48,7 +48,7 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detaile
 
 ### Web UI
 
-- Dashboard for live device status and health
+- Dashboard for live device status, health, and LittleFS storage usage
 - Device Layout Designer
 - Screen Designer
 - Sensor Dashboard
@@ -56,6 +56,7 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detaile
 - Module Manager
 - Home Assistant Manager
 - Logs Viewer
+- Filesystem Browser — browse, inspect/edit, create, upload, download, rename, and delete files stored on the device (LittleFS)
 - Settings, profile management, and template import/export
 
 ---
