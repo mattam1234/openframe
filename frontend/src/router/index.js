@@ -10,6 +10,7 @@ const routes = [
   { path: '/ha',        component: () => import('../views/HaManagerView.vue'),       name: 'ha'         },
   { path: '/profiles',  component: () => import('../views/ProfilesView.vue'),        name: 'profiles'   },
   { path: '/logs',      component: () => import('../views/LogsView.vue'),            name: 'logs'       },
+  { path: '/files',     component: () => import('../views/FilesystemView.vue'),      name: 'files'      },
   { path: '/settings',  component: () => import('../views/SettingsView.vue'),        name: 'settings'   },
 ]
 

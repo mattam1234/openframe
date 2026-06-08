@@ -1,6 +1,9 @@
 #include "OtaManager.h"
 
 #include <LittleFS.h>
+#if defined(ESP8266)
+#include <WiFiClientSecure.h>
+#endif
 
 namespace {
 
@@ -20,6 +23,14 @@ FilesystemUploadState* ensureUploadState(AsyncWebServerRequest* request) {
     if (!state) {
         state = new FilesystemUploadState();
         request->_tempObject = state;
+        // The library destructor only free()s _tempObject without running the
+        // destructor, so clean up ourselves if the client aborts mid-upload.
+        request->onDisconnect([request]() {
+            if (request->_tempObject) {
+                delete static_cast<FilesystemUploadState*>(request->_tempObject);
+                request->_tempObject = nullptr;
+            }
+        });
     }
     return state;
 }
@@ -75,7 +86,15 @@ bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) 
     snprintf(url, sizeof(url), GITHUB_RELEASES_API, repo.c_str());
 
     HTTPClient http;
-    http.begin(url);
+#if defined(ESP8266)
+    // ESP8266 needs an explicit TLS client for the HTTPS GitHub API. There is no
+    // on-device certificate store, so validation is skipped (setInsecure).
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    http.begin(secureClient, url);
+#else
+    http.begin(url);  // ESP32 HTTPClient sets up TLS transport internally
+#endif
     http.addHeader("User-Agent", "OpenFrame/" OF_VERSION_STRING);
     http.addHeader("Accept", "application/vnd.github+json");
 
@@ -137,7 +156,11 @@ void OtaManager::registerFilesystemUploadRoute(AsyncWebServer& server) {
             } else {
                 doc["status"] = "error";
                 doc["message"] = state ? state->error : "No filesystem image received";
+#if defined(ESP8266)
+                LittleFS.begin();
+#else
                 LittleFS.begin(false);
+#endif
             }
 
             String body;
@@ -175,7 +198,12 @@ void OtaManager::handleFilesystemUploadChunk(
         EventBus::instance().publish(EventType::OtaStarted, "filesystem", "");
 
         LittleFS.end();
+#if defined(ESP8266)
+        // ESP8266 targets the filesystem region with U_FS and needs a known size.
+        state->started = total > 0 && Update.begin(total, U_FS);
+#else
         state->started = Update.begin(total > 0 ? total : UPDATE_SIZE_UNKNOWN, U_SPIFFS);
+#endif
         if (!state->started) {
             state->error = updateErrorString();
             LOG_E(TAG, "Filesystem update begin failed: " + state->error);
@@ -188,7 +216,11 @@ void OtaManager::handleFilesystemUploadChunk(
         state->error = updateErrorString();
         LOG_E(TAG, "Filesystem update write failed: " + state->error);
         EventBus::instance().publish(EventType::OtaError, "filesystem", state->error);
+#if defined(ESP8266)
+        Update.end();  // ESP8266 UpdaterClass has no abort(); end() releases it
+#else
         Update.abort();
+#endif
         return;
     }
 

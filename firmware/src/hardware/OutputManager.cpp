@@ -1,5 +1,6 @@
 #include "OutputManager.h"
 #include <map>
+#include "../core/PlatformCompat.h"
 
 OutputManager& OutputManager::instance() {
     static OutputManager inst;
@@ -25,7 +26,7 @@ void OutputManager::loop() {
         if (cfg.type == OutputType::Buzzer && state.buzzerUntil > 0 && nowMs >= state.buzzerUntil) {
             state.buzzerUntil = 0;
             state.on = false;
-            ledcWriteTone(cfg.pwmChannel, 0);
+            of_tone_write(cfg.pin, cfg.pwmChannel, 0);
             emitOutputEvent(i, "BuzzerStop");
         }
     }
@@ -129,32 +130,27 @@ void OutputManager::setupOutput(size_t index) {
         case OutputType::Led:
         case OutputType::Relay:
             if (cfg.pwm) {
-                ledcSetup(cfg.pwmChannel, cfg.pwmFrequency, cfg.pwmResolution);
-                ledcAttachPin(cfg.pin, cfg.pwmChannel);
-                ledcWrite(cfg.pwmChannel, 0);
+                of_pwm_setup(cfg.pin, cfg.pwmChannel, cfg.pwmFrequency, cfg.pwmResolution);
+                of_pwm_write(cfg.pin, cfg.pwmChannel, 0);
             } else {
                 pinMode(cfg.pin, OUTPUT);
                 digitalWrite(cfg.pin, cfg.inverted ? HIGH : LOW);
             }
             break;
         case OutputType::Rgb:
-            ledcSetup(cfg.channelR, cfg.pwmFrequency, cfg.pwmResolution);
-            ledcSetup(cfg.channelG, cfg.pwmFrequency, cfg.pwmResolution);
-            ledcSetup(cfg.channelB, cfg.pwmFrequency, cfg.pwmResolution);
-            ledcAttachPin(cfg.pinR, cfg.channelR);
-            ledcAttachPin(cfg.pinG, cfg.channelG);
-            ledcAttachPin(cfg.pinB, cfg.channelB);
-            ledcWrite(cfg.channelR, 0);
-            ledcWrite(cfg.channelG, 0);
-            ledcWrite(cfg.channelB, 0);
+            of_pwm_setup(cfg.pinR, cfg.channelR, cfg.pwmFrequency, cfg.pwmResolution);
+            of_pwm_setup(cfg.pinG, cfg.channelG, cfg.pwmFrequency, cfg.pwmResolution);
+            of_pwm_setup(cfg.pinB, cfg.channelB, cfg.pwmFrequency, cfg.pwmResolution);
+            of_pwm_write(cfg.pinR, cfg.channelR, 0);
+            of_pwm_write(cfg.pinG, cfg.channelG, 0);
+            of_pwm_write(cfg.pinB, cfg.channelB, 0);
             break;
         case OutputType::Ws2812:
             initWs2812(index);
             break;
         case OutputType::Buzzer:
-            ledcSetup(cfg.pwmChannel, cfg.pwmFrequency, cfg.pwmResolution);
-            ledcAttachPin(cfg.pin, cfg.pwmChannel);
-            ledcWriteTone(cfg.pwmChannel, 0);
+            of_tone_setup(cfg.pin, cfg.pwmChannel, cfg.pwmFrequency, cfg.pwmResolution);
+            of_tone_write(cfg.pin, cfg.pwmChannel, 0);
             break;
     }
 }
@@ -169,7 +165,7 @@ bool OutputManager::applyDigital(size_t index, bool on) {
         const uint8_t brightness = on ? 255 : 0;
         const uint32_t maxDuty = (1u << cfg.pwmResolution) - 1u;
         const uint32_t duty = (static_cast<uint32_t>(brightness) * maxDuty) / 255u;
-        ledcWrite(cfg.pwmChannel, cfg.inverted ? (maxDuty - duty) : duty);
+        of_pwm_write(cfg.pin, cfg.pwmChannel, cfg.inverted ? (maxDuty - duty) : duty);
         state.brightness = brightness;
     } else {
         const bool level = cfg.inverted ? !on : on;
@@ -188,7 +184,7 @@ bool OutputManager::applyBrightness(size_t index, uint8_t brightness) {
     const uint32_t maxDuty = (1u << cfg.pwmResolution) - 1u;
     uint32_t duty = (static_cast<uint32_t>(brightness) * maxDuty) / 255u;
     if (cfg.inverted) duty = maxDuty - duty;
-    ledcWrite(cfg.pwmChannel, duty);
+    of_pwm_write(cfg.pin, cfg.pwmChannel, duty);
 
     state.brightness = brightness;
     state.on = brightness > 0;
@@ -212,9 +208,9 @@ bool OutputManager::applyRgb(size_t index, uint8_t r, uint8_t g, uint8_t b) {
             uint32_t duty = (static_cast<uint32_t>(v) * maxDuty) / 255u;
             return cfg.inverted ? (maxDuty - duty) : duty;
         };
-        ledcWrite(cfg.channelR, toDuty(r));
-        ledcWrite(cfg.channelG, toDuty(g));
-        ledcWrite(cfg.channelB, toDuty(b));
+        of_pwm_write(cfg.pinR, cfg.channelR, toDuty(r));
+        of_pwm_write(cfg.pinG, cfg.channelG, toDuty(g));
+        of_pwm_write(cfg.pinB, cfg.channelB, toDuty(b));
     } else {
         updateWs2812(index);
     }
@@ -228,7 +224,7 @@ bool OutputManager::applyBuzzer(size_t index, uint16_t frequency, uint16_t durat
     auto& state = _states[index];
     if (cfg.type != OutputType::Buzzer) return false;
 
-    ledcWriteTone(cfg.pwmChannel, frequency);
+    of_tone_write(cfg.pin, cfg.pwmChannel, frequency);
     state.buzzerFreq = frequency;
     state.on = frequency > 0;
     state.buzzerUntil = durationMs > 0 ? (millis() + durationMs) : 0;
@@ -252,30 +248,39 @@ bool OutputManager::initWs2812(size_t index) {
     leds.assign(cfg.ledCount, CRGB::Black);
 
     bool attached = false;
-    // FastLED clockless WS2812 driver uses compile-time pin templates, so runtime pin
-    // selection is implemented through this explicit supported-pin mapping.
+    // FastLED's clockless WS2812 driver takes the data pin as a compile-time
+    // template parameter, so runtime pin selection is done via this switch. Each
+    // case instantiates FastPin<PIN>, which static-asserts if the pin is invalid
+    // on the target chip — so the candidate list must be per-chip. The pin sets
+    // below mirror FastLED's own validity masks (fastpin_esp32.h / _esp8266.h).
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+    // ESP32-S3: FastLED masks GPIO 22-25 and 27-32 (SPI flash / invalid).
+    #define OF_WS2812_PIN_LIST(X) \
+        X(2) X(4) X(5) X(12) X(13) X(14) X(15) X(16) X(17) X(18) X(19) X(21) \
+        X(26) X(33) X(38) X(47) X(48)
+#elif defined(ESP8266)
+    // ESP8266 (default GPIO pin order): GPIO 6-11 are tied to flash.
+    #define OF_WS2812_PIN_LIST(X) \
+        X(0) X(2) X(4) X(5) X(12) X(13) X(14) X(15) X(16)
+#else
+    // Classic ESP32: FastLED masks GPIO 6-10 and 20; 34-39 are input-only.
+    #define OF_WS2812_PIN_LIST(X) \
+        X(2) X(4) X(5) X(12) X(13) X(14) X(15) X(18) X(19) X(21) X(22) X(23) \
+        X(25) X(26) X(27) X(32) X(33)
+#endif
+
+    #define OF_WS2812_CASE(PIN) \
+        case PIN: FastLED.addLeds<WS2812B, PIN, GRB>(leds.data(), cfg.ledCount); attached = true; break;
+
     switch (cfg.pin) {
-        case 2:  FastLED.addLeds<WS2812B, 2, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 4:  FastLED.addLeds<WS2812B, 4, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 5:  FastLED.addLeds<WS2812B, 5, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 12: FastLED.addLeds<WS2812B, 12, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 13: FastLED.addLeds<WS2812B, 13, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 14: FastLED.addLeds<WS2812B, 14, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 15: FastLED.addLeds<WS2812B, 15, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 18: FastLED.addLeds<WS2812B, 18, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 19: FastLED.addLeds<WS2812B, 19, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 21: FastLED.addLeds<WS2812B, 21, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 22: FastLED.addLeds<WS2812B, 22, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 23: FastLED.addLeds<WS2812B, 23, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 25: FastLED.addLeds<WS2812B, 25, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 26: FastLED.addLeds<WS2812B, 26, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 27: FastLED.addLeds<WS2812B, 27, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 32: FastLED.addLeds<WS2812B, 32, GRB>(leds.data(), cfg.ledCount); attached = true; break;
-        case 33: FastLED.addLeds<WS2812B, 33, GRB>(leds.data(), cfg.ledCount); attached = true; break;
+        OF_WS2812_PIN_LIST(OF_WS2812_CASE)
         default:
-            LOG_W(TAG, "WS2812 pin " + String(cfg.pin) + " not supported by runtime mapping");
+            LOG_W(TAG, "WS2812 pin " + String(cfg.pin) + " not supported on this board");
             break;
     }
+
+    #undef OF_WS2812_CASE
+    #undef OF_WS2812_PIN_LIST
 
     if (!attached) return false;
     FastLED.show();

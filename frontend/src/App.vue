@@ -98,6 +98,7 @@ const navItems = [
   { title: 'Home Assistant',  icon: 'mdi-home-assistant',         to: '/ha' },
   { title: 'Profiles',        icon: 'mdi-account-box-multiple',   to: '/profiles' },
   { title: 'Logs',            icon: 'mdi-text-box-outline',       to: '/logs' },
+  { title: 'Filesystem',      icon: 'mdi-folder-cog-outline',     to: '/files' },
   { title: 'Settings',        icon: 'mdi-cog',                    to: '/settings' },
 ]
 </script>

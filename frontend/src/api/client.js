@@ -21,10 +21,45 @@ async function request(method, path, body) {
   return res.text()
 }
 
+/**
+ * Filesystem-browser helpers. These talk to the device's /api/fs/* endpoints,
+ * which exchange raw file bytes (not the JSON envelope used elsewhere).
+ */
+const fs = {
+  stat: () => request('GET', '/api/fs/stat'),
+  list: (path = '/') => request('GET', `/api/fs/list?path=${encodeURIComponent(path)}`),
+
+  // A plain URL the browser can hit directly to download/inspect a file.
+  downloadUrl: (path) => `${BASE}/api/fs/download?path=${encodeURIComponent(path)}`,
+
+  async read(path) {
+    const res = await fetch(`${BASE}/api/fs/download?path=${encodeURIComponent(path)}`)
+    if (!res.ok) throw new Error(`read ${path} → ${res.status}: ${await res.text()}`)
+    return res.text()
+  },
+
+  async upload(path, content) {
+    const res = await fetch(`${BASE}/api/fs?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: content,
+    })
+    if (!res.ok) throw new Error(`upload ${path} → ${res.status}: ${await res.text()}`)
+    return res.json()
+  },
+
+  async remove(path) {
+    const res = await fetch(`${BASE}/api/fs?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`delete ${path} → ${res.status}: ${await res.text()}`)
+    return res.json()
+  },
+}
+
 export default {
   get:    (path)         => request('GET',    path),
   post:   (path, body)   => request('POST',   path, body),
   put:    (path, body)   => request('PUT',    path, body),
   delete: (path)         => request('DELETE', path),
   patch:  (path, body)   => request('PATCH',  path, body),
+  fs,
 }

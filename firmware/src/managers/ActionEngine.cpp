@@ -402,7 +402,10 @@ void ActionEngine::registerBuiltInExecutors() {
             return false;
         }
         HTTPClient http;
-        http.begin(step.url);
+        // Portable form: the URL-only begin() overload is an obsolete hard error
+        // on the ESP8266 core. begin(WiFiClient, url) works on both platforms.
+        WiFiClient netClient;
+        http.begin(netClient, step.url);
         http.addHeader("Content-Type", "application/json");
         int code = 0;
         if (step.method == "POST") {

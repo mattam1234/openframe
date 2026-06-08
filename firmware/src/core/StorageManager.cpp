@@ -5,9 +5,49 @@
 
 #if defined(ESP32)
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #endif
 
 namespace {
+
+// ── Cross-task serialization ──────────────────────────────────────────────────
+// On ESP32 the AsyncTCP/web-server callbacks run in a task separate from the
+// main loop, so concurrent requests can interleave LittleFS operations. Guard
+// every public StorageManager entry point with a single recursive mutex.
+// ESP8266 Arduino is single-threaded (async callbacks run in loop context), so
+// no locking is required there.
+#if defined(ESP32)
+SemaphoreHandle_t storageMutex() {
+    static SemaphoreHandle_t mtx = xSemaphoreCreateRecursiveMutex();
+    return mtx;
+}
+
+struct StorageLock {
+    StorageLock() {
+        SemaphoreHandle_t mtx = storageMutex();
+        if (mtx) xSemaphoreTakeRecursive(mtx, portMAX_DELAY);
+    }
+    ~StorageLock() {
+        SemaphoreHandle_t mtx = storageMutex();
+        if (mtx) xSemaphoreGiveRecursive(mtx);
+    }
+    StorageLock(const StorageLock&) = delete;
+    StorageLock& operator=(const StorageLock&) = delete;
+};
+#else
+struct StorageLock {
+    StorageLock() = default;
+};
+#endif
+
+// Return the basename of a path, normalizing the ESP32 (full path) vs ESP8266
+// (basename) difference in File::name().
+String baseName(const String& path) {
+    int slash = path.lastIndexOf('/');
+    return slash >= 0 ? path.substring(slash + 1) : path;
+}
+
 
 #if defined(ESP32)
 constexpr const char* STORAGE_BACKUP_NS = "ofstore";
@@ -44,6 +84,8 @@ bool indexContains(JsonArrayConst arr, const String& path) {
     return false;
 }
 
+constexpr size_t STORAGE_BACKUP_INDEX_MAX = 64;
+
 bool updateBackupIndex(Preferences& prefs, const String& path) {
     JsonDocument indexDoc;
     const String indexJson = prefs.getString(STORAGE_BACKUP_INDEX_KEY, "[]");
@@ -52,8 +94,28 @@ bool updateBackupIndex(Preferences& prefs, const String& path) {
     }
 
     JsonArray arr = indexDoc.as<JsonArray>();
+
+    // Prune entries whose LittleFS file no longer exists; drop their backup blobs.
+    for (int i = static_cast<int>(arr.size()) - 1; i >= 0; --i) {
+        const String entry = arr[i] | String("");
+        if (entry == path) continue;  // keep the one we're about to refresh
+        if (!LittleFS.exists(entry)) {
+            prefs.remove(backupKeyForPath(entry).c_str());
+            arr.remove(i);
+        }
+    }
+
     if (!indexContains(arr, path)) {
         arr.add(path);
+    }
+
+    // Hard cap: evict oldest entries (and their blobs) if we still overflow.
+    while (arr.size() > STORAGE_BACKUP_INDEX_MAX) {
+        const String evicted = arr[0] | String("");
+        if (evicted != path) {
+            prefs.remove(backupKeyForPath(evicted).c_str());
+        }
+        arr.remove(0);
     }
 
     String out;
@@ -77,6 +139,33 @@ bool backupJsonToNvs(const String& path, const JsonDocument& doc) {
     const bool indexed = ok && updateBackupIndex(prefs, path);
     prefs.end();
     return ok && indexed;
+}
+
+bool purgeJsonBackupFromNvs(const String& path) {
+    if (!shouldBackupJson(path)) return true;
+
+    Preferences prefs;
+    if (!prefs.begin(STORAGE_BACKUP_NS, false)) {
+        return false;
+    }
+
+    prefs.remove(backupKeyForPath(path).c_str());
+
+    // Drop the path from the index too, so a later boot won't try to restore it.
+    JsonDocument indexDoc;
+    const String indexJson = prefs.getString(STORAGE_BACKUP_INDEX_KEY, "[]");
+    if (!deserializeJson(indexDoc, indexJson) && indexDoc.is<JsonArray>()) {
+        JsonArray arr = indexDoc.as<JsonArray>();
+        for (int i = static_cast<int>(arr.size()) - 1; i >= 0; --i) {
+            if ((arr[i] | String("")) == path) arr.remove(i);
+        }
+        String out;
+        serializeJson(arr, out);
+        prefs.putString(STORAGE_BACKUP_INDEX_KEY, out);
+    }
+
+    prefs.end();
+    return true;
 }
 
 bool writeJsonFileOnly(const String& path, const String& body) {
@@ -112,6 +201,11 @@ bool restoreJsonBackupsFromNvs() {
     for (JsonVariantConst item : indexDoc.as<JsonArrayConst>()) {
         const String path = item | String("");
         if (!shouldBackupJson(path)) continue;
+
+        // Restore only when the LittleFS copy is missing. Never overwrite an
+        // existing (and potentially newer) on-disk file with the NVS shadow —
+        // that would resurrect data the user just changed or deleted.
+        if (LittleFS.exists(path)) continue;
 
         const String body = prefs.getString(backupKeyForPath(path).c_str(), "");
         if (body.isEmpty()) continue;
@@ -149,6 +243,10 @@ bool backupJsonToNvs(const String&, const JsonDocument&) {
 bool restoreJsonBackupsFromNvs() {
     return false;
 }
+
+bool purgeJsonBackupFromNvs(const String&) {
+    return true;
+}
 #endif
 
 bool createJsonIfMissing(const String& path, const JsonDocument& doc) {
@@ -160,8 +258,16 @@ bool createJsonIfMissing(const String& path, const JsonDocument& doc) {
         return false;
     }
 
-    serializeJson(doc, f);
+    const size_t expected = measureJson(doc);
+    const size_t written = serializeJson(doc, f);
+    f.flush();
+    const bool writeError = f.getWriteError();
     f.close();
+    if (written != expected || writeError) {
+        LOG_E("Storage", "Failed writing default file: " + path);
+        LittleFS.remove(path);
+        return false;
+    }
     LOG_I("Storage", "Created default file: " + path);
     return true;
 }
@@ -243,14 +349,15 @@ bool StorageManager::initializeDefaults() {
 }
 
 bool StorageManager::readJson(const String& path, JsonDocument& doc) {
+    StorageLock lock;
     if (!LittleFS.exists(path)) {
-        LOG_W(TAG, "File not found: " + path);
+        LOG_D(TAG, "File not found: " + path);
         return false;
     }
 
     File f = LittleFS.open(path, "r");
     if (!f) {
-        LOG_W(TAG, "File not found: " + path);
+        LOG_E(TAG, "Cannot open for read: " + path);
         return false;
     }
     DeserializationError err = deserializeJson(doc, f);
@@ -263,49 +370,162 @@ bool StorageManager::readJson(const String& path, JsonDocument& doc) {
 }
 
 bool StorageManager::writeJson(const String& path, const JsonDocument& doc) {
+    StorageLock lock;
     File f = LittleFS.open(path, "w");
     if (!f) {
         LOG_E(TAG, "Cannot open for write: " + path);
         return false;
     }
-    serializeJson(doc, f);
+
+    const size_t expected = measureJson(doc);
+    const size_t written = serializeJson(doc, f);
+    f.flush();
+    const bool writeError = f.getWriteError();
     f.close();
-    LOG_D(TAG, "Wrote: " + path);
+
+    if (written != expected || writeError) {
+        // A truncated/partial file is worse than no file — callers can fall
+        // back to NVS or defaults if it's absent, but a half-written JSON would
+        // fail to parse forever. Comparing against measureJson() catches
+        // disk-full partial writes that getWriteError() may miss on ESP8266.
+        LOG_E(TAG, "Write failed (" + String(written) + "/" + String(expected) +
+                       " bytes, err=" + String(writeError ? 1 : 0) + "): " + path);
+        LittleFS.remove(path);
+        return false;
+    }
+
+    LOG_D(TAG, "Wrote: " + path + " (" + String(written) + " bytes)");
     if (!backupJsonToNvs(path, doc)) {
         LOG_W(TAG, "NVS backup failed: " + path);
     }
     return true;
 }
 
+bool StorageManager::writeRaw(const String& path, const String& body) {
+    StorageLock lock;
+    File f = LittleFS.open(path, "w");
+    if (!f) {
+        LOG_E(TAG, "Cannot open for write: " + path);
+        return false;
+    }
+    const size_t written = f.print(body);
+    f.flush();
+    const bool writeError = f.getWriteError();
+    f.close();
+    if (written != body.length() || writeError) {
+        LOG_E(TAG, "Raw write failed (" + String(written) + "/" + String(body.length()) +
+                       ", err=" + String(writeError ? 1 : 0) + "): " + path);
+        LittleFS.remove(path);
+        return false;
+    }
+    LOG_D(TAG, "Wrote raw: " + path + " (" + String(written) + " bytes)");
+    return true;
+}
+
 bool StorageManager::remove(const String& path) {
-    return LittleFS.remove(path);
+    StorageLock lock;
+    const bool ok = LittleFS.remove(path);
+    if (ok) {
+        // Keep the NVS shadow in sync so a deleted file is not resurrected on
+        // the next boot by restoreJsonBackupsFromNvs().
+        purgeJsonBackupFromNvs(path);
+    }
+    return ok;
 }
 
 bool StorageManager::exists(const String& path) {
+    StorageLock lock;
     return LittleFS.exists(path);
 }
 
 bool StorageManager::mkdirs(const String& path) {
+    StorageLock lock;
     if (!path.length() || path == "/") return true;
     if (LittleFS.exists(path)) return true;
-    const bool ok = LittleFS.mkdir(path);
-    if (ok) {
-        LOG_I(TAG, "Created directory: " + path);
-    } else {
-        LOG_E(TAG, "Cannot create directory: " + path);
+
+    // Create each missing parent level in turn (LittleFS.mkdir is non-recursive).
+    String built;
+    int start = 0;
+    if (path[0] == '/') {
+        built = "/";
+        start = 1;
+    }
+    bool ok = true;
+    while (start <= static_cast<int>(path.length())) {
+        int slash = path.indexOf('/', start);
+        const int end = (slash == -1) ? path.length() : slash;
+        const String segment = path.substring(start, end);
+        if (segment.length()) {
+            if (built.length() && !built.endsWith("/")) built += "/";
+            built += segment;
+            if (!LittleFS.exists(built)) {
+                if (LittleFS.mkdir(built)) {
+                    LOG_I(TAG, "Created directory: " + built);
+                } else {
+                    LOG_E(TAG, "Cannot create directory: " + built);
+                    ok = false;
+                }
+            }
+        }
+        if (slash == -1) break;
+        start = slash + 1;
     }
     return ok;
 }
 
 std::vector<String> StorageManager::listDir(const String& path) {
+    StorageLock lock;
     std::vector<String> files;
-    if (!LittleFS.exists(path)) return files;
-    File dir = LittleFS.open(path);
-    if (!dir || !dir.isDirectory()) return files;
-    File entry = dir.openNextFile();
-    while (entry) {
-        files.push_back(String(entry.name()));
-        entry = dir.openNextFile();
+    for (const auto& e : listEntries(path)) {
+        files.push_back(e.name);
     }
     return files;
+}
+
+std::vector<StorageEntry> StorageManager::listEntries(const String& path) {
+    StorageLock lock;
+    std::vector<StorageEntry> entries;
+#if defined(ESP8266)
+    // ESP8266 LittleFS uses the Dir API for directory traversal.
+    Dir dir = LittleFS.openDir(path);
+    while (dir.next()) {
+        StorageEntry e;
+        e.name  = baseName(dir.fileName());
+        e.isDir = dir.isDirectory();
+        e.size  = e.isDir ? 0 : dir.fileSize();
+        entries.push_back(e);
+    }
+#else
+    if (!LittleFS.exists(path)) return entries;
+    File dir = LittleFS.open(path, "r");
+    if (!dir || !dir.isDirectory()) return entries;
+    File entry = dir.openNextFile();
+    while (entry) {
+        StorageEntry e;
+        e.name  = baseName(String(entry.name()));  // ESP32 returns a full path
+        e.isDir = entry.isDirectory();
+        e.size  = e.isDir ? 0 : entry.size();
+        entries.push_back(e);
+        entry = dir.openNextFile();
+    }
+#endif
+    return entries;
+}
+
+StorageInfo StorageManager::info() {
+    StorageLock lock;
+    StorageInfo si;
+#if defined(ESP32)
+    si.total = LittleFS.totalBytes();
+    si.used  = LittleFS.usedBytes();
+    si.free  = (si.total > si.used) ? (si.total - si.used) : 0;
+#elif defined(ESP8266)
+    FSInfo fsInfo;
+    if (LittleFS.info(fsInfo)) {
+        si.total = fsInfo.totalBytes;
+        si.used  = fsInfo.usedBytes;
+        si.free  = (si.total > si.used) ? (si.total - si.used) : 0;
+    }
+#endif
+    return si;
 }

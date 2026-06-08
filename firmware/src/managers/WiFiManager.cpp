@@ -138,7 +138,7 @@ void WiFiManager::startSTA() {
 }
 
 void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
-    wifi_mode_t originalMode = WiFi.getMode();
+    const auto originalMode = WiFi.getMode();
     bool apWasEnabled = originalMode == WIFI_AP || originalMode == WIFI_AP_STA;
     if (originalMode == WIFI_AP) {
         WiFi.mode(WIFI_AP_STA);
@@ -156,7 +156,7 @@ void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
         entry["ssid"] = ssid;
         entry["rssi"] = WiFi.RSSI(i);
         entry["channel"] = WiFi.channel(i);
-        entry["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+        entry["secure"] = WiFi.encryptionType(i) != OF_WIFI_AUTH_OPEN;
     }
     WiFi.scanDelete();
 

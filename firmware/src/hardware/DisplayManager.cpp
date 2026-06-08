@@ -337,14 +337,20 @@ public:
 
 private:
     static HardwareSerial& _selectSerial(uint8_t num) {
-        if (num == 0) return Serial;
-#if !defined(ESP8266)
-        if (num == 1) return Serial1;
-        return Serial2;
+#if defined(ESP8266)
+        // ESP8266 has Serial (UART0) and Serial1 (TX-only at GPIO2, no RX). For
+        // Nextion (bidirectional) only UART0 is fully usable; fall back gracefully.
+        return num == 0 ? Serial : Serial1;
 #else
-        // ESP8266 has Serial1 (TX-only at GPIO2, no RX). For Nextion (bidirectional)
-        // only UART0 (Serial) is fully usable; fall back gracefully.
-        return Serial1;
+        if (num == 1) return Serial1;
+        if (num >= 2) return Serial2;
+    #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+        // On USB-CDC boards (e.g. ESP32-S3 devkit) `Serial` is the USB CDC port,
+        // which is not a HardwareSerial. The physical UART0 is exposed as Serial0.
+        return Serial0;
+    #else
+        return Serial;
+    #endif
 #endif
     }
 
