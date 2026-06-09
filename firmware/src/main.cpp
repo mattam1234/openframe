@@ -8,6 +8,10 @@
 #include "managers/VariableManager.h"
 #include "managers/WiFiManager.h"
 #include "managers/MqttManager.h"
+#include "managers/TelemetryManager.h"
+#include "managers/CommandManager.h"
+#include "managers/NodeLink.h"
+#include "managers/GatewayManager.h"
 #include "managers/HaManager.h"
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
@@ -48,6 +52,10 @@ void setup() {
     // ── Phase 2: Connectivity ─────────────────────────────────────────────────
     WiFiManager::instance().begin();
     MqttManager::instance().begin();
+    TelemetryManager::instance().begin();
+    CommandManager::instance().begin();
+    NodeLinkManager::instance().begin();
+    GatewayManager::instance().begin();
     HaManager::instance().begin();
     OtaManager::instance().begin(webServer);
     InputManager::instance().begin();
@@ -74,6 +82,10 @@ void loop() {
 
     WiFiManager::instance().loop();
     MqttManager::instance().loop();
+    TelemetryManager::instance().loop();
+    CommandManager::instance().loop();
+    NodeLinkManager::instance().loop();
+    GatewayManager::instance().loop();
     OtaManager::instance().loop();
     InputManager::instance().loop();
     OutputManager::instance().loop();

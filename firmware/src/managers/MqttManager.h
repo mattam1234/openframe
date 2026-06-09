@@ -47,6 +47,14 @@ public:
 
     String baseTopic() const;
 
+    // Fleet topic contract: <baseTopic>/<deviceId>/<subtopic>. This namespaces
+    // every node under its stable id so a CMS can address devices individually
+    // (e.g. .../status, /telemetry, /cmd, /cmd/result, retained /online).
+    String deviceTopic(const String& subtopic) const;
+
+    // Publish to <baseTopic>/<deviceId>/<subtopic>
+    bool publishDevice(const String& subtopic, const String& payload, bool retained = false);
+
 private:
     MqttManager() : _client(_wifiClient) {}
 

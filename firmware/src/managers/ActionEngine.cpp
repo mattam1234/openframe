@@ -5,6 +5,7 @@
 #include "../hardware/DisplayManager.h"
 #include "../managers/HaManager.h"
 #include "../managers/MqttManager.h"
+#include "../managers/NodeLink.h"
 
 namespace {
 
@@ -29,6 +30,7 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "notification")       return ActionType::Notification;
     if (s == "keyboard_shortcut")  return ActionType::KeyboardShortcut;
     if (s == "media_control")      return ActionType::MediaControl;
+    if (s == "remote_action")      return ActionType::RemoteAction;
     return ActionType::Delay;
 }
 
@@ -45,6 +47,7 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::Notification:      return "notification";
         case ActionType::KeyboardShortcut:  return "keyboard_shortcut";
         case ActionType::MediaControl:      return "media_control";
+        case ActionType::RemoteAction:      return "remote_action";
         default:                            return "delay";
     }
 }
@@ -80,6 +83,7 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.message      = item["message"] | String("");
         s.keysCombo    = item["keys"] | String("");
         s.mediaCommand = item["media_command"] | String("");
+        s.nodeId       = item["node_id"] | String("");
         out.push_back(s);
     }
 }
@@ -116,6 +120,7 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
             case ActionType::Notification:      obj["message"] = s.message; break;
             case ActionType::KeyboardShortcut:  obj["keys"] = s.keysCombo; break;
             case ActionType::MediaControl:      obj["media_command"] = s.mediaCommand; break;
+            case ActionType::RemoteAction:      obj["node_id"] = s.nodeId; obj["value"] = s.value; break;
         }
     }
 }
@@ -202,6 +207,18 @@ bool ActionEngine::begin() {
         _subscribed = true;
         EventBus::instance().subscribe(EventType::ActionTriggered, [](const Event& event) {
             ActionEngine::instance().onEventTriggered(event);
+        });
+
+        // Run actions requested by another node over NodeLink ("trigger=<id>").
+        NodeLinkManager::instance().onMessage([](const NodeMessage& msg) {
+            if (msg.type != NodeMsgType::Cmd || !msg.payload.startsWith("trigger=")) return;
+            const String actionId = msg.payload.substring(8);
+            String error;
+            if (ActionEngine::instance().triggerAction(actionId, error)) {
+                LOG_I(TAG, "Remote-triggered '" + actionId + "' from " + msg.srcId);
+            } else {
+                LOG_W(TAG, "Remote trigger '" + actionId + "' from " + msg.srcId + " failed: " + error);
+            }
         });
     }
 
@@ -304,6 +321,24 @@ void ActionEngine::registerBuiltInExecutors() {
             return false;
         }
         MqttManager::instance().publish(step.topic, step.body);
+        return true;
+    });
+
+    // Cross-node automation: ask another node (by deviceId) to run one of its
+    // actions, over NodeLink/ESP-NOW. `value` carries the remote action id.
+    runner.registerExecutor(ActionType::RemoteAction, [](const ActionStep& step, String& error) -> bool {
+        if (!step.nodeId.length() || !step.value.length()) {
+            error = "RemoteAction needs node_id and value (remote action id)";
+            return false;
+        }
+        if (!NodeLinkManager::instance().enabled()) {
+            error = "NodeLink disabled";
+            return false;
+        }
+        if (!NodeLinkManager::instance().send(step.nodeId, NodeMsgType::Cmd, "trigger=" + step.value)) {
+            error = "send to " + step.nodeId + " failed";
+            return false;
+        }
         return true;
     });
 

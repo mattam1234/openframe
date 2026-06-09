@@ -28,6 +28,13 @@
           <v-card-text>
             <v-text-field v-model="form.device.name" label="Device Name" />
             <v-text-field v-model="form.device.board" label="Board" readonly />
+            <v-text-field
+              v-model="form.device.id"
+              label="Device ID"
+              readonly
+              hint="Stable MAC-derived identifier used by the fleet/CMS"
+              persistent-hint
+            />
           </v-card-text>
         </v-card>
       </v-col>
@@ -105,6 +112,27 @@
       </v-col>
 
       <v-col cols="12" md="6">
+        <v-card title="Node Link (mesh)">
+          <v-card-text>
+            <v-switch v-model="form.nodelink.enabled" label="Enable ESP-NOW node link" color="primary" />
+            <v-text-field
+              v-model.number="form.nodelink.channel"
+              label="Channel"
+              type="number"
+              hint="0 = follow the current WiFi channel. All linked nodes must share a channel."
+              persistent-hint
+            />
+            <v-switch
+              v-model="form.nodelink.gateway"
+              label="Act as gateway (bridge leaf nodes to MQTT/CMS)"
+              color="primary"
+              :disabled="!form.nodelink.enabled || !form.mqtt.enabled"
+            />
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
         <v-card title="Integrations">
           <v-card-text>
             <v-switch v-model="form.ha.enabled" label="Home Assistant Discovery" color="primary" />
@@ -132,11 +160,12 @@ const scannedNetworks = ref([])
 const selectedScannedSsid = ref('')
 
 const form = reactive({
-  device: { name: '', board: '' },
+  device: { name: '', board: '', id: '' },
   wifi: { ssid: '', password: '', ap_mode: true, networks: [] },
   mqtt: { enabled: false, host: '', port: 1883, user: '', password: '', base_topic: 'openframe' },
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
+  nodelink: { enabled: false, channel: 0, gateway: false },
 })
 
 const scanOptions = computed(() => {
@@ -152,6 +181,7 @@ const scanOptions = computed(() => {
 function applyConfig(config) {
   form.device.name = config?.device?.name || ''
   form.device.board = config?.device?.board || ''
+  form.device.id = config?.device?.id || ''
   form.wifi.ssid = config?.wifi?.ssid || ''
   form.wifi.password = config?.wifi?.password || ''
   form.wifi.ap_mode = config?.wifi?.ap_mode ?? true
@@ -181,6 +211,9 @@ function applyConfig(config) {
   form.ota.enabled = config?.ota?.enabled ?? true
   form.ota.github_repo = config?.ota?.github_repo || ''
   form.ota.auto_check = config?.ota?.auto_check ?? false
+  form.nodelink.enabled = config?.nodelink?.enabled ?? false
+  form.nodelink.channel = config?.nodelink?.channel ?? 0
+  form.nodelink.gateway = config?.nodelink?.gateway ?? false
 }
 
 function addManualNetwork() {

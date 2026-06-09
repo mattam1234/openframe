@@ -185,6 +185,21 @@ String WiFiManager::buildApSsid() const {
     return String(OF_AP_SSID_PREFIX) + String(suffix);
 }
 
+const String& WiFiManager::deviceId() const {
+    // The MAC is burned in efuse and readable before any WiFi connection, so the
+    // id is stable from first boot. Cache it on first use.
+    static String id;
+    if (id.isEmpty()) {
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        char buf[13];
+        snprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        id = String(buf);
+    }
+    return id;
+}
+
 bool WiFiManager::hasConfiguredNetworks() const {
     const auto& cfg = ConfigManager::instance().config().wifi;
     if (!cfg.networks.empty()) {

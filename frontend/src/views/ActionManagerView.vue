@@ -229,6 +229,10 @@
                   <v-select v-model="step.method" :items="['GET','POST','PUT','DELETE']" label="Method" density="compact" />
                   <v-text-field v-model="step.body" label="Body" density="compact" />
                 </template>
+                <template v-if="step.type === 'remote_action'">
+                  <v-text-field v-model="step.node_id" label="Target node ID" hint="Device ID of the node to trigger" persistent-hint density="compact" class="mt-2" />
+                  <v-text-field v-model="step.value" label="Remote action ID" hint="ID of the action to run on that node" persistent-hint density="compact" />
+                </template>
               </v-card-text>
             </v-card>
           </div>
@@ -299,6 +303,7 @@ const actionStepTypes = [
   { value: 'http_request', label: 'HTTP Request' },
   { value: 'keyboard_shortcut', label: 'Keyboard Shortcut' },
   { value: 'media_control', label: 'Media Control' },
+  { value: 'remote_action', label: 'Remote Action (another node)' },
 ]
 
 const editingAction = ref({ id: '', name: '', enabled: true, steps: [], _existing: false })

@@ -169,6 +169,11 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     ota["enabled"]             = _config.ota.enabled;
     ota["github_repo"]         = _config.ota.githubRepo;
     ota["auto_check"]          = _config.ota.autoCheck;
+
+    auto nodelink              = doc["nodelink"].to<JsonObject>();
+    nodelink["enabled"]        = _config.nodelink.enabled;
+    nodelink["channel"]        = _config.nodelink.channel;
+    nodelink["gateway"]        = _config.nodelink.gateway;
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
@@ -240,6 +245,11 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.ota.enabled    = doc["ota"]["enabled"]     | true;
         _config.ota.githubRepo = doc["ota"]["github_repo"] | String("");
         _config.ota.autoCheck  = doc["ota"]["auto_check"]  | false;
+    }
+    if (doc["nodelink"].is<JsonObject>()) {
+        _config.nodelink.enabled = doc["nodelink"]["enabled"] | false;
+        _config.nodelink.channel = doc["nodelink"]["channel"] | 0;
+        _config.nodelink.gateway = doc["nodelink"]["gateway"] | false;
     }
     return true;
 }

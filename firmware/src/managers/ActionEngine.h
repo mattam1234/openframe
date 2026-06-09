@@ -34,6 +34,7 @@ enum class ActionType : uint8_t {
     Notification,
     KeyboardShortcut,
     MediaControl,
+    RemoteAction,   // trigger an action on another node over NodeLink (ESP-NOW)
 };
 
 struct ActionStep {
@@ -53,6 +54,7 @@ struct ActionStep {
     String      message;
     String      keysCombo;
     String      mediaCommand;
+    String      nodeId;        // RemoteAction: target node's deviceId (value holds the remote action id)
 };
 
 struct ActionConfig {

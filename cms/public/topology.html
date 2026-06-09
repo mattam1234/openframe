@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Topology</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>OpenFrame Fleet</h1>
+    <nav class="nav">
+      <a href="/">Fleet</a>
+      <a href="topology.html" class="active">Topology</a>
+      <a href="templates.html">Templates</a>
+      <a href="firmware.html">Firmware</a>
+      <a href="alerts.html">Alerts</a>
+    </nav>
+    <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">connecting…</span></div>
+  </header>
+
+  <main>
+    <p class="hint">How the fleet connects. Direct nodes talk to the broker over WiFi; ESP-NOW leaf
+      nodes hang off the gateway that bridges them (<code>via</code>). Per-link RSSI isn't shown
+      (the ESP-NOW core in use doesn't expose it on receive).</p>
+    <div id="tree" class="topo"></div>
+    <p id="empty" class="empty">No devices yet.</p>
+  </main>
+
+  <script src="topology.js"></script>
+</body>
+</html>

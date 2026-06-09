@@ -1,4 +1,5 @@
 #include "MqttManager.h"
+#include "WiFiManager.h"
 
 MqttManager& MqttManager::instance() {
     static MqttManager inst;
@@ -18,7 +19,10 @@ void MqttManager::begin() {
 
     _client.setServer(cfg.host.c_str(), cfg.port);
     _client.setKeepAlive(60);
-    _client.setBufferSize(1024);
+    // PubSubClient uses one buffer for both RX and TX. 2 KB leaves headroom for
+    // HA discovery payloads and, importantly, inbound remote-config pushes on the
+    // /cmd topic (oversized packets are silently dropped by PubSubClient).
+    _client.setBufferSize(2048);
     _client.setCallback([this](const char* topic, uint8_t* payload, unsigned int length) {
         onMessage(topic, payload, length);
     });
@@ -71,25 +75,44 @@ String MqttManager::baseTopic() const {
     return ConfigManager::instance().config().mqtt.baseTopic;
 }
 
+String MqttManager::deviceTopic(const String& subtopic) const {
+    return baseTopic() + "/" + WiFiManager::instance().deviceId() + "/" + subtopic;
+}
+
+bool MqttManager::publishDevice(const String& subtopic, const String& payload, bool retained) {
+    return publishRaw(deviceTopic(subtopic), payload, retained);
+}
+
 // ── Private ───────────────────────────────────────────────────────────────────
 
 void MqttManager::connect() {
     const auto& cfg = ConfigManager::instance().config().mqtt;
     _lastAttempt = millis();
 
-    String clientId = "openframe-" + ConfigManager::instance().config().device.name;
-    clientId.replace(" ", "-");
+    // Use the stable device id for the client id so two devices that share the
+    // default name ("OpenFrame") don't collide on the broker and fight over the
+    // connection.
+    String clientId = "openframe-" + WiFiManager::instance().deviceId();
+
+    // Last-Will: if this node drops off the broker ungracefully, the broker
+    // publishes a retained "offline" to its presence topic, giving the CMS
+    // instant presence detection without polling. QoS 1, retained.
+    const String willTopic = deviceTopic("online");
 
     bool ok;
     if (cfg.user.isEmpty()) {
-        ok = _client.connect(clientId.c_str());
+        ok = _client.connect(clientId.c_str(), willTopic.c_str(), 1, true, "offline");
     } else {
-        ok = _client.connect(clientId.c_str(), cfg.user.c_str(), cfg.password.c_str());
+        ok = _client.connect(clientId.c_str(), cfg.user.c_str(), cfg.password.c_str(),
+                             willTopic.c_str(), 1, true, "offline");
     }
 
     if (ok) {
         _backoffMs = 2000;
         LOG_I(TAG, "MQTT connected to " + cfg.host);
+        // Retained birth message — clears the will and marks the node present for
+        // anyone (CMS, HA) subscribing after we connected.
+        publishRaw(willTopic, "online", true);
         resubscribeAll();
         EventBus::instance().publish(EventType::MqttConnected, "mqtt", "");
     } else {

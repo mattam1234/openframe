@@ -571,6 +571,8 @@ void ApiServer::sendStatus(AsyncWebServerRequest* request) const {
 void ApiServer::sendConfig(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     ConfigManager::instance().toJson(doc);
+    // Read-only runtime identity, surfaced alongside config for the Settings UI.
+    doc["device"]["id"] = WiFiManager::instance().deviceId();
     sendJson(request, doc);
 }
 
@@ -863,6 +865,7 @@ String ApiServer::buildStatusJson() const {
     const uint32_t uptimeMs = millis();
     const bool wifiConnected = WiFiManager::instance().isConnected();
 
+    doc["deviceId"] = WiFiManager::instance().deviceId();
     doc["name"] = config.device.name;
     doc["board"] = config.device.boardType;
     doc["version"] = OF_VERSION_STRING;
@@ -1396,6 +1399,7 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         if (typeStr == "notification") return ActionType::Notification;
         if (typeStr == "keyboard_shortcut") return ActionType::KeyboardShortcut;
         if (typeStr == "media_control") return ActionType::MediaControl;
+        if (typeStr == "remote_action") return ActionType::RemoteAction;
         return ActionType::Delay;
     };
 
@@ -1433,6 +1437,7 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
                 s.message = step["message"] | String("");
                 s.keysCombo = step["keys"] | String("");
                 s.mediaCommand = step["media_command"] | String("");
+                s.nodeId = step["node_id"] | String("");
                 action.steps.push_back(s);
             }
         }

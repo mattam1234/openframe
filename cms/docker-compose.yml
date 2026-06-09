@@ -1,0 +1,37 @@
+# Self-hosted OpenFrame CMS + a bundled Mosquitto broker.
+#
+# Bundling the broker keeps first-run zero-config: point your devices' MQTT host
+# at this machine (port 1883) and they appear in the CMS at http://<host>:4000.
+# To use an existing broker instead, drop the `mosquitto` service and set
+# MQTT_URL to your broker.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+
+  cms:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    ports:
+      - "4000:4000"
+    environment:
+      MQTT_URL: mqtt://mosquitto:1883
+      BASE_TOPIC: openframe
+      CMS_PORT: "4000"
+      # Required to deploy fleet OTA — set to this host's LAN address as devices
+      # see it (devices download firmware from here). Without it, OTA deploy is
+      # refused. Not derived from the request host, by design (security).
+      # CMS_PUBLIC_URL: "http://192.168.1.50:4000"
+    volumes:
+      - cms-data:/app/data
+
+volumes:
+  mosquitto-data:
+  cms-data:

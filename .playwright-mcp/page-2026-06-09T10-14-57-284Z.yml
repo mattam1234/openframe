@@ -1,0 +1,22 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - heading "OpenFrame Fleet" [level=1] [ref=e3]
+    - navigation [ref=e4]:
+      - link "Fleet" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - link "Topology" [ref=e6] [cursor=pointer]:
+        - /url: topology.html
+      - link "Templates" [ref=e7] [cursor=pointer]:
+        - /url: templates.html
+      - link "Firmware" [ref=e8] [cursor=pointer]:
+        - /url: firmware.html
+      - link "Alerts" [ref=e9] [cursor=pointer]:
+        - /url: alerts.html
+    - generic [ref=e12]: live
+  - main [ref=e13]:
+    - paragraph [ref=e14]:
+      - text: How the fleet connects. Direct nodes talk to the broker over WiFi; ESP-NOW leaf nodes hang off the gateway that bridges them (
+      - code [ref=e15]: via
+      - text: ). Per-link RSSI isn't shown (the ESP-NOW core in use doesn't expose it on receive).
+    - generic [ref=e17]: ◉ MQTT broker / CMS
+    - paragraph [ref=e18]: No devices yet.

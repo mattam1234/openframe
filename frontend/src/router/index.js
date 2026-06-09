@@ -14,7 +14,40 @@ const routes = [
   { path: '/settings',  component: () => import('../views/SettingsView.vue'),        name: 'settings'   },
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes,
 })
+
+// When a lazy-loaded view chunk fails to load (e.g. the device's LittleFS holds
+// a stale /www that no longer has the hashed chunk this build references), Vue
+// Router silently aborts the navigation and the click appears to do nothing.
+// Force a single full reload so a fresh index.html with the correct chunk names
+// is fetched; a sessionStorage guard prevents an infinite reload loop when the
+// chunk is genuinely missing on the device.
+const CHUNK_RELOAD_KEY = 'of-chunk-reload'
+
+router.onError((error, to) => {
+  const message = String(error?.message || '')
+  const isChunkLoadError =
+    /Loading( CSS)? chunk|dynamically imported module|Importing a module script failed/i.test(message)
+
+  if (!isChunkLoadError) return
+
+  if (sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+    // Already reloaded once and it still failed — the asset is missing on the
+    // device. Surface it instead of looping; re-upload the filesystem image.
+    console.error('View assets are missing on the device. Re-upload the filesystem image (pio run -t uploadfs).', error)
+    return
+  }
+
+  sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
+  window.location.assign(to?.fullPath ? `/#${to.fullPath}` : window.location.href)
+  window.location.reload()
+})
+
+router.afterEach(() => {
+  sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+})
+
+export default router
