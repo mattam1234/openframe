@@ -75,8 +75,10 @@ A self-hosted Central Management System in [`cms/`](cms/README.md) (Node + TypeS
 - **Tags** for grouping; **alerts** (offline, low heap, weak signal) with a live alerts view
 - **Fleet-wide OTA** — host firmware in the CMS and push it to devices over the LAN
 - **Topology view** — direct WiFi nodes and gateways with their ESP-NOW leaves nested
+- **QR provisioning** — generate an onboarding QR that pre-fills a new device's setup
 - ESP-NOW leaf nodes appear automatically when a gateway node bridges them
-- Bundled Mosquitto via `docker compose` for zero-config first run
+- Optional shared-token auth (`CMS_AUTH_TOKEN`) and alert webhooks
+- Bundled Mosquitto via `docker compose` for zero-config first run; covered by a `node:test` suite
 
 ---
 

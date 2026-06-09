@@ -174,6 +174,7 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     nodelink["enabled"]        = _config.nodelink.enabled;
     nodelink["channel"]        = _config.nodelink.channel;
     nodelink["gateway"]        = _config.nodelink.gateway;
+    nodelink["key"]            = _config.nodelink.key;
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
@@ -250,6 +251,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.nodelink.enabled = doc["nodelink"]["enabled"] | false;
         _config.nodelink.channel = doc["nodelink"]["channel"] | 0;
         _config.nodelink.gateway = doc["nodelink"]["gateway"] | false;
+        _config.nodelink.key     = doc["nodelink"]["key"] | String("");
     }
     return true;
 }

@@ -27,22 +27,28 @@ function updateAlertBadge() {
   navBadge.classList.toggle('hidden', activeAlerts.size === 0);
 }
 
+// Coerce a device-supplied value to a finite number, or null. Numeric fields
+// arrive from (semi-trusted) device heartbeats and must never reach innerHTML as
+// raw strings — this guarantees only computed numbers are interpolated.
+function asNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 function fmtUptime(ms) {
-  if (ms == null) return '—';
-  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  const n = asNum(ms);
+  if (n == null) return '—';
+  const s = Math.floor(n / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
   if (d) return `${d}d ${h}h`;
   if (h) return `${h}h ${m}m`;
   return `${m}m`;
 }
-function fmtHeap(b) { return b == null ? '—' : `${(b / 1024).toFixed(0)} KB`; }
+function fmtHeap(b) { const n = asNum(b); return n == null ? '—' : `${(n / 1024).toFixed(0)} KB`; }
 function fmtAgo(ts) {
-  if (!ts) return 'never';
-  const s = Math.floor((Date.now() - ts) / 1000);
+  const n = asNum(ts);
+  if (!n) return 'never';
+  const s = Math.floor((Date.now() - n) / 1000);
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   return `${Math.floor(s / 3600)}h ago`;
 }
-function rssiLabel(r) { return r == null || r === 0 ? '—' : `${r} dBm`; }
+function rssiLabel(r) { const n = asNum(r); return n == null || n === 0 ? '—' : `${n} dBm`; }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

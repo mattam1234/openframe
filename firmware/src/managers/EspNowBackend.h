@@ -11,7 +11,7 @@
 // and decoded later in loop().
 class EspNowBackend : public INodeLinkBackend {
 public:
-    bool begin(uint8_t channel) override;
+    bool begin(uint8_t channel, const String& key) override;
     void loop() override;
     bool sendTo(const uint8_t mac[6], const uint8_t* data, uint8_t len) override;
     bool sendBroadcast(const uint8_t* data, uint8_t len) override;
@@ -25,6 +25,8 @@ private:
 
     RawHandler _handler;
     uint8_t    _channel = 0;
+    bool       _encrypt = false;
+    uint8_t    _key[16] = {0};   // 16-byte LMK/PMK derived from the config key
     std::vector<std::array<uint8_t, 6>> _peers;  // MACs already registered
 
     static constexpr const char* TAG = "ESP-NOW";

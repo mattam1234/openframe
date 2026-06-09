@@ -156,6 +156,18 @@ describe('CMS integration', () => {
     assert.equal(lastCmd.payload.url, expected);
   });
 
+  it('provision endpoint returns a QR data URL and a decodable link', async () => {
+    const res = await postJson('/api/provision', { ssid: 'Net', password: 'pw', mqttHost: 'broker' });
+    const body = await res.json() as any;
+    assert.equal(res.status, 200);
+    assert.match(body.qr, /^data:image\/png;base64,/);
+    assert.match(body.url, /\/\?provision=[A-Za-z0-9_-]+#\/settings$/);
+    assert.deepEqual(body.config.wifi.networks, [{ ssid: 'Net', password: 'pw' }]);
+
+    const empty = await postJson('/api/provision', {});
+    assert.equal(empty.status, 400);
+  });
+
   it('SECURITY: firmware deploy is refused (500) without CMS_PUBLIC_URL and sends no command', async () => {
     lastCmd = null;
     const res = await fetch(`http://127.0.0.1:${NOURL_PORT}/api/firmware/fw-0.2.0.bin/deploy`, {

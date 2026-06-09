@@ -23,10 +23,11 @@ enum class NodeMsgType : uint8_t {
     Announce  = 1,  // payload: "<name>|<version>|<board>"
     Heartbeat = 2,  // payload: JSON metrics (reserved)
     Var       = 3,  // payload: "<name>=<value>"
-    Cmd       = 4,  // reserved — cross-node command
+    Cmd       = 4,  // cross-node command ("trigger=<actionId>")
     CmdResult = 5,  // reserved
     DataReq   = 6,  // reserved
     DataResp  = 7,  // reserved
+    TimeSync  = 8,  // payload: epoch seconds, from an authoritative (NTP) node
 };
 
 struct NodeMessage {
@@ -49,7 +50,9 @@ class INodeLinkBackend {
 public:
     using RawHandler = std::function<void(const uint8_t mac[6], const uint8_t* data, uint8_t len)>;
     virtual ~INodeLinkBackend() = default;
-    virtual bool begin(uint8_t channel) = 0;
+    // key: optional shared secret (empty = no encryption). Unicast peers are
+    // encrypted when set; broadcast is always plaintext (ESP-NOW limitation).
+    virtual bool begin(uint8_t channel, const String& key) = 0;
     virtual void loop() = 0;
     virtual bool sendTo(const uint8_t mac[6], const uint8_t* data, uint8_t len) = 0;
     virtual bool sendBroadcast(const uint8_t* data, uint8_t len) = 0;
@@ -96,9 +99,16 @@ private:
     uint8_t                     _channel = 0;
     uint32_t                    _seq = 0;
     uint32_t                    _lastAnnounceMs = 0;
+    uint32_t                    _lastHeartbeatMs = 0;
+    uint32_t                    _lastTimeSyncMs = 0;
     std::map<String, NodePeer>  _peers;
     std::vector<MessageHandler> _handlers;
 
-    static constexpr uint32_t ANNOUNCE_INTERVAL_MS = 10000;
+    void heartbeat();
+    void timeSync();
+
+    static constexpr uint32_t ANNOUNCE_INTERVAL_MS  = 10000;
+    static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 15000;
+    static constexpr uint32_t TIMESYNC_INTERVAL_MS  = 30000;
     static constexpr const char* TAG = "NodeLink";
 };

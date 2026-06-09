@@ -11,19 +11,23 @@ const connText = document.getElementById('conn-text');
 const FIELDS = [
   ['online', (v) => `<span class="status-dot ${v ? 'online' : 'offline'}"></span> ${v ? 'online' : 'offline'}`],
   ['name', text], ['deviceId', mono], ['board', text], ['version', mono], ['ip', mono],
-  ['rssi', (v) => (v ? `${v} dBm` : '—')],
-  ['freeHeap', (v) => (v != null ? `${(v / 1024).toFixed(0)} KB` : '—')],
-  ['uptimeMs', fmtUptime], ['cpuLoadPercent', (v) => (v != null ? `${v}%` : '—')],
+  ['rssi', (v) => { const n = asNum(v); return n == null || n === 0 ? '—' : `${n} dBm`; }],
+  ['freeHeap', (v) => { const n = asNum(v); return n == null ? '—' : `${(n / 1024).toFixed(0)} KB`; }],
+  ['uptimeMs', fmtUptime], ['cpuLoadPercent', (v) => { const n = asNum(v); return n == null ? '—' : `${n}%`; }],
   ['activeProfileId', text], ['link', text], ['via', mono],
   ['lastSeen', fmtTs], ['lastPresence', text], ['presenceAt', fmtTs],
 ];
 
+// Numeric device fields arrive from (semi-trusted) heartbeats — coerce to a finite
+// number so a non-numeric value can never be interpolated raw into innerHTML.
+function asNum(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 function text(v) { return v == null || v === '' ? '—' : escapeHtml(v); }
 function mono(v) { return v == null || v === '' ? '—' : `<span class="mono">${escapeHtml(v)}</span>`; }
-function fmtTs(v) { return v ? new Date(v).toLocaleString() : '—'; }
+function fmtTs(v) { const n = asNum(v); return n ? escapeHtml(new Date(n).toLocaleString()) : '—'; }
 function fmtUptime(ms) {
-  if (ms == null) return '—';
-  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  const n = asNum(ms);
+  if (n == null) return '—';
+  const s = Math.floor(n / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
 function escapeHtml(s) {
@@ -126,7 +130,7 @@ document.getElementById('push-config').onclick = () => {
 
 function drawSpark(canvasId, samples, pick) {
   const canvas = document.getElementById(canvasId);
-  const values = samples.map(pick).filter((v) => v != null && !Number.isNaN(v));
+  const values = samples.map(pick).map(Number).filter((v) => Number.isFinite(v));
   const ctx = canvas.getContext('2d');
   const w = canvas.width = canvas.clientWidth || 300;
   const h = canvas.height = 40;

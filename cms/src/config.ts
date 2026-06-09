@@ -23,6 +23,10 @@ export interface Config {
    *  (never derived from the request Host header — that would be spoofable and
    *  let an attacker redirect the fleet to malicious firmware). */
   publicUrl?: string;
+  /** If set, alerts are POSTed to this URL (Slack/Discord/generic webhook). */
+  alertWebhookUrl?: string;
+  /** If set, the API + dashboard require this shared token (else open on the LAN). */
+  authToken?: string;
 }
 
 function num(value: string | undefined, fallback: number): number {
@@ -45,5 +49,7 @@ export function loadConfig(): Config {
     alertLowHeapBytes: num(process.env.ALERT_LOW_HEAP_BYTES, 20_000),
     alertLowRssiDbm: num(process.env.ALERT_LOW_RSSI_DBM, -85),
     publicUrl: process.env.CMS_PUBLIC_URL || undefined,
+    alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || undefined,
+    authToken: process.env.CMS_AUTH_TOKEN || undefined,
   };
 }

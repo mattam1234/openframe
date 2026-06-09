@@ -9,6 +9,9 @@ import { TemplateStore } from './templates';
 import { HistoryStore } from './history';
 import { AlertManager } from './alerts';
 import { FirmwareStore } from './firmware-store';
+import { makeAuth, tokenMatches } from './auth';
+import { RateLimiter } from './rate-limit';
+import { buildProvisionConfig, provisionUrl, provisionQrDataUrl } from './provision';
 
 interface TargetSpec {
   deviceIds?: unknown;
@@ -60,10 +63,46 @@ export function createServer(
   alerts: AlertManager,
   firmware: FirmwareStore,
   publicUrl?: string,
+  authToken?: string,
 ): http.Server {
   const app = express();
+  const auth = makeAuth(authToken);
   app.use(express.json({ limit: '256kb' }));
+  // Static UI (incl. the login overlay) is served without auth; the API below is
+  // gated. Firmware binaries stay public so token-less devices can fetch them.
   app.use(express.static(path.join(__dirname, '..', 'public')));
+
+  // ── Auth (public endpoints) ──────────────────────────────────────────────────
+  app.get('/api/auth', (req, res) => {
+    res.json({ authRequired: auth.enabled, authed: auth.ok(req) });
+  });
+  // Throttle login attempts per client to make a configured token unbruteforceable.
+  const loginLimiter = new RateLimiter(10, 60_000);
+  app.post('/api/login', (req, res) => {
+    if (!auth.enabled) { res.json({ ok: true, authRequired: false }); return; }
+    if (!loginLimiter.allow(req.ip ?? 'unknown')) {
+      res.status(429).json({ ok: false, error: 'too many attempts, slow down' });
+      return;
+    }
+    const provided = (req.body ?? {}).token;
+    if (typeof provided === 'string' && tokenMatches(provided, authToken!)) {
+      res.setHeader('Set-Cookie', auth.loginCookie(authToken!));
+      res.json({ ok: true });
+    } else {
+      res.status(401).json({ ok: false, error: 'invalid token' });
+    }
+  });
+  app.post('/api/logout', (_req, res) => {
+    res.setHeader('Set-Cookie', auth.clearCookie());
+    res.json({ ok: true });
+  });
+
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, mqtt: bridge.connected, devices: registry.list().length });
+  });
+
+  // Everything under /api below this point requires a valid token (when enabled).
+  app.use('/api', auth.middleware);
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -71,10 +110,6 @@ export function createServer(
       filename: (_req, file, cb) => cb(null, FirmwareStore.sanitize(file.originalname)),
     }),
     limits: { fileSize: 8 * 1024 * 1024 },
-  });
-
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, mqtt: bridge.connected, devices: registry.list().length });
   });
 
   // ── Devices ────────────────────────────────────────────────────────────────
@@ -190,6 +225,20 @@ export function createServer(
     res.json({ template: template.id, count: results.length, ok: results.filter((r) => r.ok).length, results });
   });
 
+  // ── Provisioning: generate an onboarding QR for a new device's captive portal ─
+  app.post('/api/provision', async (req, res) => {
+    const body = req.body ?? {};
+    const config = buildProvisionConfig(body);
+    if (!config) {
+      res.status(400).json({ error: 'provide at least a WiFi SSID or an MQTT host' });
+      return;
+    }
+    const apHost = typeof body.apHost === 'string' && body.apHost ? body.apHost : '192.168.4.1';
+    const url = provisionUrl(apHost, config);
+    const qr = await provisionQrDataUrl(url);
+    res.json({ url, qr, config });
+  });
+
   // ── Fleet OTA: firmware hosting + deploy ─────────────────────────────────────
   app.get('/api/firmware', (_req, res) => {
     res.json({ files: firmware.list() });
@@ -253,7 +302,10 @@ export function createServer(
     }
   };
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    // The browser can't set an Authorization header on a WebSocket, but the
+    // login cookie rides along on the upgrade request — validate it.
+    if (!auth.ok(req as any)) { ws.close(1008, 'unauthorized'); return; }
     ws.send(JSON.stringify({ type: 'snapshot', devices: registry.list() }));
     ws.send(JSON.stringify({ type: 'alerts', active: alerts.activeAlerts() }));
   });

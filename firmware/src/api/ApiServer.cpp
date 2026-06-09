@@ -18,6 +18,7 @@
 #include "../managers/VariableManager.h"
 #include "../managers/WiFiManager.h"
 #include "../managers/ProfileManager.h"
+#include "../managers/TimeManager.h"
 #include "../managers/HealthMonitor.h"
 #include "../managers/NotificationManager.h"
 
@@ -905,6 +906,8 @@ String ApiServer::buildStatusJson() const {
     doc["sensorErrorCount"] = sensorErrorTotal;
 
     doc["activeProfileId"] = ProfileManager::instance().activeId();
+    doc["time"] = TimeManager::instance().epoch();
+    doc["timeSource"] = TimeManager::instance().source();
 
     return toJsonString(doc);
 }
@@ -1400,6 +1403,7 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         if (typeStr == "keyboard_shortcut") return ActionType::KeyboardShortcut;
         if (typeStr == "media_control") return ActionType::MediaControl;
         if (typeStr == "remote_action") return ActionType::RemoteAction;
+        if (typeStr == "sync_action") return ActionType::SyncAction;
         return ActionType::Delay;
     };
 

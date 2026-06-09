@@ -7,6 +7,7 @@
 #include "WiFiManager.h"
 #include "VariableManager.h"
 #include "EspNowBackend.h"
+#include "TimeManager.h"
 
 NodeLinkManager& NodeLinkManager::instance() {
     static NodeLinkManager inst;
@@ -31,7 +32,7 @@ void NodeLinkManager::begin() {
         handleRaw(mac, data, len);
     });
 
-    if (!_backend->begin(_channel)) {
+    if (!_backend->begin(_channel, cfg.key)) {
         LOG_E(TAG, "Backend failed to start");
         _backend = nullptr;
         _enabled = false;
@@ -49,6 +50,12 @@ void NodeLinkManager::loop() {
     const uint32_t now = millis();
     if (now - _lastAnnounceMs >= ANNOUNCE_INTERVAL_MS) {
         announce();
+    }
+    if (now - _lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+        heartbeat();
+    }
+    if (now - _lastTimeSyncMs >= TIMESYNC_INTERVAL_MS) {
+        timeSync();
     }
 }
 
@@ -127,6 +134,10 @@ void NodeLinkManager::route(const NodeMessage& msg) {
             peer.name = bar >= 0 ? msg.payload.substring(0, bar) : msg.payload;
             break;
         }
+        case NodeMsgType::TimeSync: {
+            TimeManager::instance().applyBeacon((uint32_t)msg.payload.toInt());
+            break;
+        }
         case NodeMsgType::Var: {
             // payload: "<name>=<value>" → mirror as node/<srcId>/<name>
             const int eq = msg.payload.indexOf('=');
@@ -152,6 +163,21 @@ void NodeLinkManager::announce() {
     // payload: "<name>|<version>|<board>"
     broadcast(NodeMsgType::Announce,
               cfg.device.name + "|" + OF_VERSION_STRING + "|" + cfg.device.boardType);
+}
+
+void NodeLinkManager::heartbeat() {
+    _lastHeartbeatMs = millis();
+    // payload: "heap=<freeHeap>;up=<uptimeMs>" — lets a gateway forward live
+    // metrics for infra-less leaves into the CMS.
+    broadcast(NodeMsgType::Heartbeat,
+              "heap=" + String(ESP.getFreeHeap()) + ";up=" + String(millis()));
+}
+
+void NodeLinkManager::timeSync() {
+    _lastTimeSyncMs = millis();
+    // Only an authoritative (NTP-synced) node beacons the cluster clock.
+    if (!TimeManager::instance().isAuthoritative()) return;
+    broadcast(NodeMsgType::TimeSync, String(TimeManager::instance().epoch()));
 }
 
 bool NodeLinkManager::idToMac(const String& id, uint8_t mac[6]) {

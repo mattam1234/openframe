@@ -12,6 +12,7 @@
 #include "managers/CommandManager.h"
 #include "managers/NodeLink.h"
 #include "managers/GatewayManager.h"
+#include "managers/TimeManager.h"
 #include "managers/HaManager.h"
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
@@ -51,6 +52,7 @@ void setup() {
 
     // ── Phase 2: Connectivity ─────────────────────────────────────────────────
     WiFiManager::instance().begin();
+    TimeManager::instance().begin();
     MqttManager::instance().begin();
     TelemetryManager::instance().begin();
     CommandManager::instance().begin();
@@ -81,6 +83,7 @@ void loop() {
     HealthMonitor::instance().markLoopStart();
 
     WiFiManager::instance().loop();
+    TimeManager::instance().loop();
     MqttManager::instance().loop();
     TelemetryManager::instance().loop();
     CommandManager::instance().loop();

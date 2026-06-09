@@ -49,14 +49,21 @@ static void of_espnow_recv(uint8_t* mac, uint8_t* data, uint8_t len) {
 #endif
 
 // ── Public ────────────────────────────────────────────────────────────────────
-bool EspNowBackend::begin(uint8_t channel) {
+bool EspNowBackend::begin(uint8_t channel, const String& key) {
     _channel = channel;
+    _encrypt = key.length() > 0;
+    if (_encrypt) {
+        // Derive a 16-byte key: copy up to 16 chars, zero-pad the rest.
+        memset(_key, 0, sizeof(_key));
+        memcpy(_key, key.c_str(), key.length() < 16 ? key.length() : 16);
+    }
 
 #if defined(ESP32)
     if (esp_now_init() != ESP_OK) {
         LOG_E(TAG, "esp_now_init failed");
         return false;
     }
+    if (_encrypt) esp_now_set_pmk(_key);
     esp_now_register_recv_cb(of_espnow_recv);
     // Lock the radio channel only when a fixed channel is requested; channel 0
     // means "follow the current WiFi channel" (stay on the AP's channel).
@@ -69,6 +76,7 @@ bool EspNowBackend::begin(uint8_t channel) {
         return false;
     }
     esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+    if (_encrypt) esp_now_set_kok(_key, 16);
     esp_now_register_recv_cb(of_espnow_recv);
     if (_channel > 0) {
         wifi_set_channel(_channel);
@@ -77,8 +85,9 @@ bool EspNowBackend::begin(uint8_t channel) {
     return false;
 #endif
 
-    ensurePeer(BROADCAST_MAC);
-    LOG_I(TAG, "ESP-NOW up (channel " + String(_channel ? _channel : 0) + ")");
+    ensurePeer(BROADCAST_MAC);  // broadcast peer is never encrypted
+    LOG_I(TAG, "ESP-NOW up (channel " + String(_channel ? _channel : 0) +
+                   (_encrypt ? ", encrypted unicast" : "") + ")");
     return true;
 }
 
@@ -113,18 +122,24 @@ bool EspNowBackend::ensurePeer(const uint8_t mac[6]) {
         if (p == key) return true;  // already registered
     }
 
+    // ESP-NOW can only encrypt unicast peers, never the broadcast address.
+    const bool isBroadcast = memcmp(mac, BROADCAST_MAC, 6) == 0;
+    const bool encryptPeer = _encrypt && !isBroadcast;
+
 #if defined(ESP32)
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, mac, 6);
     peer.channel = _channel;        // 0 = current channel
     peer.ifidx   = WIFI_IF_STA;
-    peer.encrypt = false;
+    peer.encrypt = encryptPeer;
+    if (encryptPeer) memcpy(peer.lmk, _key, 16);
     if (esp_now_add_peer(&peer) != ESP_OK) {
         LOG_W(TAG, "add_peer failed");
         return false;
     }
 #elif defined(ESP8266)
-    if (esp_now_add_peer(const_cast<uint8_t*>(mac), ESP_NOW_ROLE_COMBO, _channel, nullptr, 0) != 0) {
+    if (esp_now_add_peer(const_cast<uint8_t*>(mac), ESP_NOW_ROLE_COMBO, _channel,
+                         encryptPeer ? _key : nullptr, encryptPeer ? 16 : 0) != 0) {
         LOG_W(TAG, "add_peer failed");
         return false;
     }

@@ -72,6 +72,28 @@ header h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .topo-leaf { margin-left: 48px; color: var(--text); position: relative; }
 .topo-leaf::before { content: '└─'; position: absolute; left: -18px; color: var(--muted); }
 
+.login-overlay {
+  position: fixed; inset: 0; background: rgba(15, 17, 21, 0.92);
+  display: flex; align-items: center; justify-content: center; z-index: 1000;
+}
+.login-box {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 28px; width: 300px; display: flex; flex-direction: column; gap: 12px;
+}
+.login-box h2 { margin: 0 0 4px; font-size: 16px; }
+.login-box input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 9px 11px; font-size: 14px;
+}
+.login-box button {
+  background: var(--accent); color: #0b1220; border: none; border-radius: 6px;
+  padding: 9px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.login-err { color: var(--red); font-size: 13px; margin: 0; }
+
+.qr-wrap { display: flex; align-items: center; justify-content: center; min-height: 160px; padding: 12px; }
+.qr-wrap img { background: #fff; padding: 8px; border-radius: 8px; width: 220px; height: 220px; }
+
 .conn { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .conn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 .conn.up .dot { background: var(--green); }

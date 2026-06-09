@@ -37,11 +37,16 @@ telemetry contract.
   drives sparklines on the drill-in, and an alert engine raises/resolves
   offline + low-heap + low-RSSI alerts, shown live on the **Alerts** page with a
   nav badge.
+- **Alert webhooks** — set `ALERT_WEBHOOK_URL` to POST every alert (raise and
+  resolve) to Slack/Discord/a generic endpoint.
 - **Fleet-wide OTA** — upload a firmware `.bin` on the **Firmware** page; the CMS
   hosts it over plain HTTP and a deploy fans an `ota_url` command to the targets,
   which download + flash it. Watch the Fleet version column for rollout progress.
 - **Topology** — a page showing how the fleet connects: direct WiFi nodes and
   gateways with their ESP-NOW leaves nested beneath them.
+- **Provisioning QR** — the **Provision** page (`POST /api/provision`) makes an
+  onboarding QR; scan it on a phone joined to a new device's AP and the captive
+  portal opens pre-filled with the WiFi + MQTT settings to review and save.
 
 ## Quick start (Docker — bundled broker)
 
@@ -94,6 +99,8 @@ Environment variables (see `.env.example`):
 | `ALERT_LOW_HEAP_BYTES` | `20000` | Low-heap alert threshold |
 | `ALERT_LOW_RSSI_DBM` | `-85` | Weak-signal alert threshold |
 | `CMS_PUBLIC_URL` | _(required for OTA)_ | Base URL devices use to fetch OTA firmware (e.g. `http://192.168.1.50:4000`). Firmware deploy is refused if unset — it is **not** derived from the request host, to prevent fleet-wide malicious-firmware redirection |
+| `ALERT_WEBHOOK_URL` | _(disabled)_ | If set, every alert (raise + resolve) is POSTed here as JSON |
+| `CMS_AUTH_TOKEN` | _(open)_ | If set, the API + dashboard require this shared token |
 
 ## API
 
@@ -120,6 +127,8 @@ Environment variables (see `.env.example`):
   `/api/commands`).
 - `GET /api/devices/:id/history` → `{ samples: [{ t, freeHeap, rssi, cpuLoadPercent }] }`.
 - `GET /api/alerts` → `{ active: [...], recent: [...] }`.
+- `POST /api/provision` `{ ssid?, password?, mqttHost?, mqttPort?, baseTopic?, apHost? }`
+  → `{ url, qr (PNG data URL), config }` for device onboarding.
 - `GET /api/firmware` · `POST /api/firmware` (multipart `file`) ·
   `DELETE /api/firmware/:name` — firmware binary library; binaries served at
   `GET /firmware/:name`.
@@ -130,10 +139,18 @@ Environment variables (see `.env.example`):
 
 ## Security
 
-Ships LAN-trusted with anonymous MQTT and no dashboard auth — intended for a
-trusted network. Before exposing it more widely, enable broker auth (see
-`mosquitto/mosquitto.conf`) and put the dashboard behind a reverse proxy /
-auth layer.
+Ships LAN-trusted with anonymous MQTT and **no dashboard auth by default** —
+intended for a trusted network. To require auth, set `CMS_AUTH_TOKEN`: the API
+and dashboard then demand that shared token (sent as `Authorization: Bearer`
+or via an HttpOnly login cookie set by `POST /api/login`; the dashboard shows a
+login overlay). `GET /api/health` and firmware downloads at `/firmware/:name`
+stay public (devices have no token). Comparison is constant-time, and login
+attempts are rate-limited (10/min per client) to resist brute force. For broker
+auth, see `mosquitto/mosquitto.conf`; for stronger exposure, also put the CMS
+behind a reverse proxy with TLS.
+
+The server shuts down gracefully on SIGINT/SIGTERM (closes the MQTT connection),
+so `docker stop` leaves a clean last-will/disconnect.
 
 **OTA hardening.** Firmware deploy refuses to run unless `CMS_PUBLIC_URL` is set,
 and the OTA URL is never taken from the request `Host` header — otherwise a

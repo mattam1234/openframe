@@ -29,6 +29,8 @@ services:
       # see it (devices download firmware from here). Without it, OTA deploy is
       # refused. Not derived from the request host, by design (security).
       # CMS_PUBLIC_URL: "http://192.168.1.50:4000"
+      # Require a shared token for the API + dashboard (omit for open LAN access):
+      # CMS_AUTH_TOKEN: "change-me-to-a-long-random-string"
     volumes:
       - cms-data:/app/data
 

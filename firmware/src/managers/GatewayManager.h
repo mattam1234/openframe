@@ -27,6 +27,9 @@ private:
         String   name;
         String   version;
         String   board;
+        uint32_t freeHeap = 0;     // from NodeLink Heartbeat
+        uint32_t uptimeMs = 0;
+        bool     hasMetrics = false;
         bool     online = false;
         uint32_t lastSeenMs = 0;
         uint32_t lastStatusMs = 0;

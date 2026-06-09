@@ -233,6 +233,10 @@
                   <v-text-field v-model="step.node_id" label="Target node ID" hint="Device ID of the node to trigger" persistent-hint density="compact" class="mt-2" />
                   <v-text-field v-model="step.value" label="Remote action ID" hint="ID of the action to run on that node" persistent-hint density="compact" />
                 </template>
+                <template v-if="step.type === 'sync_action'">
+                  <v-text-field v-model="step.value" label="Action ID (all nodes)" hint="Action every node runs in unison" persistent-hint density="compact" class="mt-2" />
+                  <v-text-field v-model.number="step.delay_ms" label="Lead time (ms)" type="number" hint="Scheduling lead; needs cluster time sync" persistent-hint density="compact" />
+                </template>
               </v-card-text>
             </v-card>
           </div>
@@ -304,6 +308,7 @@ const actionStepTypes = [
   { value: 'keyboard_shortcut', label: 'Keyboard Shortcut' },
   { value: 'media_control', label: 'Media Control' },
   { value: 'remote_action', label: 'Remote Action (another node)' },
+  { value: 'sync_action', label: 'Sync Action (all nodes, timed)' },
 ]
 
 const editingAction = ref({ id: '', name: '', enabled: true, steps: [], _existing: false })

@@ -128,6 +128,13 @@
               color="primary"
               :disabled="!form.nodelink.enabled || !form.mqtt.enabled"
             />
+            <v-text-field
+              v-model="form.nodelink.key"
+              label="Shared key"
+              type="password"
+              hint="≤16 chars. Encrypts unicast mesh traffic; all nodes must match. Blank = off."
+              persistent-hint
+            />
           </v-card-text>
         </v-card>
       </v-col>
@@ -165,7 +172,7 @@ const form = reactive({
   mqtt: { enabled: false, host: '', port: 1883, user: '', password: '', base_topic: 'openframe' },
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
-  nodelink: { enabled: false, channel: 0, gateway: false },
+  nodelink: { enabled: false, channel: 0, gateway: false, key: '' },
 })
 
 const scanOptions = computed(() => {
@@ -214,6 +221,7 @@ function applyConfig(config) {
   form.nodelink.enabled = config?.nodelink?.enabled ?? false
   form.nodelink.channel = config?.nodelink?.channel ?? 0
   form.nodelink.gateway = config?.nodelink?.gateway ?? false
+  form.nodelink.key = config?.nodelink?.key || ''
 }
 
 function addManualNetwork() {
@@ -295,7 +303,39 @@ async function saveSettings() {
   }
 }
 
-onMounted(() => {
-  loadSettings()
+// Onboarding: a provisioning QR (from the CMS) opens this page with a base64url
+// `provision` param carrying a partial config. Decode it and pre-fill the form so
+// the operator just reviews and saves.
+function decodeProvision(param) {
+  const b64 = param.replace(/-/g, '+').replace(/_/g, '/')
+  return JSON.parse(decodeURIComponent(escape(atob(b64))))
+}
+
+function applyProvision() {
+  const param = new URLSearchParams(window.location.search).get('provision')
+  if (!param) return
+  try {
+    const cfg = decodeProvision(param)
+    if (Array.isArray(cfg?.wifi?.networks) && cfg.wifi.networks.length) {
+      form.wifi.networks = cfg.wifi.networks
+        .filter(n => String(n?.ssid || '').trim())
+        .map(n => ({ ssid: String(n.ssid || ''), password: String(n.password || '') }))
+      form.wifi.ap_mode = false
+    }
+    if (cfg?.mqtt) {
+      form.mqtt.enabled = cfg.mqtt.enabled ?? true
+      form.mqtt.host = cfg.mqtt.host || form.mqtt.host
+      form.mqtt.port = cfg.mqtt.port ?? form.mqtt.port
+      form.mqtt.base_topic = cfg.mqtt.base_topic || form.mqtt.base_topic
+    }
+    statusMessage.value = { type: 'info', text: 'Pre-filled from a provisioning link — review and Save.' }
+  } catch {
+    statusMessage.value = { type: 'error', text: 'Invalid provisioning link.' }
+  }
+}
+
+onMounted(async () => {
+  await loadSettings()
+  applyProvision()
 })
 </script>

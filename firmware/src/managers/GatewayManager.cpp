@@ -55,6 +55,13 @@ void GatewayManager::onNodeMessage(const NodeMessage& msg) {
             leaf.version = b2 >= 0 ? msg.payload.substring(b1 + 1, b2) : msg.payload.substring(b1 + 1);
             if (b2 >= 0) leaf.board = msg.payload.substring(b2 + 1);
         }
+    } else if (msg.type == NodeMsgType::Heartbeat) {
+        // payload: "heap=<n>;up=<n>"
+        const int hi = msg.payload.indexOf("heap=");
+        const int ui = msg.payload.indexOf("up=");
+        if (hi >= 0) leaf.freeHeap = (uint32_t)msg.payload.substring(hi + 5).toInt();
+        if (ui >= 0) leaf.uptimeMs = (uint32_t)msg.payload.substring(ui + 3).toInt();
+        leaf.hasMetrics = true;
     }
 
     if (!leaf.online) {
@@ -79,6 +86,10 @@ void GatewayManager::publishStatus(Leaf& leaf) {
     if (leaf.name.length())    doc["name"] = leaf.name;
     if (leaf.version.length()) doc["version"] = leaf.version;
     if (leaf.board.length())   doc["board"] = leaf.board;
+    if (leaf.hasMetrics) {
+        doc["freeHeap"] = leaf.freeHeap;
+        doc["uptimeMs"] = leaf.uptimeMs;
+    }
     doc["link"] = "esp-now";
     doc["via"]  = WiFiManager::instance().deviceId();
 

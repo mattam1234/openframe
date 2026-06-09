@@ -55,6 +55,10 @@ struct NodeLinkConfig {
     // When true (and MQTT is configured), this node bridges leaf nodes it hears
     // over ESP-NOW onto MQTT so they appear in the CMS. Typically one per mesh.
     bool    gateway = false;
+    // Optional shared key (≤16 chars) — when set, unicast ESP-NOW traffic is
+    // encrypted with the platform's PMK/LMK. Broadcasts stay plaintext (an
+    // ESP-NOW limitation). All nodes must share the same key.
+    String  key;
 };
 
 struct AppConfig {
