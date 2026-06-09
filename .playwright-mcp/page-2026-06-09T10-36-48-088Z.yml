@@ -1,0 +1,54 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - heading "← Fleet Device" [level=1] [ref=e3]:
+      - link "← Fleet" [ref=e4] [cursor=pointer]:
+        - /url: /
+      - text: Device
+    - navigation [ref=e5]:
+      - link "Fleet" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - link "Topology" [ref=e7] [cursor=pointer]:
+        - /url: topology.html
+      - link "Templates" [ref=e8] [cursor=pointer]:
+        - /url: templates.html
+      - link "Firmware" [ref=e9] [cursor=pointer]:
+        - /url: firmware.html
+      - link "Alerts" [ref=e10] [cursor=pointer]:
+        - /url: alerts.html
+    - generic [ref=e13]: live
+  - main [ref=e14]:
+    - paragraph [ref=e15]: Unknown device.
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - heading "Status" [level=2] [ref=e18]
+        - table:
+          - rowgroup
+        - heading "History" [level=3] [ref=e19]
+        - generic [ref=e20]: Free heap
+        - generic [ref=e22]: RSSI
+        - paragraph [ref=e24]: No telemetry history yet.
+      - generic [ref=e25]:
+        - heading "Tags" [level=2] [ref=e26]
+        - generic [ref=e28]:
+          - textbox "add tag" [ref=e29]
+          - button "Add" [ref=e30] [cursor=pointer]
+      - generic [ref=e31]:
+        - heading "Actions" [level=2] [ref=e32]
+        - generic [ref=e33]:
+          - button "Identify" [ref=e34] [cursor=pointer]
+          - button "Refresh status" [ref=e35] [cursor=pointer]
+          - button "Reboot" [ref=e36] [cursor=pointer]
+        - heading "Profiles" [level=3] [ref=e37]
+        - button "Load profiles" [ref=e39] [cursor=pointer]
+        - generic [ref=e40]:
+          - textbox "or type a profile id" [ref=e41]
+          - button "Activate" [ref=e42] [cursor=pointer]
+        - heading "Push config" [level=3] [ref=e43]
+        - paragraph [ref=e44]:
+          - text: Partial config JSON (same shape as
+          - code [ref=e45]: POST /api/config
+          - text: ). The device merges, saves, and reboots.
+        - 'textbox "{ \"device\": { \"name\": \"Lobby Frame\" } }" [ref=e46]'
+        - button "Push config & reboot" [ref=e48] [cursor=pointer]
+        - heading "Result" [level=3] [ref=e49]
+        - generic [ref=e50]: —

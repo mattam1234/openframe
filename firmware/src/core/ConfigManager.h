@@ -46,12 +46,28 @@ struct DeviceConfig {
     String   boardType;   // filled at runtime from compile-time define
 };
 
+// Peer-to-peer mesh link between nodes (ESP-NOW). See fleet-and-mesh-roadmap.md
+// Phase C. channel 0 = follow the current WiFi channel (so an STA-connected node
+// stays reachable on the AP's channel); set a fixed channel for infra-less leaves.
+struct NodeLinkConfig {
+    bool    enabled = false;
+    uint8_t channel = 0;
+    // When true (and MQTT is configured), this node bridges leaf nodes it hears
+    // over ESP-NOW onto MQTT so they appear in the CMS. Typically one per mesh.
+    bool    gateway = false;
+    // Optional shared key (≤16 chars) — when set, unicast ESP-NOW traffic is
+    // encrypted with the platform's PMK/LMK. Broadcasts stay plaintext (an
+    // ESP-NOW limitation). All nodes must share the same key.
+    String  key;
+};
+
 struct AppConfig {
-    DeviceConfig device;
-    WifiConfig   wifi;
-    MqttConfig   mqtt;
-    HaConfig     ha;
-    OtaConfig    ota;
+    DeviceConfig   device;
+    WifiConfig     wifi;
+    MqttConfig     mqtt;
+    HaConfig       ha;
+    OtaConfig      ota;
+    NodeLinkConfig nodelink;
 };
 
 // ── ConfigManager ─────────────────────────────────────────────────────────────

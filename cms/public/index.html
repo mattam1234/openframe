@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Fleet</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>OpenFrame Fleet</h1>
+    <nav class="nav"><a href="/" class="active">Fleet</a><a href="topology.html">Topology</a><a href="provision.html">Provision</a><a href="templates.html">Templates</a><a href="firmware.html">Firmware</a><a href="alerts.html">Alerts <span id="nav-badge" class="badge hidden">0</span></a></nav>
+    <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">connecting…</span></div>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <span id="summary" class="summary"></span>
+      <div class="bulk" id="bulk">
+        <span id="selcount" class="selcount">all devices</span>
+        <label class="chk"><input type="checkbox" id="online-only" checked /> online only</label>
+        <span class="sep"></span>
+        <button data-bulk="identify">Identify</button>
+        <button data-bulk="get_status">Refresh</button>
+        <button data-bulk="reboot">Reboot</button>
+        <span class="sep"></span>
+        <input id="tag-filter" class="tag-filter" type="text" placeholder="filter by tag(s)" />
+        <span class="sep"></span>
+        <select id="tpl-select"><option value="">Template…</option></select>
+        <button id="deploy-tpl">Deploy</button>
+      </div>
+    </div>
+
+    <p id="bulk-result" class="bulk-result"></p>
+
+    <table id="fleet">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" title="select all" /></th>
+          <th></th>
+          <th>Device</th>
+          <th>ID</th>
+          <th>Board</th>
+          <th>FW</th>
+          <th>IP</th>
+          <th>RSSI</th>
+          <th>Heap</th>
+          <th>Uptime</th>
+          <th>Profile</th>
+          <th>Tags</th>
+          <th>Last seen</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <p id="empty" class="empty">No devices yet. Once a device with MQTT enabled connects, it appears here.</p>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

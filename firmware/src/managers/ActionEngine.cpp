@@ -5,6 +5,8 @@
 #include "../hardware/DisplayManager.h"
 #include "../managers/HaManager.h"
 #include "../managers/MqttManager.h"
+#include "../managers/NodeLink.h"
+#include "../managers/TimeManager.h"
 
 namespace {
 
@@ -29,6 +31,8 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "notification")       return ActionType::Notification;
     if (s == "keyboard_shortcut")  return ActionType::KeyboardShortcut;
     if (s == "media_control")      return ActionType::MediaControl;
+    if (s == "remote_action")      return ActionType::RemoteAction;
+    if (s == "sync_action")        return ActionType::SyncAction;
     return ActionType::Delay;
 }
 
@@ -45,6 +49,8 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::Notification:      return "notification";
         case ActionType::KeyboardShortcut:  return "keyboard_shortcut";
         case ActionType::MediaControl:      return "media_control";
+        case ActionType::RemoteAction:      return "remote_action";
+        case ActionType::SyncAction:        return "sync_action";
         default:                            return "delay";
     }
 }
@@ -80,6 +86,7 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.message      = item["message"] | String("");
         s.keysCombo    = item["keys"] | String("");
         s.mediaCommand = item["media_command"] | String("");
+        s.nodeId       = item["node_id"] | String("");
         out.push_back(s);
     }
 }
@@ -116,6 +123,8 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
             case ActionType::Notification:      obj["message"] = s.message; break;
             case ActionType::KeyboardShortcut:  obj["keys"] = s.keysCombo; break;
             case ActionType::MediaControl:      obj["media_command"] = s.mediaCommand; break;
+            case ActionType::RemoteAction:      obj["node_id"] = s.nodeId; obj["value"] = s.value; break;
+            case ActionType::SyncAction:        obj["value"] = s.value; obj["delay_ms"] = s.delayMs; break;
         }
     }
 }
@@ -203,6 +212,27 @@ bool ActionEngine::begin() {
         EventBus::instance().subscribe(EventType::ActionTriggered, [](const Event& event) {
             ActionEngine::instance().onEventTriggered(event);
         });
+
+        // Actions requested by another node over NodeLink:
+        //   "trigger=<id>"          → run now
+        //   "trigger@<epoch>=<id>"  → run at a shared cluster-clock epoch (sync effect)
+        NodeLinkManager::instance().onMessage([](const NodeMessage& msg) {
+            if (msg.type != NodeMsgType::Cmd) return;
+            if (msg.payload.startsWith("trigger@")) {
+                const int eq = msg.payload.indexOf('=');
+                if (eq < 0) return;
+                const uint32_t epoch = (uint32_t)msg.payload.substring(8, eq).toInt();
+                ActionEngine::instance().scheduleAction(epoch, msg.payload.substring(eq + 1));
+            } else if (msg.payload.startsWith("trigger=")) {
+                const String actionId = msg.payload.substring(8);
+                String error;
+                if (ActionEngine::instance().triggerAction(actionId, error)) {
+                    LOG_I(TAG, "Remote-triggered '" + actionId + "' from " + msg.srcId);
+                } else {
+                    LOG_W(TAG, "Remote trigger '" + actionId + "' from " + msg.srcId + " failed: " + error);
+                }
+            }
+        });
     }
 
     LOG_I(TAG, "Initialised (" + String(_actions.size()) + " actions)");
@@ -210,8 +240,25 @@ bool ActionEngine::begin() {
 }
 
 void ActionEngine::loop() {
-    // ActionEngine is event-driven; all execution is triggered by run() calls.
-    // No periodic polling is needed.
+    if (_scheduled.empty()) return;
+    // Fire scheduled (synchronized) triggers once the cluster clock reaches them.
+    // If time is unknown (epoch 0), fire best-effort immediately.
+    const uint32_t now = TimeManager::instance().epoch();
+    for (size_t i = 0; i < _scheduled.size();) {
+        if (now == 0 || now >= _scheduled[i].epoch) {
+            const String id = _scheduled[i].actionId;
+            _scheduled.erase(_scheduled.begin() + i);
+            String error;
+            triggerAction(id, error);
+        } else {
+            ++i;
+        }
+    }
+}
+
+void ActionEngine::scheduleAction(uint32_t epoch, const String& actionId) {
+    if (!actionId.length()) return;
+    _scheduled.push_back({ epoch, actionId });
 }
 
 bool ActionEngine::registerAction(const ActionConfig& action) {
@@ -304,6 +351,43 @@ void ActionEngine::registerBuiltInExecutors() {
             return false;
         }
         MqttManager::instance().publish(step.topic, step.body);
+        return true;
+    });
+
+    // Cross-node automation: ask another node (by deviceId) to run one of its
+    // actions, over NodeLink/ESP-NOW. `value` carries the remote action id.
+    runner.registerExecutor(ActionType::RemoteAction, [](const ActionStep& step, String& error) -> bool {
+        if (!step.nodeId.length() || !step.value.length()) {
+            error = "RemoteAction needs node_id and value (remote action id)";
+            return false;
+        }
+        if (!NodeLinkManager::instance().enabled()) {
+            error = "NodeLink disabled";
+            return false;
+        }
+        if (!NodeLinkManager::instance().send(step.nodeId, NodeMsgType::Cmd, "trigger=" + step.value)) {
+            error = "send to " + step.nodeId + " failed";
+            return false;
+        }
+        return true;
+    });
+
+    // Synchronized effect: tell every node to run an action at a shared future
+    // cluster-clock instant, so e.g. LED animations fire in unison. `value` is the
+    // action id; `delay_ms` is the lead time (default 2 s).
+    runner.registerExecutor(ActionType::SyncAction, [](const ActionStep& step, String& error) -> bool {
+        if (!step.value.length()) {
+            error = "SyncAction needs value (action id)";
+            return false;
+        }
+        if (!NodeLinkManager::instance().enabled()) {
+            error = "NodeLink disabled";
+            return false;
+        }
+        const uint32_t leadMs = step.delayMs ? step.delayMs : 2000;
+        const uint32_t fireEpoch = TimeManager::instance().epoch() + leadMs / 1000;
+        NodeLinkManager::instance().broadcast(NodeMsgType::Cmd, "trigger@" + String(fireEpoch) + "=" + step.value);
+        ActionEngine::instance().scheduleAction(fireEpoch, step.value);
         return true;
     });
 
@@ -402,7 +486,10 @@ void ActionEngine::registerBuiltInExecutors() {
             return false;
         }
         HTTPClient http;
-        http.begin(step.url);
+        // Portable form: the URL-only begin() overload is an obsolete hard error
+        // on the ESP8266 core. begin(WiFiClient, url) works on both platforms.
+        WiFiClient netClient;
+        http.begin(netClient, step.url);
         http.addHeader("Content-Type", "application/json");
         int code = 0;
         if (step.method == "POST") {

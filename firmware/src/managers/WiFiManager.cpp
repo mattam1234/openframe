@@ -138,7 +138,7 @@ void WiFiManager::startSTA() {
 }
 
 void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
-    wifi_mode_t originalMode = WiFi.getMode();
+    const auto originalMode = WiFi.getMode();
     bool apWasEnabled = originalMode == WIFI_AP || originalMode == WIFI_AP_STA;
     if (originalMode == WIFI_AP) {
         WiFi.mode(WIFI_AP_STA);
@@ -156,7 +156,7 @@ void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
         entry["ssid"] = ssid;
         entry["rssi"] = WiFi.RSSI(i);
         entry["channel"] = WiFi.channel(i);
-        entry["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+        entry["secure"] = WiFi.encryptionType(i) != OF_WIFI_AUTH_OPEN;
     }
     WiFi.scanDelete();
 
@@ -183,6 +183,21 @@ String WiFiManager::buildApSsid() const {
     char suffix[5];
     snprintf(suffix, sizeof(suffix), "%02X%02X", mac[4], mac[5]);
     return String(OF_AP_SSID_PREFIX) + String(suffix);
+}
+
+const String& WiFiManager::deviceId() const {
+    // The MAC is burned in efuse and readable before any WiFi connection, so the
+    // id is stable from first boot. Cache it on first use.
+    static String id;
+    if (id.isEmpty()) {
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        char buf[13];
+        snprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        id = String(buf);
+    }
+    return id;
 }
 
 bool WiFiManager::hasConfiguredNetworks() const {

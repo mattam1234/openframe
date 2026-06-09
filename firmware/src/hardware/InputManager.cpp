@@ -1,5 +1,6 @@
 #include "InputManager.h"
 #include <map>
+#include "../core/PlatformCompat.h"
 
 InputManager& InputManager::instance() {
     static InputManager inst;

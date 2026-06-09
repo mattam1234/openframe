@@ -4,7 +4,11 @@
 #include <ESPAsyncWebServer.h>
 #include <ElegantOTA.h>
 #include <ArduinoJson.h>
+#if defined(ESP8266)
+#include <Updater.h>
+#else
 #include <Update.h>
+#endif
 #include "../core/Logger.h"
 #include "../core/EventBus.h"
 #include "../core/ConfigManager.h"

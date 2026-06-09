@@ -15,11 +15,13 @@ OpenFrame has completed the planned MVP implementation through phases 0–10.
 - ✅ Connectivity: WiFi captive portal, MQTT, Home Assistant, OTA
 - ✅ Hardware layer: inputs, outputs, sensors, displays, touch, I2C modules
 - ✅ Automation: action engine, conditions, macros, notifications
-- ✅ Device API: REST endpoints, WebSocket updates, LittleFS-backed config
-- ✅ Web UI: dashboard, layout designer, screen designer, action manager, settings
+- ✅ Device API: REST endpoints, WebSocket updates, LittleFS-backed config, filesystem browser API
+- ✅ Web UI: dashboard (with storage health), layout designer, screen designer, action manager, filesystem browser, settings
 - ✅ Profiles, templates, device health monitoring, and plugin architecture foundations
+- 🚧 Fleet management & multi-node mesh (in progress): MQTT presence/heartbeat, a self-hosted CMS, ESP-NOW node linking, and a gateway bridge
 
-See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detailed completion checklist.
+See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the MVP completion checklist and
+[`docs/fleet-and-mesh-roadmap.md`](docs/fleet-and-mesh-roadmap.md) for the fleet/mesh roadmap and status.
 
 ---
 
@@ -32,10 +34,13 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detaile
 - WiFi first-boot AP + captive portal with reconnect and fallback logic
 - MQTT integration and Home Assistant MQTT discovery/service handling
 - OTA upload support and GitHub release check endpoint
-- Action engine with delays, HTTP, MQTT, variable, Home Assistant, page, and notification actions
+- Action engine with delays, HTTP, MQTT, variable, Home Assistant, page, notification, and cross-node remote actions
 - Macro execution and action history tracking
 - Health monitoring for heap, PSRAM, CPU, WiFi RSSI, reboot reason, and uptime
 - Notification delivery to displays and the web UI
+- Fleet telemetry: stable MAC-derived `deviceId`, MQTT presence (retained birth + Last-Will) and a periodic heartbeat
+- Remote control over MQTT (`identify`, `get_status`, `reboot`, `activate_profile`, `apply_config`)
+- ESP-NOW **node link** (`NodeLink`): peer-to-peer messaging, remote variable mirroring (`node/<id>/<name>`), and a gateway role that bridges leaf nodes onto MQTT
 
 ### Hardware Support
 
@@ -48,7 +53,7 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detaile
 
 ### Web UI
 
-- Dashboard for live device status and health
+- Dashboard for live device status, health, and LittleFS storage usage
 - Device Layout Designer
 - Screen Designer
 - Sensor Dashboard
@@ -56,7 +61,24 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the detaile
 - Module Manager
 - Home Assistant Manager
 - Logs Viewer
+- Filesystem Browser — browse, inspect/edit, create, upload, download, rename, and delete files stored on the device (LittleFS)
 - Settings, profile management, and template import/export
+
+### Fleet Management (CMS)
+
+A self-hosted Central Management System in [`cms/`](cms/README.md) (Node + TypeScript) for running a fleet:
+
+- Live **fleet grid** built from devices' MQTT presence/heartbeat, with offline detection
+- **Device drill-in** with telemetry sparklines and remote actions
+- **Remote reconfigure** — push config, switch profiles, reboot, identify
+- **Bulk / group push** and a **template library**, targetable by device, tag, or whole fleet
+- **Tags** for grouping; **alerts** (offline, low heap, weak signal) with a live alerts view
+- **Fleet-wide OTA** — host firmware in the CMS and push it to devices over the LAN
+- **Topology view** — direct WiFi nodes and gateways with their ESP-NOW leaves nested
+- **QR provisioning** — generate an onboarding QR that pre-fills a new device's setup
+- ESP-NOW leaf nodes appear automatically when a gateway node bridges them
+- Optional shared-token auth (`CMS_AUTH_TOKEN`) and alert webhooks
+- Bundled Mosquitto via `docker compose` for zero-config first run; covered by a `node:test` suite
 
 ---
 
@@ -76,8 +98,13 @@ openframe/
 ├── frontend/               # Vue 3 + Vite + Pinia + Vuetify UI
 │   ├── package.json
 │   └── src/
+├── cms/                    # Self-hosted Central Management System (Node + TypeScript)
+│   ├── src/                # MQTT bridge, device registry, REST/WS API, templates, alerts
+│   ├── public/             # Fleet dashboard, device drill-in, templates, alerts pages
+│   └── docker-compose.yml  # CMS + bundled Mosquitto broker
 └── docs/
     ├── implementation-plan.md
+    ├── fleet-and-mesh-roadmap.md
     ├── plugin-architecture.md
     └── product-specifications.md
 ```

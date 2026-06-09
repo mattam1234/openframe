@@ -32,6 +32,11 @@ public:
     // Returns the current IP address as a string
     String localIP() const;
 
+    // Stable, MAC-derived device identifier (12 lowercase hex chars, no
+    // separators). Unique per device and constant across reboots/reflashes —
+    // used as the node's identity in the fleet MQTT topic space and the CMS.
+    const String& deviceId() const;
+
     // Force switch to AP mode (e.g. after repeated STA failures)
     void startAP();
 

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Device</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1><a href="/" class="back">← Fleet</a> <span id="title">Device</span></h1>
+    <nav class="nav"><a href="/">Fleet</a><a href="topology.html">Topology</a><a href="provision.html">Provision</a><a href="templates.html">Templates</a><a href="firmware.html">Firmware</a><a href="alerts.html">Alerts</a></nav>
+    <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">connecting…</span></div>
+  </header>
+
+  <main>
+    <p id="notfound" class="empty hidden">Unknown device.</p>
+
+    <section class="detail">
+      <div class="panel">
+        <h2>Status</h2>
+        <table class="kv"><tbody id="fields"></tbody></table>
+
+        <h3>History</h3>
+        <div class="spark-label">Free heap</div>
+        <canvas id="spark-heap" class="spark"></canvas>
+        <div class="spark-label">RSSI</div>
+        <canvas id="spark-rssi" class="spark"></canvas>
+        <p id="history-empty" class="hint">No telemetry history yet.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Tags</h2>
+        <div id="tag-chips" class="tag-chips"></div>
+        <div class="row">
+          <input id="new-tag" type="text" placeholder="add tag" />
+          <button id="add-tag">Add</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Actions</h2>
+        <div class="actions">
+          <button data-cmd="identify">Identify</button>
+          <button data-cmd="get_status">Refresh status</button>
+          <button data-cmd="reboot">Reboot</button>
+        </div>
+
+        <h3>Profiles</h3>
+        <div class="row">
+          <button id="load-profiles">Load profiles</button>
+          <span id="profiles-msg" class="hint"></span>
+        </div>
+        <div id="profiles-list" class="profiles"></div>
+        <div class="row">
+          <input id="profile-id" type="text" placeholder="or type a profile id" />
+          <button id="activate-profile">Activate</button>
+        </div>
+
+        <h3>Push config</h3>
+        <p class="hint">Partial config JSON (same shape as <code>POST /api/config</code>). The device merges, saves, and reboots.</p>
+        <textarea id="config-json" rows="8" placeholder='{ "device": { "name": "Lobby Frame" } }'></textarea>
+        <div class="row"><button id="push-config">Push config &amp; reboot</button></div>
+
+        <h3>Result</h3>
+        <pre id="result" class="result">—</pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="device.js"></script>
+</body>
+</html>

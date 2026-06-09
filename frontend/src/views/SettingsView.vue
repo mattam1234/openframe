@@ -28,6 +28,13 @@
           <v-card-text>
             <v-text-field v-model="form.device.name" label="Device Name" />
             <v-text-field v-model="form.device.board" label="Board" readonly />
+            <v-text-field
+              v-model="form.device.id"
+              label="Device ID"
+              readonly
+              hint="Stable MAC-derived identifier used by the fleet/CMS"
+              persistent-hint
+            />
           </v-card-text>
         </v-card>
       </v-col>
@@ -105,6 +112,34 @@
       </v-col>
 
       <v-col cols="12" md="6">
+        <v-card title="Node Link (mesh)">
+          <v-card-text>
+            <v-switch v-model="form.nodelink.enabled" label="Enable ESP-NOW node link" color="primary" />
+            <v-text-field
+              v-model.number="form.nodelink.channel"
+              label="Channel"
+              type="number"
+              hint="0 = follow the current WiFi channel. All linked nodes must share a channel."
+              persistent-hint
+            />
+            <v-switch
+              v-model="form.nodelink.gateway"
+              label="Act as gateway (bridge leaf nodes to MQTT/CMS)"
+              color="primary"
+              :disabled="!form.nodelink.enabled || !form.mqtt.enabled"
+            />
+            <v-text-field
+              v-model="form.nodelink.key"
+              label="Shared key"
+              type="password"
+              hint="≤16 chars. Encrypts unicast mesh traffic; all nodes must match. Blank = off."
+              persistent-hint
+            />
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
         <v-card title="Integrations">
           <v-card-text>
             <v-switch v-model="form.ha.enabled" label="Home Assistant Discovery" color="primary" />
@@ -132,11 +167,12 @@ const scannedNetworks = ref([])
 const selectedScannedSsid = ref('')
 
 const form = reactive({
-  device: { name: '', board: '' },
+  device: { name: '', board: '', id: '' },
   wifi: { ssid: '', password: '', ap_mode: true, networks: [] },
   mqtt: { enabled: false, host: '', port: 1883, user: '', password: '', base_topic: 'openframe' },
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
+  nodelink: { enabled: false, channel: 0, gateway: false, key: '' },
 })
 
 const scanOptions = computed(() => {
@@ -152,6 +188,7 @@ const scanOptions = computed(() => {
 function applyConfig(config) {
   form.device.name = config?.device?.name || ''
   form.device.board = config?.device?.board || ''
+  form.device.id = config?.device?.id || ''
   form.wifi.ssid = config?.wifi?.ssid || ''
   form.wifi.password = config?.wifi?.password || ''
   form.wifi.ap_mode = config?.wifi?.ap_mode ?? true
@@ -181,6 +218,10 @@ function applyConfig(config) {
   form.ota.enabled = config?.ota?.enabled ?? true
   form.ota.github_repo = config?.ota?.github_repo || ''
   form.ota.auto_check = config?.ota?.auto_check ?? false
+  form.nodelink.enabled = config?.nodelink?.enabled ?? false
+  form.nodelink.channel = config?.nodelink?.channel ?? 0
+  form.nodelink.gateway = config?.nodelink?.gateway ?? false
+  form.nodelink.key = config?.nodelink?.key || ''
 }
 
 function addManualNetwork() {
@@ -262,7 +303,39 @@ async function saveSettings() {
   }
 }
 
-onMounted(() => {
-  loadSettings()
+// Onboarding: a provisioning QR (from the CMS) opens this page with a base64url
+// `provision` param carrying a partial config. Decode it and pre-fill the form so
+// the operator just reviews and saves.
+function decodeProvision(param) {
+  const b64 = param.replace(/-/g, '+').replace(/_/g, '/')
+  return JSON.parse(decodeURIComponent(escape(atob(b64))))
+}
+
+function applyProvision() {
+  const param = new URLSearchParams(window.location.search).get('provision')
+  if (!param) return
+  try {
+    const cfg = decodeProvision(param)
+    if (Array.isArray(cfg?.wifi?.networks) && cfg.wifi.networks.length) {
+      form.wifi.networks = cfg.wifi.networks
+        .filter(n => String(n?.ssid || '').trim())
+        .map(n => ({ ssid: String(n.ssid || ''), password: String(n.password || '') }))
+      form.wifi.ap_mode = false
+    }
+    if (cfg?.mqtt) {
+      form.mqtt.enabled = cfg.mqtt.enabled ?? true
+      form.mqtt.host = cfg.mqtt.host || form.mqtt.host
+      form.mqtt.port = cfg.mqtt.port ?? form.mqtt.port
+      form.mqtt.base_topic = cfg.mqtt.base_topic || form.mqtt.base_topic
+    }
+    statusMessage.value = { type: 'info', text: 'Pre-filled from a provisioning link — review and Save.' }
+  } catch {
+    statusMessage.value = { type: 'error', text: 'Invalid provisioning link.' }
+  }
+}
+
+onMounted(async () => {
+  await loadSettings()
+  applyProvision()
 })
 </script>

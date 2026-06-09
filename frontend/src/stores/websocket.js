@@ -34,6 +34,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
     socket.onclose = () => {
       connected.value = false
+      // Coalesce repeated close events into a single pending reconnect so we
+      // don't stack timers. The device pushes a fresh state snapshot on every
+      // WS connect, so reconnecting is all the resync we need.
+      if (reconnectTimer) clearTimeout(reconnectTimer)
       reconnectTimer = setTimeout(connect, 3000)
     }
 

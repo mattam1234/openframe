@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Provision</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>OpenFrame Fleet</h1>
+    <nav class="nav">
+      <a href="/">Fleet</a>
+      <a href="topology.html">Topology</a>
+      <a href="provision.html" class="active">Provision</a>
+      <a href="templates.html">Templates</a>
+      <a href="firmware.html">Firmware</a>
+      <a href="alerts.html">Alerts</a>
+    </nav>
+    <div class="conn"></div>
+  </header>
+
+  <main>
+    <p class="hint">Generate an onboarding QR for a new device. Join the device's WiFi AP on your phone,
+      scan this QR, and its setup page opens pre-filled with these settings — review and save.</p>
+
+    <section class="detail">
+      <div class="panel">
+        <h2>Settings</h2>
+        <h3>WiFi SSID</h3>
+        <input id="ssid" type="text" placeholder="network the device should join" />
+        <h3>WiFi password</h3>
+        <input id="password" type="password" placeholder="(blank for open)" />
+        <h3>MQTT host</h3>
+        <input id="mqttHost" type="text" placeholder="broker IP / hostname" />
+        <div class="row">
+          <div style="flex:1"><h3>MQTT port</h3><input id="mqttPort" type="number" value="1883" /></div>
+          <div style="flex:1"><h3>Base topic</h3><input id="baseTopic" type="text" value="openframe" /></div>
+        </div>
+        <h3>Device AP address</h3>
+        <input id="apHost" type="text" value="192.168.4.1" />
+        <div class="row"><button id="generate">Generate QR</button><span id="msg" class="hint"></span></div>
+      </div>
+
+      <div class="panel">
+        <h2>Onboarding QR</h2>
+        <div id="qr-wrap" class="qr-wrap"><span class="hint">Fill in settings and generate.</span></div>
+        <h3>Link</h3>
+        <pre id="url" class="result">—</pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="provision.js"></script>
+</body>
+</html>

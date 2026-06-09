@@ -2,8 +2,10 @@
 
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <functional>
 #include "../core/PlatformCompat.h"
 #include "../OpenFrameConfig.h"
+#include "../core/StorageManager.h"
 #include "../core/ConfigManager.h"
 #include "../hardware/InputManager.h"
 #include "../hardware/OutputManager.h"
@@ -16,10 +18,83 @@
 #include "../managers/VariableManager.h"
 #include "../managers/WiFiManager.h"
 #include "../managers/ProfileManager.h"
+#include "../managers/TimeManager.h"
 #include "../managers/HealthMonitor.h"
 #include "../managers/NotificationManager.h"
 
 namespace {
+
+// Maximum accepted POST/WS payload. Bodies above this are rejected before they
+// can exhaust the heap on a memory-constrained device.
+constexpr size_t MAX_POST_PAYLOAD = 64 * 1024;
+
+// Free the accumulated body buffer stashed in request->_tempObject. The library
+// destructor only free()s _tempObject (it never runs the String destructor), so
+// we must delete it ourselves — both on normal completion and, via onDisconnect,
+// when the client aborts mid-upload (otherwise the String's heap buffer leaks).
+void freeTempStringBody(AsyncWebServerRequest* request) {
+    if (request->_tempObject) {
+        delete static_cast<String*>(request->_tempObject);
+        request->_tempObject = nullptr;
+    }
+}
+
+using JsonBodyHandler = std::function<void(AsyncWebServerRequest*, const String&)>;
+
+// Register an HTTP_POST route that accumulates the request body (with a hard
+// size cap) and invokes `handler` once the full body has arrived. Centralizes
+// the body-buffering boilerplate and guarantees the temp buffer is freed.
+void registerJsonPost(AsyncWebServer& server, const char* path, JsonBodyHandler handler) {
+    server.on(path, HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [handler](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            // Oversized: don't buffer; respond 413 once the stream completes.
+            if (total > MAX_POST_PAYLOAD) {
+                if (index + len >= total) {
+                    request->send(413, "application/json",
+                                  "{\"error\":\"Payload too large\"}");
+                }
+                return;
+            }
+
+            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (!body) return;
+            if (index == 0) {
+                body->reserve(total);
+                request->_tempObject = body;
+                request->onDisconnect([request]() { freeTempStringBody(request); });
+            }
+            body->concat(reinterpret_cast<const char*>(data), len);
+
+            if (index + len == total) {
+                handler(request, *body);
+                freeTempStringBody(request);
+            }
+        });
+}
+
+// Validate a user-supplied filesystem path for the FS browser API. Rejects
+// directory traversal, empty/over-long paths, and non-printable characters.
+bool isSafeFsPath(const String& path) {
+    if (path.length() == 0 || path.length() > 128) return false;
+    if (path[0] != '/') return false;
+    if (path.indexOf("..") >= 0) return false;
+    if (path.indexOf("//") >= 0) return false;
+    // Reject directory paths (trailing slash) so upload/delete never target a dir.
+    if (path.length() > 1 && path.endsWith("/")) return false;
+    for (size_t i = 0; i < path.length(); ++i) {
+        const char c = path[i];
+        if (c < 0x20 || c > 0x7E) return false;
+    }
+    return true;
+}
+
+// Paths the generic FS API must never modify or delete. Web UI assets are owned
+// by the OTA/filesystem image; the active config has its own dedicated endpoint.
+bool isProtectedFsPath(const String& path) {
+    return path == "/www" || path.startsWith("/www/");
+}
 
 String formatUptime(uint32_t uptimeMs) {
     const uint32_t totalSeconds = uptimeMs / 1000;
@@ -139,6 +214,12 @@ const char* contentTypeForPath(const String& path) {
 }
 
 void sendStaticFile(AsyncWebServerRequest* request, const String& path, const char* cacheControl) {
+    // Reject directory traversal before touching the filesystem.
+    if (path.indexOf("..") >= 0) {
+        request->send(400, "text/plain", "Bad request");
+        return;
+    }
+
     String filePath = path;
     bool gzip = false;
 
@@ -164,6 +245,7 @@ void sendStaticFile(AsyncWebServerRequest* request, const String& path, const ch
 
     auto* response = request->beginResponse(LittleFS, filePath, contentTypeForPath(typePath));
     response->addHeader("Cache-Control", cacheControl);
+    response->addHeader("X-Content-Type-Options", "nosniff");
     if (gzip) {
         response->addHeader("Content-Encoding", "gzip");
     }
@@ -265,42 +347,16 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendWifiScan(request);
     });
-    server.on("/api/config", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleConfigUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/config", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleConfigUpdate(request, body);
+    });
 
     server.on("/api/variables", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendVariables(request);
     });
-    server.on("/api/variables", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleVariablesUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/variables", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleVariablesUpdate(request, body);
+    });
 
     server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendLogs(request);
@@ -313,82 +369,30 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/inputs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendInputs(request);
     });
-    server.on("/api/inputs", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleInputsUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/inputs", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleInputsUpdate(request, body);
+    });
 
     server.on("/api/outputs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendOutputs(request);
     });
-    server.on("/api/outputs", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleOutputsUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/outputs", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleOutputsUpdate(request, body);
+    });
 
     server.on("/api/sensors", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendSensors(request);
     });
-    server.on("/api/sensors", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleSensorsUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/sensors", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleSensorsUpdate(request, body);
+    });
 
     server.on("/api/displays", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendDisplays(request);
     });
-    server.on("/api/displays", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleDisplaysUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/displays", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleDisplaysUpdate(request, body);
+    });
     server.on("/api/displays/pages", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendDisplayPages(request);
     });
@@ -400,79 +404,27 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/actions", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendActions(request);
     });
-    server.on("/api/actions", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleActionsUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/actions", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleActionsUpdate(request, body);
+    });
 
     server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendMacros(request);
     });
-    server.on("/api/macros", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleMacrosUpdate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/macros", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleMacrosUpdate(request, body);
+    });
 
     // ── Profiles ──────────────────────────────────────────────────────────────
     server.on("/api/profiles", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendProfiles(request);
     });
-    server.on("/api/profiles", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleProfileCreate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
-    server.on("/api/profiles/activate", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleProfileActivate(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/profiles", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleProfileCreate(request, body);
+    });
+    registerJsonPost(server, "/api/profiles/activate", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleProfileActivate(request, body);
+    });
     server.on("/api/profiles/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
         const String url = request->url();
         const String profileId = url.substring(url.lastIndexOf('/') + 1);
@@ -483,38 +435,12 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/templates", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendTemplates(request);
     });
-    server.on("/api/templates/export", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleTemplateExport(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
-    server.on("/api/templates/import", HTTP_POST,
-        [](AsyncWebServerRequest*) {},
-        nullptr,
-        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-            String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
-            if (index == 0) {
-                body->reserve(total);
-                request->_tempObject = body;
-            }
-            body->concat(reinterpret_cast<const char*>(data), len);
-            if (index + len == total) {
-                ApiServer::instance().handleTemplateImport(request, *body);
-                delete body;
-                request->_tempObject = nullptr;
-            }
-        });
+    registerJsonPost(server, "/api/templates/export", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleTemplateExport(request, body);
+    });
+    registerJsonPost(server, "/api/templates/import", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleTemplateImport(request, body);
+    });
     server.on("/api/templates/*", HTTP_GET, [](AsyncWebServerRequest* request) {
         const String url = request->url();
         const String templateId = url.substring(url.lastIndexOf('/') + 1);
@@ -544,30 +470,65 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     server.on("/api/notifications", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendNotifications(request);
     });
-    server.on("/api/notifications/read", HTTP_POST,
+    registerJsonPost(server, "/api/notifications/read", [](AsyncWebServerRequest* request, const String& body) {
+        JsonDocument doc;
+        if (deserializeJson(doc, body) == DeserializationError::Ok && doc["id"].is<const char*>()) {
+            NotificationManager::instance().markRead(doc["id"].as<String>());
+        } else {
+            NotificationManager::instance().markAllRead();
+        }
+        JsonDocument resp;
+        resp["ok"] = true;
+        String s;
+        serializeJson(resp, s);
+        request->send(200, "application/json", s);
+    });
+
+    // ── Filesystem browser ────────────────────────────────────────────────────
+    server.on("/api/fs/stat", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendFsStat(request);
+    });
+    server.on("/api/fs/selftest", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendFsSelfTest(request);
+    });
+    server.on("/api/fs/list", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendFsList(request);
+    });
+    server.on("/api/fs/download", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendFsDownload(request);
+    });
+    server.on("/api/fs", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().handleFsDelete(request);
+    });
+    server.on("/api/fs/mkdir", HTTP_POST, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().handleFsMkdir(request);
+    });
+    registerJsonPost(server, "/api/fs/rename", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleFsRename(request, body);
+    });
+    // Upload/replace a file. Target path comes from the ?path= query parameter.
+    server.on("/api/fs", HTTP_POST,
         [](AsyncWebServerRequest*) {},
         nullptr,
         [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            if (total > MAX_POST_PAYLOAD) {
+                if (index + len >= total) {
+                    request->send(413, "application/json", "{\"error\":\"Payload too large\"}");
+                }
+                return;
+            }
             String* body = index == 0 ? new String() : static_cast<String*>(request->_tempObject);
+            if (!body) return;
             if (index == 0) {
                 body->reserve(total);
                 request->_tempObject = body;
+                request->onDisconnect([request]() { freeTempStringBody(request); });
             }
             body->concat(reinterpret_cast<const char*>(data), len);
             if (index + len == total) {
-                JsonDocument doc;
-                if (deserializeJson(doc, *body) == DeserializationError::Ok && doc["id"].is<const char*>()) {
-                    NotificationManager::instance().markRead(doc["id"].as<String>());
-                } else {
-                    NotificationManager::instance().markAllRead();
-                }
-                delete body;
-                request->_tempObject = nullptr;
-                JsonDocument resp;
-                resp["ok"] = true;
-                String s;
-                serializeJson(resp, s);
-                request->send(200, "application/json", s);
+                String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
+                ApiServer::instance().handleFsUpload(request, path, *body);
+                freeTempStringBody(request);
             }
         });
 }
@@ -584,6 +545,12 @@ void ApiServer::registerWebSocket(AsyncWebServer& server) {
 
         auto* info = static_cast<AwsFrameInfo*>(arg);
         if (!info || info->opcode != WS_TEXT || !info->final || info->index != 0) return;
+
+        // Drop oversized frames instead of buffering them into the heap.
+        if (len > MAX_POST_PAYLOAD) {
+            if (client) client->close();
+            return;
+        }
 
         String message;
         message.reserve(len);
@@ -605,6 +572,8 @@ void ApiServer::sendStatus(AsyncWebServerRequest* request) const {
 void ApiServer::sendConfig(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     ConfigManager::instance().toJson(doc);
+    // Read-only runtime identity, surfaced alongside config for the Settings UI.
+    doc["device"]["id"] = WiFiManager::instance().deviceId();
     sendJson(request, doc);
 }
 
@@ -897,6 +866,7 @@ String ApiServer::buildStatusJson() const {
     const uint32_t uptimeMs = millis();
     const bool wifiConnected = WiFiManager::instance().isConnected();
 
+    doc["deviceId"] = WiFiManager::instance().deviceId();
     doc["name"] = config.device.name;
     doc["board"] = config.device.boardType;
     doc["version"] = OF_VERSION_STRING;
@@ -936,6 +906,8 @@ String ApiServer::buildStatusJson() const {
     doc["sensorErrorCount"] = sensorErrorTotal;
 
     doc["activeProfileId"] = ProfileManager::instance().activeId();
+    doc["time"] = TimeManager::instance().epoch();
+    doc["timeSource"] = TimeManager::instance().source();
 
     return toJsonString(doc);
 }
@@ -1430,6 +1402,8 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         if (typeStr == "notification") return ActionType::Notification;
         if (typeStr == "keyboard_shortcut") return ActionType::KeyboardShortcut;
         if (typeStr == "media_control") return ActionType::MediaControl;
+        if (typeStr == "remote_action") return ActionType::RemoteAction;
+        if (typeStr == "sync_action") return ActionType::SyncAction;
         return ActionType::Delay;
     };
 
@@ -1467,6 +1441,7 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
                 s.message = step["message"] | String("");
                 s.keysCombo = step["keys"] | String("");
                 s.mediaCommand = step["media_command"] | String("");
+                s.nodeId = step["node_id"] | String("");
                 action.steps.push_back(s);
             }
         }
@@ -1631,8 +1606,12 @@ void ApiServer::sendTemplates(AsyncWebServerRequest* request) const {
     const auto files = StorageManager::instance().listDir("/templates");
     for (const auto& f : files) {
         if (!f.endsWith(".json")) continue;
+        String path = f;
+        if (!path.startsWith("/")) {
+            path = "/templates/" + f;
+        }
         JsonDocument tmpl;
-        if (!StorageManager::instance().readJson(f, tmpl)) continue;
+        if (!StorageManager::instance().readJson(path, tmpl)) continue;
         auto obj = arr.add<JsonObject>();
         obj["id"]        = tmpl["id"] | String("");
         obj["name"]      = tmpl["name"] | String("");
@@ -1737,5 +1716,250 @@ void ApiServer::sendNotifications(AsyncWebServerRequest* request) const {
         obj["read"]        = n.read;
     }
     doc["unreadCount"] = NotificationManager::instance().unreadCount();
+    sendJson(request, doc);
+}
+
+// ── Filesystem browser ─────────────────────────────────────────────────────────
+
+void ApiServer::sendFsStat(AsyncWebServerRequest* request) const {
+    const StorageInfo si = StorageManager::instance().info();
+    JsonDocument doc;
+    doc["total"] = si.total;
+    doc["used"]  = si.used;
+    doc["free"]  = si.free;
+    sendJson(request, doc);
+}
+
+void ApiServer::sendFsSelfTest(AsyncWebServerRequest* request) const {
+    JsonDocument result;
+    auto steps = result["steps"].to<JsonArray>();
+    auto addStep = [&](const char* name, bool ok, const String& detail) {
+        auto s = steps.add<JsonObject>();
+        s["name"]   = name;
+        s["ok"]     = ok;
+        if (detail.length()) s["detail"] = detail;
+    };
+
+    auto& storage = StorageManager::instance();
+    const char* testPath = "/._selftest.json";
+    bool ok = true;
+
+    // 1. Write a file with a known marker and a per-run nonce.
+    const uint32_t nonce = millis();
+    JsonDocument w;
+    w["marker"] = "openframe-selftest";
+    w["nonce"]  = nonce;
+    const bool wrote = storage.writeJson(testPath, w);
+    addStep("write", wrote, wrote ? String("") : "writeJson reported failure");
+    ok = ok && wrote;
+
+    // 2. Read it back and verify the contents survived the round-trip.
+    bool verified = false;
+    String verifyDetail;
+    if (wrote) {
+        JsonDocument r;
+        if (storage.readJson(testPath, r)) {
+            const bool markerOk = (r["marker"] | String("")) == "openframe-selftest";
+            const bool nonceOk  = (r["nonce"] | 0u) == nonce;
+            verified = markerOk && nonceOk;
+            if (!verified) verifyDetail = "content mismatch after read-back";
+        } else {
+            verifyDetail = "readJson failed";
+        }
+    } else {
+        verifyDetail = "skipped (write failed)";
+    }
+    addStep("read-back", verified, verifyDetail);
+    ok = ok && verified;
+
+    // 3. Clean up the temp file.
+    const bool deleted = storage.remove(testPath);
+    addStep("cleanup", deleted, deleted ? String("") : "remove failed");
+    ok = ok && deleted;
+
+    result["ok"] = ok;
+    const StorageInfo si = storage.info();
+    result["free"]  = si.free;
+    result["total"] = si.total;
+    sendJson(request, result);
+}
+
+void ApiServer::sendFsList(AsyncWebServerRequest* request) const {
+    String path = request->hasParam("path") ? request->getParam("path")->value() : String("/");
+    if (path.isEmpty()) path = "/";
+    if (path.length() > 1 && path.endsWith("/")) path.remove(path.length() - 1);
+    if (!isSafeFsPath(path)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+
+    JsonDocument doc;
+    doc["path"] = path;
+    auto entries = doc["entries"].to<JsonArray>();
+    const String prefix = (path == "/") ? String("/") : (path + "/");
+    for (const auto& e : StorageManager::instance().listEntries(path)) {
+        auto obj = entries.add<JsonObject>();
+        obj["name"] = e.name;
+        obj["path"] = prefix + e.name;
+        obj["type"] = e.isDir ? "dir" : "file";
+        obj["size"] = e.size;
+    }
+    doc["count"] = entries.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::sendFsDownload(AsyncWebServerRequest* request) const {
+    const String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
+    if (!isSafeFsPath(path)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (!StorageManager::instance().exists(path)) {
+        sendError(request, 404, "Not found");
+        return;
+    }
+
+    int slash = path.lastIndexOf('/');
+    const String name = slash >= 0 ? path.substring(slash + 1) : path;
+    auto* response = request->beginResponse(LittleFS, path, "application/octet-stream");
+    response->addHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
+}
+
+void ApiServer::handleFsDelete(AsyncWebServerRequest* request) const {
+    const String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
+    if (!isSafeFsPath(path) || path == "/") {
+        // Refuse "/" outright — a recursive delete there would wipe /www too.
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (isProtectedFsPath(path)) {
+        sendError(request, 403, "Path is protected");
+        return;
+    }
+    if (!StorageManager::instance().exists(path)) {
+        sendError(request, 404, "Not found");
+        return;
+    }
+    // removeRecursive handles both a plain file and a directory (and its
+    // contents). The only protected tree, /www, is a top-level directory and is
+    // rejected above, so it can never be reached as a child of a deleted dir.
+    if (!StorageManager::instance().removeRecursive(path)) {
+        sendError(request, 500, "Delete failed");
+        return;
+    }
+    JsonDocument doc;
+    doc["ok"]   = true;
+    doc["path"] = path;
+    sendJson(request, doc);
+}
+
+void ApiServer::handleFsMkdir(AsyncWebServerRequest* request) const {
+    const String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
+    if (!isSafeFsPath(path)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (isProtectedFsPath(path)) {
+        sendError(request, 403, "Path is protected");
+        return;
+    }
+    if (StorageManager::instance().exists(path)) {
+        sendError(request, 409, "Already exists");
+        return;
+    }
+    if (!StorageManager::instance().mkdirs(path)) {
+        sendError(request, 500, "mkdir failed");
+        return;
+    }
+    JsonDocument doc;
+    doc["ok"]   = true;
+    doc["path"] = path;
+    sendJson(request, doc);
+}
+
+void ApiServer::handleFsRename(AsyncWebServerRequest* request, const String& body) const {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+    const String from = doc["from"] | String("");
+    const String to   = doc["to"]   | String("");
+    if (!isSafeFsPath(from) || !isSafeFsPath(to)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (isProtectedFsPath(from) || isProtectedFsPath(to)) {
+        sendError(request, 403, "Path is protected");
+        return;
+    }
+    if (!StorageManager::instance().exists(from)) {
+        sendError(request, 404, "Source not found");
+        return;
+    }
+    if (StorageManager::instance().exists(to)) {
+        sendError(request, 409, "Target already exists");
+        return;
+    }
+
+    // Ensure the destination's parent directory exists before moving.
+    int slash = to.lastIndexOf('/');
+    if (slash > 0) {
+        const String dir = to.substring(0, slash);
+        if (!StorageManager::instance().exists(dir)) {
+            StorageManager::instance().mkdirs(dir);
+        }
+    }
+
+    if (!StorageManager::instance().rename(from, to)) {
+        sendError(request, 500, "Rename failed");
+        return;
+    }
+    JsonDocument resp;
+    resp["ok"]   = true;
+    resp["from"] = from;
+    resp["to"]   = to;
+    sendJson(request, resp);
+}
+
+void ApiServer::handleFsUpload(AsyncWebServerRequest* request, const String& path, const String& body) {
+    if (!isSafeFsPath(path)) {
+        sendError(request, 400, "Invalid path");
+        return;
+    }
+    if (isProtectedFsPath(path)) {
+        sendError(request, 403, "Path is protected");
+        return;
+    }
+
+    // JSON files must be valid JSON — refuse to persist a file that would fail
+    // to parse on next boot.
+    if (path.endsWith(".json")) {
+        JsonDocument validate;
+        if (deserializeJson(validate, body)) {
+            sendError(request, 400, "Body is not valid JSON");
+            return;
+        }
+    }
+
+    // Ensure the parent directory exists.
+    int slash = path.lastIndexOf('/');
+    if (slash > 0) {
+        const String dir = path.substring(0, slash);
+        if (!StorageManager::instance().exists(dir)) {
+            StorageManager::instance().mkdirs(dir);
+        }
+    }
+
+    if (!StorageManager::instance().writeRaw(path, body)) {
+        sendError(request, 500, "Write failed");
+        return;
+    }
+    JsonDocument doc;
+    doc["ok"]    = true;
+    doc["path"]  = path;
+    doc["bytes"] = body.length();
     sendJson(request, doc);
 }

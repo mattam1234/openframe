@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Templates</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>OpenFrame Fleet</h1>
+    <nav class="nav"><a href="/">Fleet</a><a href="topology.html">Topology</a><a href="provision.html">Provision</a><a href="templates.html" class="active">Templates</a><a href="firmware.html">Firmware</a><a href="alerts.html">Alerts</a></nav>
+    <div class="conn"></div>
+  </header>
+
+  <main>
+    <p class="hint">Templates are named, reusable commands. Create one here, then deploy it to
+      selected devices from the <a href="/">Fleet</a> page. A config template uses
+      <code>apply_config</code>; a profile template uses <code>activate_profile</code>.</p>
+
+    <section class="detail">
+      <div class="panel">
+        <h2 id="form-title">New template</h2>
+        <input type="hidden" id="tpl-id" />
+        <h3>Name</h3>
+        <input id="tpl-name" type="text" placeholder="e.g. Lobby config" />
+        <h3>Description</h3>
+        <input id="tpl-desc" type="text" placeholder="optional" />
+        <h3>Command type</h3>
+        <input id="tpl-type" type="text" list="cmd-types" placeholder="apply_config" />
+        <datalist id="cmd-types">
+          <option value="apply_config"></option>
+          <option value="activate_profile"></option>
+          <option value="identify"></option>
+          <option value="reboot"></option>
+          <option value="get_status"></option>
+        </datalist>
+        <h3>Payload (JSON)</h3>
+        <textarea id="tpl-payload" rows="8" placeholder='{ "device": { "name": "Lobby Frame" } }'></textarea>
+        <div class="row">
+          <button id="save-tpl">Save</button>
+          <button id="reset-tpl" class="ghost">New</button>
+          <span id="form-msg" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Templates</h2>
+        <table class="kv"><tbody id="tpl-list"></tbody></table>
+        <p id="tpl-empty" class="empty hidden">No templates yet.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="templates.js"></script>
+</body>
+</html>

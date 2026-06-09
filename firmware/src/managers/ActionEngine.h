@@ -34,6 +34,8 @@ enum class ActionType : uint8_t {
     Notification,
     KeyboardShortcut,
     MediaControl,
+    RemoteAction,   // trigger an action on another node over NodeLink (ESP-NOW)
+    SyncAction,     // trigger an action on ALL nodes at a shared cluster time
 };
 
 struct ActionStep {
@@ -53,6 +55,7 @@ struct ActionStep {
     String      message;
     String      keysCombo;
     String      mediaCommand;
+    String      nodeId;        // RemoteAction: target node's deviceId (value holds the remote action id)
 };
 
 struct ActionConfig {
@@ -104,6 +107,9 @@ public:
     bool triggerAction(const String& actionId, String& error);
     bool triggerAction(const String& actionId);
 
+    // Schedule an action to run at a shared cluster-clock epoch (synchronized effects).
+    void scheduleAction(uint32_t epoch, const String& actionId);
+
     const std::vector<ActionConfig>& actions() const { return _actions; }
     const std::vector<ActionHistoryEntry>& history() const { return _history; }
 
@@ -117,8 +123,12 @@ private:
     void recordHistory(const String& id, const String& name, bool success, const String& error);
     void onEventTriggered(const Event& event);
 
+    // A cross-node action scheduled to fire at a shared cluster-clock epoch.
+    struct ScheduledTrigger { uint32_t epoch; String actionId; };
+
     std::vector<ActionConfig>       _actions;
     std::vector<ActionHistoryEntry> _history;
+    std::vector<ScheduledTrigger>   _scheduled;
     bool                            _subscribed = false;
 
     static constexpr size_t HISTORY_LIMIT = OF_ACTION_HISTORY_SIZE;

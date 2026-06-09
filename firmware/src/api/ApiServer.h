@@ -38,6 +38,16 @@ private:
     void sendTemplateById(AsyncWebServerRequest* request, const String& templateId) const;
     void sendNotifications(AsyncWebServerRequest* request) const;
 
+    // Filesystem browser
+    void sendFsStat(AsyncWebServerRequest* request) const;
+    void sendFsSelfTest(AsyncWebServerRequest* request) const;
+    void sendFsList(AsyncWebServerRequest* request) const;
+    void sendFsDownload(AsyncWebServerRequest* request) const;
+    void handleFsDelete(AsyncWebServerRequest* request) const;
+    void handleFsMkdir(AsyncWebServerRequest* request) const;
+    void handleFsRename(AsyncWebServerRequest* request, const String& body) const;
+    void handleFsUpload(AsyncWebServerRequest* request, const String& path, const String& body);
+
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);
     void handleInputsUpdate(AsyncWebServerRequest* request, const String& body);

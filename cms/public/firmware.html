@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Firmware</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>OpenFrame Fleet</h1>
+    <nav class="nav">
+      <a href="/">Fleet</a>
+      <a href="topology.html">Topology</a>
+      <a href="provision.html">Provision</a>
+      <a href="templates.html">Templates</a>
+      <a href="firmware.html" class="active">Firmware</a>
+      <a href="alerts.html">Alerts</a>
+    </nav>
+    <div class="conn"></div>
+  </header>
+
+  <main>
+    <p class="hint">Upload a firmware <code>.bin</code>, then deploy it to devices. Targets download it
+      from this CMS over plain HTTP and flash via OTA. Deploy targets the tag filter below
+      (blank = whole fleet). Watch the <a href="/">Fleet</a> version column to confirm rollout.</p>
+
+    <div class="panel" style="margin-bottom:20px">
+      <h2>Upload</h2>
+      <div class="row">
+        <input id="file" type="file" accept=".bin" />
+        <button id="upload">Upload</button>
+        <span id="upload-msg" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <span class="summary">Deploy target:</span>
+      <div class="bulk">
+        <input id="tag-filter" class="tag-filter" type="text" placeholder="tag(s), blank = all" />
+        <label class="chk"><input type="checkbox" id="online-only" checked /> online only</label>
+      </div>
+    </div>
+    <p id="deploy-result" class="bulk-result"></p>
+
+    <table>
+      <thead><tr><th>File</th><th>Size</th><th>Uploaded</th><th>Actions</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="empty" class="empty">No firmware uploaded yet.</p>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="firmware.js"></script>
+</body>
+</html>
