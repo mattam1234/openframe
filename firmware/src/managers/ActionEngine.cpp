@@ -4,6 +4,7 @@
 #include "../core/PlatformCompat.h"
 #include "../hardware/DisplayManager.h"
 #include "../hardware/OutputManager.h"
+#include "../hardware/HidManager.h"
 #include "../managers/HaManager.h"
 #include "../managers/MqttManager.h"
 #include "../managers/NodeLink.h"
@@ -99,6 +100,8 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.brightnessVal = item["brightness"] | 0;
         s.animation    = item["animation"] | String("");
         s.speed        = item["speed"] | 128;
+        s.frequency    = item["frequency"] | 2000;
+        s.durationMs   = item["duration_ms"] | 200;
         out.push_back(s);
     }
 }
@@ -139,6 +142,7 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
                 }
                 if (s.command == "brightness") obj["brightness"] = s.brightnessVal;
                 if (s.command == "animation") { obj["animation"] = s.animation; obj["speed"] = s.speed; }
+                if (s.command == "beep") { obj["frequency"] = s.frequency; obj["duration_ms"] = s.durationMs; }
                 break;
             case ActionType::HaServiceCall:     obj["ha_service"] = s.haService; obj["ha_entity_id"] = s.haEntityId; obj["body"] = s.body; break;
             case ActionType::PageChange:        obj["display_id"] = s.displayId; obj["page_id"] = s.pageId; break;
@@ -298,6 +302,16 @@ bool ActionEngine::registerAction(const ActionConfig& action) {
     }
     _actions.push_back(action);
     return true;
+}
+
+bool ActionEngine::removeAction(const String& actionId) {
+    for (auto it = _actions.begin(); it != _actions.end(); ++it) {
+        if (it->id == actionId) {
+            _actions.erase(it);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ActionEngine::triggerAction(const String& actionId, String& error) {
@@ -487,6 +501,8 @@ void ActionEngine::registerBuiltInExecutors() {
                 out.setRgb(step.outputId, step.red, step.green, step.blue);
             }
             ok = out.setAnimation(step.outputId, ledAnimationFromString(step.animation), step.speed);
+        } else if (step.command == "beep") {
+            ok = out.beep(step.outputId, step.frequency, step.durationMs);
         } else {
             error = "Unknown output command: " + step.command;
             return false;
@@ -535,14 +551,14 @@ void ActionEngine::registerBuiltInExecutors() {
         return true;
     });
 
-    runner.registerExecutor(ActionType::KeyboardShortcut, [](const ActionStep& step, String&) -> bool {
-        LOG_D("ActionEngine", "KeyboardShortcut stub: " + step.keysCombo);
-        return true;
+    runner.registerExecutor(ActionType::KeyboardShortcut, [](const ActionStep& step, String& error) -> bool {
+        if (!step.keysCombo.length()) { error = "Empty key combo"; return false; }
+        return HidManager::instance().sendShortcut(step.keysCombo, error);
     });
 
-    runner.registerExecutor(ActionType::MediaControl, [](const ActionStep& step, String&) -> bool {
-        LOG_D("ActionEngine", "MediaControl stub: " + step.mediaCommand);
-        return true;
+    runner.registerExecutor(ActionType::MediaControl, [](const ActionStep& step, String& error) -> bool {
+        if (!step.mediaCommand.length()) { error = "Empty media command"; return false; }
+        return HidManager::instance().sendMedia(step.mediaCommand, error);
     });
 
     runner.registerExecutor(ActionType::HttpRequest, [](const ActionStep& step, String& error) -> bool {

@@ -51,8 +51,8 @@
                     <div class="font-weight-medium">{{ action.name || action.id }}</div>
                     <div class="text-caption text-medium-emphasis">{{ action.id }}</div>
                   </td>
-                  <td>{{ action.step_count ?? 0 }}</td>
-                  <td>{{ action.condition_count ?? 0 }}</td>
+                  <td>{{ action.steps?.length ?? 0 }}</td>
+                  <td>{{ action.conditions?.length ?? 0 }}</td>
                   <td>
                     <v-icon :color="action.enabled ? 'success' : 'default'" size="small">
                       {{ action.enabled ? 'mdi-check-circle' : 'mdi-circle-outline' }}
@@ -72,6 +72,13 @@
                       size="small"
                       variant="text"
                       @click="editAction(action)"
+                    />
+                    <v-btn
+                      icon="mdi-delete"
+                      size="small"
+                      variant="text"
+                      color="error"
+                      @click="confirmDelete('action', action)"
                     />
                   </td>
                 </tr>
@@ -122,6 +129,13 @@
                       size="small"
                       variant="text"
                       @click="editMacro(macro)"
+                    />
+                    <v-btn
+                      icon="mdi-delete"
+                      size="small"
+                      variant="text"
+                      color="error"
+                      @click="confirmDelete('macro', macro)"
                     />
                   </td>
                 </tr>
@@ -222,6 +236,46 @@
           </v-row>
 
           <v-divider class="my-3" />
+          <div class="d-flex align-center mb-2">
+            <div class="text-subtitle-2">Conditions</div>
+            <span class="text-caption text-medium-emphasis ml-2">all must be true to run</span>
+          </div>
+          <div v-for="(cond, idx) in editingAction.conditions" :key="'cond' + idx" class="mb-2">
+            <v-row align="center" no-gutters class="ga-2">
+              <v-col cols="12" sm="4">
+                <v-select
+                  v-model="cond.variable_id"
+                  :items="variablesList"
+                  label="Variable"
+                  density="compact"
+                  hide-details
+                  :no-data-text="'No variables defined'"
+                />
+              </v-col>
+              <v-col cols="8" sm="3">
+                <v-select
+                  v-model="cond.op"
+                  :items="conditionOps"
+                  item-title="label"
+                  item-value="value"
+                  label="Operator"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="auto" class="flex-grow-1">
+                <v-text-field v-model="cond.value" label="Value" density="compact" hide-details />
+              </v-col>
+              <v-col cols="auto">
+                <v-btn icon="mdi-close" size="small" variant="text" @click="removeCondition(idx)" />
+              </v-col>
+            </v-row>
+          </div>
+          <v-btn prepend-icon="mdi-plus" variant="tonal" size="small" @click="addCondition">
+            Add Condition
+          </v-btn>
+
+          <v-divider class="my-3" />
           <div class="text-subtitle-2 mb-2">Steps</div>
 
           <div v-for="(step, idx) in editingAction.steps" :key="idx" class="mb-3">
@@ -302,6 +356,14 @@
                     <v-select v-model="step.animation" :items="animations" label="Animation" density="compact" hide-details class="mt-2" />
                     <v-slider v-model="step.speed" :min="1" :max="255" :step="1" label="Speed" density="compact" hide-details class="mt-2" />
                   </template>
+                  <v-row v-if="step.command === 'beep'" class="mt-1">
+                    <v-col cols="12" sm="6">
+                      <v-text-field v-model.number="step.frequency" label="Frequency (Hz)" type="number" :min="100" :max="20000" density="compact" hide-details />
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                      <v-text-field v-model.number="step.duration_ms" label="Duration (ms)" type="number" :min="20" :max="5000" density="compact" hide-details />
+                    </v-col>
+                  </v-row>
                 </template>
 
                 <!-- Variable steps: pick from the device's variable list -->
@@ -356,6 +418,31 @@
                   <v-text-field v-model="step.value" label="Action ID (all nodes)" hint="Action every node runs in unison" persistent-hint density="compact" class="mt-2" />
                   <v-text-field v-model.number="step.delay_ms" label="Lead time (ms)" type="number" hint="Scheduling lead; needs cluster time sync" persistent-hint density="compact" />
                 </template>
+                <template v-if="step.type === 'keyboard_shortcut'">
+                  <v-combobox
+                    v-model="step.keys"
+                    :items="keyboardPresets"
+                    label="Key combo"
+                    hint="Modifiers + key, joined by '+', e.g. CTRL+ALT+DELETE or GUI+L"
+                    persistent-hint
+                    density="compact"
+                    class="mt-2"
+                  />
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Sends keystrokes to a paired computer (USB on S3, Bluetooth on ESP32).
+                  </div>
+                </template>
+                <template v-if="step.type === 'media_control'">
+                  <v-select
+                    v-model="step.media_command"
+                    :items="mediaCommands"
+                    item-title="label"
+                    item-value="value"
+                    label="Media command"
+                    density="compact"
+                    class="mt-2"
+                  />
+                </template>
               </v-card-text>
             </v-card>
           </div>
@@ -393,6 +480,21 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Delete Confirm Dialog (shared by actions & macros) -->
+    <v-dialog v-model="deleteDialog" max-width="360">
+      <v-card :title="`Delete ${deleting.kind === 'macro' ? 'Macro' : 'Action'}`">
+        <v-card-text>
+          Are you sure you want to delete <strong>{{ deleting.item?.name || deleting.item?.id }}</strong>?
+          This cannot be undone.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="deleteDialog = false">Cancel</v-btn>
+          <v-btn color="error" :loading="deletingBusy" @click="doDelete">Delete</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -421,6 +523,10 @@ const pagesList = ref([])      // [{id, title, displayId}]
 const actionDialog = ref(false)
 const macroDialog = ref(false)
 
+const deleteDialog = ref(false)
+const deletingBusy = ref(false)
+const deleting = ref({ kind: 'action', item: null })
+
 const actionStepTypes = [
   { value: 'output_control', label: 'Control Output' },
   { value: 'variable_set', label: 'Variable Set' },
@@ -445,8 +551,33 @@ const outputCommands = [
   { value: 'rgb', label: 'Colour' },
   { value: 'brightness', label: 'Brightness' },
   { value: 'animation', label: 'Animation' },
+  { value: 'beep', label: 'Beep (buzzer)' },
 ]
 const animations = ['solid', 'off', 'blink', 'breathe', 'rainbow', 'chase', 'colorwipe']
+// Suggested keyboard combos (free text is also allowed — the combobox is editable).
+const keyboardPresets = [
+  'CTRL+C', 'CTRL+V', 'CTRL+ALT+DELETE', 'CTRL+SHIFT+ESC',
+  'GUI+L', 'GUI+D', 'ALT+TAB', 'ALT+F4', 'F5',
+]
+// Media commands (values must match firmware mediaCmdFromString).
+const mediaCommands = [
+  { value: 'play_pause', label: 'Play / Pause' },
+  { value: 'stop', label: 'Stop' },
+  { value: 'next_track', label: 'Next track' },
+  { value: 'prev_track', label: 'Previous track' },
+  { value: 'volume_up', label: 'Volume up' },
+  { value: 'volume_down', label: 'Volume down' },
+  { value: 'mute', label: 'Mute' },
+]
+// Condition operators (values must match firmware conditionOpFromString).
+const conditionOps = [
+  { value: 'eq', label: '= equals' },
+  { value: 'ne', label: '≠ not equal' },
+  { value: 'lt', label: '< less than' },
+  { value: 'lte', label: '≤ at most' },
+  { value: 'gt', label: '> greater than' },
+  { value: 'gte', label: '≥ at least' },
+]
 
 const pagesForDisplay = (displayId) =>
   pagesList.value.filter(p => !displayId || p.displayId === displayId)
@@ -461,7 +592,7 @@ function setStepColor(step, hex) {
 }
 
 const newTrigger = () => ({ source: 'manual', input_id: '', event: 'Press' })
-const editingAction = ref({ id: '', name: '', enabled: true, trigger: newTrigger(), steps: [], _existing: false })
+const editingAction = ref({ id: '', name: '', enabled: true, trigger: newTrigger(), conditions: [], steps: [], _existing: false })
 const editingMacro = ref({ id: '', name: '', enabled: true, actionsText: '', _existing: false })
 
 const formatTs = (ms) => ms ? `${(ms / 1000).toFixed(1)}s` : '—'
@@ -499,7 +630,7 @@ async function refresh() {
 }
 
 function openNewAction() {
-  editingAction.value = { id: '', name: '', enabled: true, trigger: newTrigger(), steps: [], _existing: false }
+  editingAction.value = { id: '', name: '', enabled: true, trigger: newTrigger(), conditions: [], steps: [], _existing: false }
   actionDialog.value = true
 }
 
@@ -507,14 +638,23 @@ function editAction(action) {
   editingAction.value = {
     ...action,
     trigger: { ...newTrigger(), ...(action.trigger || {}) },
+    conditions: action.conditions ? JSON.parse(JSON.stringify(action.conditions)) : [],
     steps: action.steps ? JSON.parse(JSON.stringify(action.steps)) : [],
     _existing: true,
   }
   actionDialog.value = true
 }
 
+function addCondition() {
+  editingAction.value.conditions.push({ variable_id: '', op: 'eq', value: '' })
+}
+
+function removeCondition(idx) {
+  editingAction.value.conditions.splice(idx, 1)
+}
+
 function addStep() {
-  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid' })
+  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid', frequency: 2000, duration_ms: 200, keys: '', media_command: 'play_pause' })
 }
 
 function removeStep(idx) {
@@ -533,7 +673,7 @@ async function saveAction() {
         ? { source: 'input', input_id: t.input_id, event: t.event }
         : { source: 'manual', input_id: '', event: '' },
       steps: editingAction.value.steps,
-      conditions: [],
+      conditions: (editingAction.value.conditions || []).filter(c => c.variable_id),
     }
     await api.post('/api/actions', { actions: [payload] })
     await refresh()
@@ -597,6 +737,28 @@ async function triggerAction(id) {
 function triggerMacro(id) {
   wsStore.send('action_trigger', { id, type: 'macro' })
   statusMessage.value = { type: 'info', text: `Triggered macro: ${id}` }
+}
+
+function confirmDelete(kind, item) {
+  deleting.value = { kind, item }
+  deleteDialog.value = true
+}
+
+async function doDelete() {
+  const { kind, item } = deleting.value
+  if (!item) return
+  deletingBusy.value = true
+  try {
+    const base = kind === 'macro' ? '/api/macros/' : '/api/actions/'
+    await api.delete(base + encodeURIComponent(item.id))
+    await refresh()
+    deleteDialog.value = false
+    statusMessage.value = { type: 'success', text: `${kind === 'macro' ? 'Macro' : 'Action'} deleted.` }
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Delete failed' }
+  } finally {
+    deletingBusy.value = false
+  }
 }
 
 onMounted(() => {

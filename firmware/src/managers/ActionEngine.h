@@ -68,6 +68,8 @@ struct ActionStep {
     uint8_t     brightnessVal = 0;
     String      animation;     // e.g. "solid", "rainbow", "chase"
     uint8_t     speed         = 128;
+    uint16_t    frequency     = 2000;   // buzzer "beep" tone (Hz)
+    uint16_t    durationMs    = 200;    // buzzer "beep" duration
 };
 
 // Optional trigger that auto-runs an action when a hardware event fires.
@@ -124,6 +126,7 @@ public:
     void loop();
 
     bool registerAction(const ActionConfig& action);
+    bool removeAction(const String& actionId);
     bool triggerAction(const String& actionId, String& error);
     bool triggerAction(const String& actionId);
 

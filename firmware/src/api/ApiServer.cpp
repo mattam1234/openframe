@@ -429,12 +429,22 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     registerJsonPost(server, "/api/actions", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleActionsUpdate(request, body);
     });
+    server.on("/api/actions/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        const String url = request->url();
+        const String actionId = url.substring(url.lastIndexOf('/') + 1);
+        ApiServer::instance().handleActionDelete(request, actionId);
+    });
 
     server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendMacros(request);
     });
     registerJsonPost(server, "/api/macros", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleMacrosUpdate(request, body);
+    });
+    server.on("/api/macros/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        const String url = request->url();
+        const String macroId = url.substring(url.lastIndexOf('/') + 1);
+        ApiServer::instance().handleMacroDelete(request, macroId);
     });
 
     // ── Profiles ──────────────────────────────────────────────────────────────
@@ -1680,6 +1690,8 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
                 s.brightnessVal = step["brightness"] | 0;
                 s.animation = step["animation"] | String("");
                 s.speed = step["speed"] | 128;
+                s.frequency = step["frequency"] | 2000;
+                s.durationMs = step["duration_ms"] | 200;
                 action.steps.push_back(s);
             }
         }
@@ -1754,6 +1766,38 @@ void ApiServer::handleMacrosUpdate(AsyncWebServerRequest* request, const String&
             sendError(request, 500, "Failed to save macros");
             return;
         }
+    }
+    sendMacros(request);
+}
+
+void ApiServer::handleActionDelete(AsyncWebServerRequest* request, const String& actionId) {
+    if (!actionId.length()) {
+        sendError(request, 400, "Missing action id");
+        return;
+    }
+    if (!ActionEngine::instance().removeAction(actionId)) {
+        sendError(request, 404, "Action not found");
+        return;
+    }
+    if (!ActionEngine::instance().saveActions()) {
+        sendError(request, 500, "Failed to save actions");
+        return;
+    }
+    sendActions(request);
+}
+
+void ApiServer::handleMacroDelete(AsyncWebServerRequest* request, const String& macroId) {
+    if (!macroId.length()) {
+        sendError(request, 400, "Missing macro id");
+        return;
+    }
+    if (!MacroManager::instance().removeMacro(macroId)) {
+        sendError(request, 404, "Macro not found");
+        return;
+    }
+    if (!MacroManager::instance().saveMacros()) {
+        sendError(request, 500, "Failed to save macros");
+        return;
     }
     sendMacros(request);
 }

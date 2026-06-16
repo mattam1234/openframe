@@ -41,6 +41,16 @@ bool MacroManager::registerMacro(const MacroConfig& macro) {
     return true;
 }
 
+bool MacroManager::removeMacro(const String& macroId) {
+    for (auto it = _macros.begin(); it != _macros.end(); ++it) {
+        if (it->id == macroId) {
+            _macros.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool MacroManager::triggerMacro(const String& macroId, String& error) {
     for (const auto& macro : _macros) {
         if (macro.id != macroId) continue;

@@ -23,6 +23,7 @@ public:
     void loop();
 
     bool registerMacro(const MacroConfig& macro);
+    bool removeMacro(const String& macroId);
     bool triggerMacro(const String& macroId, String& error);
     bool triggerMacro(const String& macroId);
 

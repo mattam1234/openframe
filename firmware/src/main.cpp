@@ -17,6 +17,7 @@
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
 #include "hardware/OutputManager.h"
+#include "hardware/HidManager.h"
 #include "hardware/SensorManager.h"
 #include "hardware/DisplayManager.h"
 #include "hardware/TouchManager.h"
@@ -62,6 +63,7 @@ void setup() {
     OtaManager::instance().begin(webServer);
     InputManager::instance().begin();
     OutputManager::instance().begin();
+    HidManager::instance().begin();
     SensorManager::instance().begin();
     DisplayManager::instance().begin();
     TouchManager::instance().begin();

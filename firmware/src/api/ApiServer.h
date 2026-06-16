@@ -59,7 +59,9 @@ private:
     void handleHardwareAdopt(AsyncWebServerRequest* request, const String& body);
     void handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body);
     void handleActionsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleActionDelete(AsyncWebServerRequest* request, const String& actionId);
     void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleMacroDelete(AsyncWebServerRequest* request, const String& macroId);
     void handleProfileCreate(AsyncWebServerRequest* request, const String& body);
     void handleProfileActivate(AsyncWebServerRequest* request, const String& body);
     void handleProfileDelete(AsyncWebServerRequest* request, const String& profileId);
