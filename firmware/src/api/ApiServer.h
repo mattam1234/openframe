@@ -27,12 +27,14 @@ private:
     void sendOtaStatus(AsyncWebServerRequest* request) const;
     void sendInputs(AsyncWebServerRequest* request) const;
     void sendOutputs(AsyncWebServerRequest* request) const;
+    void sendOutputsState(AsyncWebServerRequest* request) const;
     void sendSensors(AsyncWebServerRequest* request) const;
     void sendDisplays(AsyncWebServerRequest* request) const;
     void sendDisplayPages(AsyncWebServerRequest* request) const;
     void sendActions(AsyncWebServerRequest* request) const;
     void sendMacros(AsyncWebServerRequest* request) const;
     void sendModules(AsyncWebServerRequest* request) const;
+    void sendHardware(AsyncWebServerRequest* request) const;
     void sendProfiles(AsyncWebServerRequest* request) const;
     void sendTemplates(AsyncWebServerRequest* request) const;
     void sendTemplateById(AsyncWebServerRequest* request, const String& templateId) const;
@@ -52,7 +54,9 @@ private:
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);
     void handleInputsUpdate(AsyncWebServerRequest* request, const String& body);
     void handleOutputsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleOutputsControl(AsyncWebServerRequest* request, const String& body);
     void handleSensorsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleHardwareAdopt(AsyncWebServerRequest* request, const String& body);
     void handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body);
     void handleActionsUpdate(AsyncWebServerRequest* request, const String& body);
     void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);

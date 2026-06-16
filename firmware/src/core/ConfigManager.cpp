@@ -72,7 +72,7 @@ bool ConfigManager::begin() {
         return true;
     }
 
-    const bool persistedForcedAp = doc["wifi"].is<JsonObject>() && (doc["wifi"]["ap_mode"] | false);
+    const bool persistedForcedAp = doc["wifi"].is<JsonObjectConst>() && (doc["wifi"]["ap_mode"] | false);
 
     if (!fromJson(doc)) {
         LOG_W(TAG, "Config parse failed — using defaults");
@@ -178,11 +178,11 @@ void ConfigManager::toJson(JsonDocument& doc) const {
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
-    if (doc["device"].is<JsonObject>()) {
+    if (doc["device"].is<JsonObjectConst>()) {
         _config.device.name      = doc["device"]["name"]  | _config.device.name;
         _config.device.boardType = doc["device"]["board"] | _config.device.boardType;
     }
-    if (doc["wifi"].is<JsonObject>()) {
+    if (doc["wifi"].is<JsonObjectConst>()) {
         JsonObjectConst wifiObj = doc["wifi"].as<JsonObjectConst>();
         const String legacySsid = wifiObj["ssid"] | _config.wifi.ssid;
         const String legacyPassword = wifiObj["password"] | _config.wifi.password;
@@ -230,7 +230,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
             _config.wifi.apMode = false;
         }
     }
-    if (doc["mqtt"].is<JsonObject>()) {
+    if (doc["mqtt"].is<JsonObjectConst>()) {
         _config.mqtt.enabled   = doc["mqtt"]["enabled"]    | false;
         _config.mqtt.host      = doc["mqtt"]["host"]       | String("");
         _config.mqtt.port      = doc["mqtt"]["port"]       | 1883;
@@ -238,16 +238,16 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.mqtt.password  = doc["mqtt"]["password"]   | String("");
         _config.mqtt.baseTopic = doc["mqtt"]["base_topic"] | String("openframe");
     }
-    if (doc["ha"].is<JsonObject>()) {
+    if (doc["ha"].is<JsonObjectConst>()) {
         _config.ha.enabled         = doc["ha"]["enabled"]          | false;
         _config.ha.discoveryPrefix = doc["ha"]["discovery_prefix"] | String("homeassistant");
     }
-    if (doc["ota"].is<JsonObject>()) {
+    if (doc["ota"].is<JsonObjectConst>()) {
         _config.ota.enabled    = doc["ota"]["enabled"]     | true;
         _config.ota.githubRepo = doc["ota"]["github_repo"] | String("");
         _config.ota.autoCheck  = doc["ota"]["auto_check"]  | false;
     }
-    if (doc["nodelink"].is<JsonObject>()) {
+    if (doc["nodelink"].is<JsonObjectConst>()) {
         _config.nodelink.enabled = doc["nodelink"]["enabled"] | false;
         _config.nodelink.channel = doc["nodelink"]["channel"] | 0;
         _config.nodelink.gateway = doc["nodelink"]["gateway"] | false;

@@ -17,6 +17,20 @@ enum class OutputType : uint8_t {
     Buzzer,
 };
 
+// Runtime animation modes for addressable (WS2812) strips.
+enum class LedAnimation : uint8_t {
+    Solid,      // every LED shows the current colour
+    Off,        // all LEDs black (remembers colour/animation for resume)
+    Blink,      // hard on/off toggle
+    Breathe,    // smooth brightness pulse of the current colour
+    Rainbow,    // hue sweep across the strip, scrolling
+    Chase,      // a single lit pixel running along the strip
+    ColorWipe,  // progressively fill then clear with the current colour
+};
+
+const char* ledAnimationToString(LedAnimation a);
+LedAnimation ledAnimationFromString(const String& s);
+
 struct OutputConfig {
     String     id;
     OutputType type            = OutputType::Led;
@@ -51,6 +65,12 @@ struct OutputState {
     uint16_t  buzzerFreq  = 0;
     uint32_t  buzzerUntil = 0;
     bool      wsReady     = false;
+
+    // WS2812 animation runtime
+    LedAnimation animation     = LedAnimation::Solid;
+    uint8_t      animationSpeed = 128;  // 1 (slow) … 255 (fast)
+    uint16_t     animPhase      = 0;
+    uint32_t     animLastMs     = 0;
 };
 
 class OutputManager {
@@ -63,7 +83,12 @@ public:
     bool setDigital(const String& id, bool on);
     bool setBrightness(const String& id, uint8_t brightness);
     bool setRgb(const String& id, uint8_t r, uint8_t g, uint8_t b);
+    bool setAnimation(const String& id, LedAnimation animation, uint8_t speed);
     bool beep(const String& id, uint16_t frequency, uint16_t durationMs);
+
+    // Serialise the live state of every output (id, type, on, colour, animation…)
+    // into the given array — used by the control UI to render and stay in sync.
+    void fillStateJson(JsonArray& arr) const;
 
 private:
     OutputManager() = default;
@@ -80,8 +105,11 @@ private:
     int findIndexById(const String& id) const;
 
     bool initWs2812(size_t index);
-    void updateWs2812(size_t index);
+    void renderWs2812(size_t index);
+    void tickAnimations(uint32_t nowMs);
     void emitOutputEvent(size_t index, const char* action);
+
+    static const char* outputTypeToString(OutputType type);
 
     std::vector<OutputConfig> _configs;
     std::vector<OutputState>  _states;

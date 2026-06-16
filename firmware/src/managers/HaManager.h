@@ -78,9 +78,19 @@ private:
     void buildDiscoveryPayload(const HaEntity& e, JsonDocument& doc) const;
     void handleCommand(const String& topic, const String& payload);
 
+    // Auto-build HA entities from the device's configured sensors, outputs and
+    // digital inputs, and publish their current state. Built once, lazily, on the
+    // first MQTT connection (by which point all hardware managers have loaded).
+    void buildEntities();
+    void publishAllStates();
+    void onSensorEvent(const String& payload);
+    void onOutputEvent(const String& payload);
+    void onInputEvent(const String& sourceId, const String& payload);
+
     std::map<String, HaEntity>          _entities;
     std::map<String, String>            _cmdTopicToEntityId;  // command topic → entity ID
     std::map<String, CommandCallback>   _callbacks;
+    bool                                _entitiesBuilt = false;
 
     static constexpr const char* TAG = "HA";
 };

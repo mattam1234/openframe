@@ -29,6 +29,7 @@ enum class ActionType : uint8_t {
     VariableSet,
     VariableIncrement,
     VariableToggle,
+    OutputControl,  // drive an output (LED/relay/RGB/WS2812): on/off, colour, brightness, animation
     HaServiceCall,
     PageChange,
     Notification,
@@ -56,12 +57,31 @@ struct ActionStep {
     String      keysCombo;
     String      mediaCommand;
     String      nodeId;        // RemoteAction: target node's deviceId (value holds the remote action id)
+
+    // OutputControl
+    String      outputId;
+    String      command;       // "digital" | "rgb" | "brightness" | "animation"
+    bool        on            = false;
+    uint8_t     red           = 0;
+    uint8_t     green         = 0;
+    uint8_t     blue          = 0;
+    uint8_t     brightnessVal = 0;
+    String      animation;     // e.g. "solid", "rainbow", "chase"
+    uint8_t     speed         = 128;
+};
+
+// Optional trigger that auto-runs an action when a hardware event fires.
+struct ActionTrigger {
+    String source;   // "" / "manual" → run only on demand; "input" → bound to a digital input
+    String inputId;  // for source == "input"
+    String event;    // digital-input event: "Press", "Release", "LongPress", "DoublePress"…
 };
 
 struct ActionConfig {
     String                  id;
     String                  name;
     bool                    enabled    = true;
+    ActionTrigger           trigger;
     std::vector<Condition>  conditions;
     std::vector<ActionStep> steps;
 };
@@ -122,6 +142,7 @@ private:
     void registerBuiltInExecutors();
     void recordHistory(const String& id, const String& name, bool success, const String& error);
     void onEventTriggered(const Event& event);
+    void onInputEvent(const String& inputId, const String& payload);
 
     // A cross-node action scheduled to fire at a shared cluster-clock epoch.
     struct ScheduledTrigger { uint32_t epoch; String actionId; };

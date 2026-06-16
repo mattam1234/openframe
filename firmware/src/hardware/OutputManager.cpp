@@ -2,6 +2,40 @@
 #include <map>
 #include "../core/PlatformCompat.h"
 
+const char* ledAnimationToString(LedAnimation a) {
+    switch (a) {
+        case LedAnimation::Solid:     return "solid";
+        case LedAnimation::Off:       return "off";
+        case LedAnimation::Blink:     return "blink";
+        case LedAnimation::Breathe:   return "breathe";
+        case LedAnimation::Rainbow:   return "rainbow";
+        case LedAnimation::Chase:     return "chase";
+        case LedAnimation::ColorWipe: return "colorwipe";
+    }
+    return "solid";
+}
+
+LedAnimation ledAnimationFromString(const String& s) {
+    if (s == "off")       return LedAnimation::Off;
+    if (s == "blink")     return LedAnimation::Blink;
+    if (s == "breathe")   return LedAnimation::Breathe;
+    if (s == "rainbow")   return LedAnimation::Rainbow;
+    if (s == "chase")     return LedAnimation::Chase;
+    if (s == "colorwipe") return LedAnimation::ColorWipe;
+    return LedAnimation::Solid;
+}
+
+const char* OutputManager::outputTypeToString(OutputType type) {
+    switch (type) {
+        case OutputType::Led:    return "led";
+        case OutputType::Rgb:    return "rgb";
+        case OutputType::Ws2812: return "ws2812";
+        case OutputType::Relay:  return "relay";
+        case OutputType::Buzzer: return "buzzer";
+    }
+    return "led";
+}
+
 OutputManager& OutputManager::instance() {
     static OutputManager inst;
     return inst;
@@ -30,6 +64,7 @@ void OutputManager::loop() {
             emitOutputEvent(i, "BuzzerStop");
         }
     }
+    tickAnimations(nowMs);
 }
 
 bool OutputManager::setDigital(const String& id, bool on) {
@@ -158,6 +193,14 @@ void OutputManager::setupOutput(size_t index) {
 bool OutputManager::applyDigital(size_t index, bool on) {
     const auto& cfg = _configs[index];
     auto& state = _states[index];
+
+    if (cfg.type == OutputType::Ws2812) {
+        state.on = on;
+        renderWs2812(index);
+        emitOutputEvent(index, "SetDigital");
+        return true;
+    }
+
     if (cfg.type != OutputType::Led && cfg.type != OutputType::Relay) return false;
 
     state.on = on;
@@ -179,6 +222,15 @@ bool OutputManager::applyDigital(size_t index, bool on) {
 bool OutputManager::applyBrightness(size_t index, uint8_t brightness) {
     const auto& cfg = _configs[index];
     auto& state = _states[index];
+
+    if (cfg.type == OutputType::Ws2812) {
+        state.brightness = brightness;
+        state.on = brightness > 0;
+        renderWs2812(index);
+        emitOutputEvent(index, "SetBrightness");
+        return true;
+    }
+
     if (cfg.type != OutputType::Led || !cfg.pwm) return false;
 
     const uint32_t maxDuty = (1u << cfg.pwmResolution) - 1u;
@@ -212,10 +264,29 @@ bool OutputManager::applyRgb(size_t index, uint8_t r, uint8_t g, uint8_t b) {
         of_pwm_write(cfg.pinG, cfg.channelG, toDuty(g));
         of_pwm_write(cfg.pinB, cfg.channelB, toDuty(b));
     } else {
-        updateWs2812(index);
+        // Setting a colour implies a solid fill; clear any running animation.
+        state.animation = LedAnimation::Solid;
+        renderWs2812(index);
     }
 
     emitOutputEvent(index, "SetRgb");
+    return true;
+}
+
+bool OutputManager::setAnimation(const String& id, LedAnimation animation, uint8_t speed) {
+    const int index = findIndexById(id);
+    if (index < 0) return false;
+    const auto& cfg = _configs[index];
+    auto& state = _states[static_cast<size_t>(index)];
+    if (cfg.type != OutputType::Ws2812) return false;
+
+    state.animation = animation;
+    if (speed > 0) state.animationSpeed = speed;
+    state.on = (animation != LedAnimation::Off);
+    state.animPhase = 0;
+    state.animLastMs = 0;
+    renderWs2812(static_cast<size_t>(index));
+    emitOutputEvent(static_cast<size_t>(index), "SetAnimation");
     return true;
 }
 
@@ -283,25 +354,125 @@ bool OutputManager::initWs2812(size_t index) {
     #undef OF_WS2812_PIN_LIST
 
     if (!attached) return false;
+
+    // Seed runtime state: strip starts off, at its configured master brightness.
+    state.brightness    = cfg.brightness;
+    state.animation     = LedAnimation::Solid;
+    state.on            = false;
+    state.animPhase     = 0;
+    state.animLastMs    = 0;
+    state.wsReady       = true;
+
     FastLED.show();
-    state.wsReady = true;
     return true;
 }
 
-void OutputManager::updateWs2812(size_t index) {
+// Render the current frame for one strip and push it to the hardware. Honours
+// state.on, the active animation, the current colour, the animation phase and
+// the per-strip master brightness.
+void OutputManager::renderWs2812(size_t index) {
     const auto& cfg = _configs[index];
     const auto& state = _states[index];
     auto& leds = _wsLedsPerOutput[index];
     if (cfg.type != OutputType::Ws2812 || !state.wsReady || leds.empty()) return;
 
-    auto scale = [&](uint8_t value) -> uint8_t {
-        return static_cast<uint8_t>((static_cast<uint16_t>(value) * static_cast<uint16_t>(cfg.brightness)) / 255u);
-    };
-    const CRGB color(scale(state.red), scale(state.green), scale(state.blue));
-    for (auto& led : leds) {
-        led = color;
+    const uint8_t  master = state.brightness;
+    const uint16_t n      = static_cast<uint16_t>(leds.size());
+    const CRGB     base(state.red, state.green, state.blue);
+
+    auto fillBlack = [&]() { for (auto& l : leds) l = CRGB::Black; };
+
+    if (!state.on || state.animation == LedAnimation::Off) {
+        fillBlack();
+        FastLED.show();
+        return;
+    }
+
+    switch (state.animation) {
+        case LedAnimation::Solid: {
+            CRGB c = base; c.nscale8_video(master);
+            for (auto& l : leds) l = c;
+            break;
+        }
+        case LedAnimation::Blink: {
+            const bool lit = (state.animPhase & 1) == 0;
+            CRGB c = base; c.nscale8_video(lit ? master : 0);
+            for (auto& l : leds) l = c;
+            break;
+        }
+        case LedAnimation::Breathe: {
+            const uint8_t lvl = scale8(triwave8(static_cast<uint8_t>(state.animPhase)), master);
+            CRGB c = base; c.nscale8_video(lvl);
+            for (auto& l : leds) l = c;
+            break;
+        }
+        case LedAnimation::Rainbow: {
+            const uint8_t startHue = static_cast<uint8_t>(state.animPhase);
+            const uint8_t delta    = n > 0 ? (n >= 255 ? 1 : static_cast<uint8_t>(255 / n)) : 0;
+            fill_rainbow(leds.data(), n, startHue, delta ? delta : 1);
+            for (auto& l : leds) l.nscale8_video(master);
+            break;
+        }
+        case LedAnimation::Chase: {
+            fillBlack();
+            if (n > 0) {
+                const uint16_t pos = state.animPhase % n;
+                CRGB c = base; c.nscale8_video(master);
+                leds[pos] = c;
+                if (n > 1) { CRGB t = c; t.nscale8(80); leds[(pos + n - 1) % n] = t; }  // short tail
+            }
+            break;
+        }
+        case LedAnimation::ColorWipe: {
+            const uint16_t count = n > 0 ? (state.animPhase % (n + 1)) : 0;
+            CRGB c = base; c.nscale8_video(master);
+            for (uint16_t i = 0; i < n; ++i) leds[i] = (i < count) ? c : CRGB::Black;
+            break;
+        }
+        case LedAnimation::Off:
+            break;  // handled above
     }
     FastLED.show();
+}
+
+void OutputManager::tickAnimations(uint32_t nowMs) {
+    for (size_t i = 0; i < _configs.size(); ++i) {
+        const auto& cfg = _configs[i];
+        auto& state = _states[i];
+        if (cfg.type != OutputType::Ws2812 || !state.wsReady || !state.on) continue;
+        // Static animations need no per-frame advance.
+        if (state.animation == LedAnimation::Solid || state.animation == LedAnimation::Off) continue;
+
+        // Faster speed → shorter frame interval (≈10ms fast … 100ms slow).
+        const uint32_t interval = 10u + ((255u - state.animationSpeed) * 90u) / 255u;
+        if (state.animLastMs != 0 && (nowMs - state.animLastMs) < interval) continue;
+        state.animLastMs = nowMs;
+        state.animPhase++;
+        renderWs2812(i);
+    }
+}
+
+void OutputManager::fillStateJson(JsonArray& arr) const {
+    for (size_t i = 0; i < _configs.size(); ++i) {
+        const auto& cfg = _configs[i];
+        const auto& state = _states[i];
+        auto obj = arr.add<JsonObject>();
+        obj["id"]   = cfg.id;
+        obj["type"] = outputTypeToString(cfg.type);
+        obj["on"]   = state.on;
+        obj["brightness"] = state.brightness;
+        obj["r"] = state.red;
+        obj["g"] = state.green;
+        obj["b"] = state.blue;
+        if (cfg.type == OutputType::Ws2812) {
+            obj["led_count"]  = cfg.ledCount;
+            obj["animation"]  = ledAnimationToString(state.animation);
+            obj["speed"]      = state.animationSpeed;
+        }
+        if (cfg.type == OutputType::Buzzer) {
+            obj["buzzer_freq"] = state.buzzerFreq;
+        }
+    }
 }
 
 void OutputManager::emitOutputEvent(size_t index, const char* action) {
@@ -311,13 +482,17 @@ void OutputManager::emitOutputEvent(size_t index, const char* action) {
     JsonDocument doc;
     doc["action"] = action;
     doc["id"] = cfg.id;
-    doc["type"] = static_cast<uint8_t>(cfg.type);
+    doc["type"] = outputTypeToString(cfg.type);
     doc["on"] = state.on;
     doc["brightness"] = state.brightness;
     doc["r"] = state.red;
     doc["g"] = state.green;
     doc["b"] = state.blue;
     doc["buzzer_freq"] = state.buzzerFreq;
+    if (cfg.type == OutputType::Ws2812) {
+        doc["animation"] = ledAnimationToString(state.animation);
+        doc["speed"] = state.animationSpeed;
+    }
 
     String payload;
     serializeJson(doc, payload);

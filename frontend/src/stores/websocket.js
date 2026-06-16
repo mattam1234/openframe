@@ -12,6 +12,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const sensors = reactive({})
   const variables = reactive({})
   const health = reactive({})
+  const outputs = reactive({})
   const logs = ref([])
   const events = ref([])
 
@@ -78,6 +79,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
       case 'event':
         events.value.unshift(payload)
         if (events.value.length > 1000) events.value.length = 1000
+        // Output state changes ride the generic event channel; the inner payload
+        // is a JSON string of the output's live state. Surface it as `outputs[id]`
+        // so control views stay in sync with actions/external changes.
+        if (payload && payload.event === 'output_state_changed') {
+          try {
+            const state = JSON.parse(payload.payload)
+            if (state && state.id) outputs[state.id] = { ...outputs[state.id], ...state }
+          } catch (_) { /* ignore malformed output payloads */ }
+        }
         break
     }
   }
@@ -92,5 +102,5 @@ export const useWebSocketStore = defineStore('websocket', () => {
     logs.value = Array.isArray(entries) ? entries : []
   }
 
-  return { connected, sensors, variables, health, logs, events, connect, send, setLogsSnapshot }
+  return { connected, sensors, variables, health, outputs, logs, events, connect, send, setLogsSnapshot }
 })

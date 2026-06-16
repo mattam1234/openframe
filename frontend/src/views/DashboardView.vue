@@ -19,6 +19,22 @@
       </v-col>
     </v-row>
 
+    <!-- Outputs (live control) -->
+    <v-row v-if="outputs.length" class="mt-2">
+      <v-col cols="12">
+        <div class="d-flex align-center justify-space-between mb-1">
+          <h2 class="text-subtitle-1">
+            <v-icon class="mr-1" size="small">mdi-led-strip-variant</v-icon>
+            Outputs
+          </h2>
+          <router-link to="/outputs" class="text-caption text-decoration-none">manage →</router-link>
+        </div>
+      </v-col>
+      <v-col v-for="out in outputs" :key="out.id" cols="12" sm="6" md="4" lg="3">
+        <OutputControlCard :output="out" @changed="onOutputChanged" />
+      </v-col>
+    </v-row>
+
     <v-row class="mt-2">
       <v-col cols="12" md="6">
         <v-card>
@@ -201,19 +217,37 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
 import api from '../api/client'
+import OutputControlCard from '../components/OutputControlCard.vue'
 
 const wsStore = useWebSocketStore()
 const deviceStore = useDeviceStore()
 
 const storage = ref({ total: 0, used: 0, free: 0 })
+const outputs = ref([])
+
+function mergeOutputs(list) {
+  if (!Array.isArray(list)) return
+  for (const incoming of list) {
+    const idx = outputs.value.findIndex(o => o.id === incoming.id)
+    if (idx >= 0) outputs.value[idx] = { ...outputs.value[idx], ...incoming }
+    else outputs.value.push(incoming)
+  }
+}
+
+function onOutputChanged(list, error) {
+  if (!error) mergeOutputs(list)
+}
+
+watch(() => wsStore.outputs, (map) => mergeOutputs(Object.values(map)), { deep: true })
 
 onMounted(() => {
   deviceStore.fetchStatus().catch(() => {})
   api.fs.stat().then((s) => { storage.value = s }).catch(() => {})
+  api.get('/api/outputs/state').then((d) => { outputs.value = d.outputs || [] }).catch(() => {})
 })
 
 const storagePercent = computed(() =>

@@ -44,6 +44,8 @@ public:
     }
     ModuleType type() const override { return ModuleType::Potentiometers; }
     String label() const override { return "ADC Module (ADS1115)"; }
+    // 0x48-0x4B overlaps the PCA9685 LED range (0x40-0x4F); claim them as ADCs first.
+    int priority() const override { return 50; }
 };
 
 class EncoderModuleHandler final : public ModuleHandler {
@@ -54,6 +56,7 @@ public:
     }
     ModuleType type() const override { return ModuleType::Encoders; }
     String label() const override { return "Rotary Encoder (AS5600)"; }
+    int priority() const override { return 10; }
 };
 
 class DisplayModuleHandler final : public ModuleHandler {
@@ -64,6 +67,8 @@ public:
     }
     ModuleType type() const override { return ModuleType::Display; }
     String label() const override { return "I2C Display Module"; }
+    // 0x3C/0x3D fall inside the relay range (0x38-0x3F); claim them as displays first.
+    int priority() const override { return 50; }
 };
 
 class SensorModuleHandler final : public ModuleHandler {
@@ -74,6 +79,73 @@ public:
     }
     ModuleType type() const override { return ModuleType::Sensor; }
     String label() const override { return "Environmental Sensor (BME/BMP280)"; }
+    int priority() const override { return 10; }
+    void identify(uint8_t address, String& chipModel, String& suggestedDriver) const override {
+        // Bosch chip-id register 0xD0 distinguishes the otherwise-identical 0x76/0x77 parts.
+        uint8_t id = 0;
+        if (!ModuleManager::i2cReadReg8(address, 0xD0, id)) return;
+        switch (id) {
+            case 0x60: chipModel = "BME280"; suggestedDriver = "bme280"; break;
+            case 0x58: case 0x57: case 0x56: case 0x55:
+                       chipModel = "BMP280"; suggestedDriver = "bmp280"; break;
+            case 0x61: chipModel = "BME680"; suggestedDriver = ""; break;  // no driver yet
+            default:   chipModel = "Unknown (0xD0=0x" + String(id, HEX) + ")"; break;
+        }
+    }
+};
+
+class HumiditySensorHandler final : public ModuleHandler {
+public:
+    bool probe(uint8_t address) override {
+        // SHT3x temperature/humidity sensors: 0x44 (default) / 0x45 (ADDR high)
+        return address == 0x44 || address == 0x45;
+    }
+    ModuleType type() const override { return ModuleType::Sensor; }
+    String label() const override { return "Humidity Sensor (SHT3x)"; }
+    int priority() const override { return 10; }
+    void identify(uint8_t address, String& chipModel, String& suggestedDriver) const override {
+        (void)address;
+        chipModel = "SHT31";
+        suggestedDriver = "sht31";
+    }
+};
+
+class LightSensorHandler final : public ModuleHandler {
+public:
+    bool probe(uint8_t address) override {
+        // BH1750 ambient light sensor: 0x23 (ADDR low). 0x5C variant overlaps nothing else.
+        return address == 0x23 || address == 0x5C;
+    }
+    ModuleType type() const override { return ModuleType::Sensor; }
+    String label() const override { return "Light Sensor (BH1750)"; }
+    int priority() const override { return 10; }
+    void identify(uint8_t address, String& chipModel, String& suggestedDriver) const override {
+        (void)address;
+        chipModel = "BH1750";
+        suggestedDriver = "bh1750";
+    }
+};
+
+class ImuModuleHandler final : public ModuleHandler {
+public:
+    bool probe(uint8_t address) override {
+        // MPU6050/6500/9250 family: 0x68 (AD0 low) / 0x69 (AD0 high)
+        return address == 0x68 || address == 0x69;
+    }
+    ModuleType type() const override { return ModuleType::Imu; }
+    String label() const override { return "IMU (MPU6xxx)"; }
+    int priority() const override { return 10; }
+    void identify(uint8_t address, String& chipModel, String& suggestedDriver) const override {
+        // WHO_AM_I register 0x75.
+        uint8_t id = 0;
+        if (!ModuleManager::i2cReadReg8(address, 0x75, id)) return;
+        switch (id) {
+            case 0x68: chipModel = "MPU6050"; suggestedDriver = "mpu6050"; break;
+            case 0x70: chipModel = "MPU6500"; suggestedDriver = "";        break;
+            case 0x71: chipModel = "MPU9250"; suggestedDriver = "";        break;
+            default:   chipModel = "Unknown (WHO_AM_I=0x" + String(id, HEX) + ")"; break;
+        }
+    }
 };
 
 class RelayModuleHandler final : public ModuleHandler {
@@ -120,6 +192,20 @@ ModuleManager& ModuleManager::instance() {
     return inst;
 }
 
+bool ModuleManager::i2cReadReg8(uint8_t address, uint8_t reg, uint8_t& value) {
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    // Repeated start (endTransmission(false)) keeps the bus for the read.
+    if (Wire.endTransmission(false) != 0) {
+        return false;
+    }
+    if (Wire.requestFrom(address, static_cast<uint8_t>(1)) != 1) {
+        return false;
+    }
+    value = Wire.read();
+    return true;
+}
+
 bool ModuleManager::begin() {
     registerBuiltInHandlers();
     scanBus();
@@ -128,15 +214,18 @@ bool ModuleManager::begin() {
 }
 
 void ModuleManager::registerBuiltInHandlers() {
-    // Registration order matters: first matching handler wins for a given address.
-    // More specific handlers (single address) should be registered after broad ranges
-    // so they override the broader ranges when their address is probed.
+    // The first matching handler wins for a given address; handlers are probed in
+    // ascending priority() order (see scanBus), so specific chips beat broad ranges
+    // regardless of registration order.
     registerHandler("led",            []() { return std::unique_ptr<ModuleHandler>(new LedModuleHandler()); });
     registerHandler("potentiometer",  []() { return std::unique_ptr<ModuleHandler>(new PotentiometerModuleHandler()); });
     registerHandler("button",         []() { return std::unique_ptr<ModuleHandler>(new ButtonModuleHandler()); });
     registerHandler("relay",          []() { return std::unique_ptr<ModuleHandler>(new RelayModuleHandler()); });
     registerHandler("display_module", []() { return std::unique_ptr<ModuleHandler>(new DisplayModuleHandler()); });
     registerHandler("sensor",         []() { return std::unique_ptr<ModuleHandler>(new SensorModuleHandler()); });
+    registerHandler("humidity",       []() { return std::unique_ptr<ModuleHandler>(new HumiditySensorHandler()); });
+    registerHandler("light",          []() { return std::unique_ptr<ModuleHandler>(new LightSensorHandler()); });
+    registerHandler("imu",            []() { return std::unique_ptr<ModuleHandler>(new ImuModuleHandler()); });
     registerHandler("encoder",        []() { return std::unique_ptr<ModuleHandler>(new EncoderModuleHandler()); });
 }
 
@@ -168,6 +257,12 @@ void ModuleManager::scanBus() {
         auto handler = kv.second();
         if (handler) _handlers.push_back(std::move(handler));
     }
+    // Probe specific chips before broad address ranges. stable_sort keeps a
+    // deterministic (registration/name) order among equal priorities.
+    std::stable_sort(_handlers.begin(), _handlers.end(),
+                     [](const std::unique_ptr<ModuleHandler>& a, const std::unique_ptr<ModuleHandler>& b) {
+                         return a->priority() < b->priority();
+                     });
 
     std::vector<uint8_t> found;
     for (uint8_t addr = 8; addr < 120; ++addr) {
@@ -212,6 +307,7 @@ void ModuleManager::checkProbe(uint8_t address) {
             module.typeLabel  = handler->label();
             module.online     = true;
             module.lastSeenMs = millis();
+            handler->identify(address, module.chipModel, module.suggestedDriver);
             _modules.push_back(module);
             handler->onAttach(address);
             onModuleAttached(module);

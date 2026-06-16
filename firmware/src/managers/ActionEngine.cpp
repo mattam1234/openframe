@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include "../core/PlatformCompat.h"
 #include "../hardware/DisplayManager.h"
+#include "../hardware/OutputManager.h"
 #include "../managers/HaManager.h"
 #include "../managers/MqttManager.h"
 #include "../managers/NodeLink.h"
@@ -26,6 +27,7 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "variable_set")       return ActionType::VariableSet;
     if (s == "variable_increment") return ActionType::VariableIncrement;
     if (s == "variable_toggle")    return ActionType::VariableToggle;
+    if (s == "output_control")     return ActionType::OutputControl;
     if (s == "ha_service_call")    return ActionType::HaServiceCall;
     if (s == "page_change")        return ActionType::PageChange;
     if (s == "notification")       return ActionType::Notification;
@@ -44,6 +46,7 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::VariableSet:       return "variable_set";
         case ActionType::VariableIncrement: return "variable_increment";
         case ActionType::VariableToggle:    return "variable_toggle";
+        case ActionType::OutputControl:     return "output_control";
         case ActionType::HaServiceCall:     return "ha_service_call";
         case ActionType::PageChange:        return "page_change";
         case ActionType::Notification:      return "notification";
@@ -87,6 +90,15 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.keysCombo    = item["keys"] | String("");
         s.mediaCommand = item["media_command"] | String("");
         s.nodeId       = item["node_id"] | String("");
+        s.outputId     = item["output_id"] | String("");
+        s.command      = item["command"] | String("");
+        s.on           = item["on"] | false;
+        s.red          = item["r"] | 0;
+        s.green        = item["g"] | 0;
+        s.blue         = item["b"] | 0;
+        s.brightnessVal = item["brightness"] | 0;
+        s.animation    = item["animation"] | String("");
+        s.speed        = item["speed"] | 128;
         out.push_back(s);
     }
 }
@@ -118,6 +130,16 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
             case ActionType::VariableSet:       obj["variable_id"] = s.variableId; obj["value"] = s.value; break;
             case ActionType::VariableIncrement: obj["variable_id"] = s.variableId; obj["increment"] = s.increment; break;
             case ActionType::VariableToggle:    obj["variable_id"] = s.variableId; break;
+            case ActionType::OutputControl:
+                obj["output_id"] = s.outputId;
+                obj["command"]   = s.command;
+                if (s.command == "digital")    obj["on"] = s.on;
+                if (s.command == "rgb" || s.command == "animation") {
+                    obj["r"] = s.red; obj["g"] = s.green; obj["b"] = s.blue;
+                }
+                if (s.command == "brightness") obj["brightness"] = s.brightnessVal;
+                if (s.command == "animation") { obj["animation"] = s.animation; obj["speed"] = s.speed; }
+                break;
             case ActionType::HaServiceCall:     obj["ha_service"] = s.haService; obj["ha_entity_id"] = s.haEntityId; obj["body"] = s.body; break;
             case ActionType::PageChange:        obj["display_id"] = s.displayId; obj["page_id"] = s.pageId; break;
             case ActionType::Notification:      obj["message"] = s.message; break;
@@ -213,6 +235,11 @@ bool ActionEngine::begin() {
             ActionEngine::instance().onEventTriggered(event);
         });
 
+        // Run any action whose trigger is bound to this digital-input event.
+        EventBus::instance().subscribe(EventType::InputDigitalChanged, [](const Event& event) {
+            ActionEngine::instance().onInputEvent(event.sourceId, event.payload);
+        });
+
         // Actions requested by another node over NodeLink:
         //   "trigger=<id>"          → run now
         //   "trigger@<epoch>=<id>"  → run at a shared cluster-clock epoch (sync effect)
@@ -306,6 +333,10 @@ bool ActionEngine::saveActions() const {
         obj["id"]      = action.id;
         obj["name"]    = action.name;
         obj["enabled"] = action.enabled;
+        auto trig = obj["trigger"].to<JsonObject>();
+        trig["source"]   = action.trigger.source;
+        trig["input_id"] = action.trigger.inputId;
+        trig["event"]    = action.trigger.event;
         serializeConditions(action.conditions, obj["conditions"].to<JsonArray>());
         serializeSteps(action.steps, obj["steps"].to<JsonArray>());
     }
@@ -324,6 +355,13 @@ bool ActionEngine::loadActions() {
         action.name    = item["name"] | String("");
         action.enabled = item["enabled"] | true;
         if (!action.id.length()) continue;
+
+        if (item["trigger"].is<JsonObjectConst>()) {
+            JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
+            action.trigger.source  = t["source"]   | String("");
+            action.trigger.inputId = t["input_id"] | String("");
+            action.trigger.event   = t["event"]    | String("");
+        }
 
         if (item["conditions"].is<JsonArrayConst>()) {
             deserializeConditions(item["conditions"].as<JsonArrayConst>(), action.conditions);
@@ -430,6 +468,33 @@ void ActionEngine::registerBuiltInExecutors() {
         return true;
     });
 
+    runner.registerExecutor(ActionType::OutputControl, [](const ActionStep& step, String& error) -> bool {
+        if (!step.outputId.length()) {
+            error = "OutputControl needs an output_id";
+            return false;
+        }
+        auto& out = OutputManager::instance();
+        bool ok = false;
+        if (step.command == "digital") {
+            ok = out.setDigital(step.outputId, step.on);
+        } else if (step.command == "rgb") {
+            ok = out.setRgb(step.outputId, step.red, step.green, step.blue);
+        } else if (step.command == "brightness") {
+            ok = out.setBrightness(step.outputId, step.brightnessVal);
+        } else if (step.command == "animation") {
+            // Optional colour rides along, mirroring the /api/outputs/control endpoint.
+            if (step.red || step.green || step.blue) {
+                out.setRgb(step.outputId, step.red, step.green, step.blue);
+            }
+            ok = out.setAnimation(step.outputId, ledAnimationFromString(step.animation), step.speed);
+        } else {
+            error = "Unknown output command: " + step.command;
+            return false;
+        }
+        if (!ok) error = "Output '" + step.outputId + "' rejected command '" + step.command + "'";
+        return ok;
+    });
+
     runner.registerExecutor(ActionType::HaServiceCall, [](const ActionStep& step, String& error) -> bool {
         if (!step.haService.length()) {
             error = "HA service required";
@@ -522,5 +587,21 @@ void ActionEngine::onEventTriggered(const Event& event) {
         if (actionId.length() && actionId != event.sourceId) {
             triggerAction(actionId);
         }
+    }
+}
+
+void ActionEngine::onInputEvent(const String& inputId, const String& payload) {
+    JsonDocument doc;
+    if (deserializeJson(doc, payload) != DeserializationError::Ok) return;
+    const String event = doc["event"] | String("");
+    if (!event.length()) return;
+
+    // Run every enabled action bound to this (input, event) pair.
+    for (const auto& action : _actions) {
+        if (!action.enabled) continue;
+        if (action.trigger.source != "input") continue;
+        if (action.trigger.inputId != inputId) continue;
+        if (action.trigger.event != event) continue;
+        triggerAction(action.id);
     }
 }

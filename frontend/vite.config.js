@@ -23,5 +23,16 @@ export default defineConfig({
   build: {
     outDir: '../firmware/data/www',
     emptyOutDir: true,
+    rollupOptions: {
+      // mklittlefs (used to pack data/www into the LittleFS image) caps filenames
+      // at 31 chars. Vite's default `[name]-[hash]` names — especially the
+      // `_plugin-vue_export-helper-<hash>.js` helper chunk — exceed that and fail
+      // `uploadfs`. Emit short hash-only names so no asset can ever cross the limit.
+      output: {
+        entryFileNames: 'assets/[hash].js',
+        chunkFileNames: 'assets/[hash].js',
+        assetFileNames: 'assets/[hash][extname]',
+      },
+    },
   },
 })

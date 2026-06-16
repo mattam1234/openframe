@@ -187,6 +187,41 @@
           <v-switch v-model="editingAction.enabled" label="Enabled" color="primary" />
 
           <v-divider class="my-3" />
+          <div class="text-subtitle-2 mb-2">When (trigger)</div>
+          <v-row>
+            <v-col cols="12" sm="4">
+              <v-select
+                v-model="editingAction.trigger.source"
+                :items="[{ value: 'manual', title: 'Manual / triggered by name' }, { value: 'input', title: 'When an input fires' }]"
+                label="Trigger"
+                density="compact"
+                hide-details
+              />
+            </v-col>
+            <template v-if="editingAction.trigger.source === 'input'">
+              <v-col cols="12" sm="4">
+                <v-select
+                  v-model="editingAction.trigger.input_id"
+                  :items="inputsList"
+                  label="Input"
+                  density="compact"
+                  hide-details
+                  :no-data-text="'No inputs configured'"
+                />
+              </v-col>
+              <v-col cols="12" sm="4">
+                <v-select
+                  v-model="editingAction.trigger.event"
+                  :items="inputEvents"
+                  label="Event"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </template>
+          </v-row>
+
+          <v-divider class="my-3" />
           <div class="text-subtitle-2 mb-2">Steps</div>
 
           <div v-for="(step, idx) in editingAction.steps" :key="idx" class="mb-3">
@@ -214,14 +249,98 @@
                   <v-text-field v-model="step.topic" label="Topic" density="compact" class="mt-2" />
                   <v-text-field v-model="step.body" label="Payload" density="compact" />
                 </template>
-                <template v-if="step.type === 'variable_set' || step.type === 'variable_increment' || step.type === 'variable_toggle'">
-                  <v-text-field v-model="step.variable_id" label="Variable ID" density="compact" class="mt-2" />
-                  <v-text-field v-if="step.type === 'variable_set'" v-model="step.value" label="Value" density="compact" />
-                  <v-text-field v-if="step.type === 'variable_increment'" v-model.number="step.increment" label="Increment" type="number" density="compact" />
+
+                <!-- Output control -->
+                <template v-if="step.type === 'output_control'">
+                  <v-row class="mt-1">
+                    <v-col cols="12" sm="6">
+                      <v-select
+                        v-model="step.output_id"
+                        :items="outputsList"
+                        item-title="id"
+                        item-value="id"
+                        label="Output"
+                        density="compact"
+                        hide-details
+                        :no-data-text="'No outputs configured'"
+                      />
+                    </v-col>
+                    <v-col cols="12" sm="6">
+                      <v-select
+                        v-model="step.command"
+                        :items="outputCommands"
+                        item-title="label"
+                        item-value="value"
+                        label="Action"
+                        density="compact"
+                        hide-details
+                      />
+                    </v-col>
+                  </v-row>
+                  <v-switch
+                    v-if="step.command === 'digital'"
+                    v-model="step.on"
+                    :label="step.on ? 'Turn ON' : 'Turn OFF'"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                  <div v-if="step.command === 'rgb' || step.command === 'animation'" class="d-flex align-center ga-2 mt-2">
+                    <span class="text-caption text-medium-emphasis">Colour</span>
+                    <input type="color" :value="stepHex(step)" @input="setStepColor(step, $event.target.value)">
+                  </div>
+                  <v-slider
+                    v-if="step.command === 'brightness'"
+                    v-model="step.brightness"
+                    :min="0" :max="255" :step="1"
+                    label="Brightness"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                  />
+                  <template v-if="step.command === 'animation'">
+                    <v-select v-model="step.animation" :items="animations" label="Animation" density="compact" hide-details class="mt-2" />
+                    <v-slider v-model="step.speed" :min="1" :max="255" :step="1" label="Speed" density="compact" hide-details class="mt-2" />
+                  </template>
                 </template>
+
+                <!-- Variable steps: pick from the device's variable list -->
+                <template v-if="step.type === 'variable_set' || step.type === 'variable_increment' || step.type === 'variable_toggle'">
+                  <v-select
+                    v-model="step.variable_id"
+                    :items="variablesList"
+                    label="Variable"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                    :no-data-text="'No variables defined'"
+                  />
+                  <v-text-field v-if="step.type === 'variable_set'" v-model="step.value" label="Value" density="compact" class="mt-2" />
+                  <v-text-field v-if="step.type === 'variable_increment'" v-model.number="step.increment" label="Increment" type="number" density="compact" class="mt-2" />
+                </template>
+
+                <!-- Page change: pick display + page -->
                 <template v-if="step.type === 'page_change'">
-                  <v-text-field v-model="step.display_id" label="Display ID" density="compact" class="mt-2" />
-                  <v-text-field v-model="step.page_id" label="Page ID" density="compact" />
+                  <v-select
+                    v-model="step.display_id"
+                    :items="displaysList"
+                    label="Display"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                    :no-data-text="'No displays configured'"
+                  />
+                  <v-select
+                    v-model="step.page_id"
+                    :items="pagesForDisplay(step.display_id)"
+                    item-title="title"
+                    item-value="id"
+                    label="Page"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                    :no-data-text="'No pages for this display'"
+                  />
                 </template>
                 <v-text-field v-if="step.type === 'notification'" v-model="step.message" label="Message" density="compact" class="mt-2" />
                 <template v-if="step.type === 'http_request'">
@@ -292,18 +411,26 @@ const actions = ref([])
 const macros = ref([])
 const history = ref([])
 
+// Lists that populate the editor dropdowns ("choose from a list").
+const outputsList = ref([])    // [{id, type}]
+const variablesList = ref([])  // [id]
+const inputsList = ref([])     // [id] (digital inputs)
+const displaysList = ref([])   // [id]
+const pagesList = ref([])      // [{id, title, displayId}]
+
 const actionDialog = ref(false)
 const macroDialog = ref(false)
 
 const actionStepTypes = [
-  { value: 'delay', label: 'Delay' },
-  { value: 'mqtt_publish', label: 'MQTT Publish' },
+  { value: 'output_control', label: 'Control Output' },
   { value: 'variable_set', label: 'Variable Set' },
   { value: 'variable_increment', label: 'Variable Increment' },
   { value: 'variable_toggle', label: 'Variable Toggle' },
-  { value: 'ha_service_call', label: 'HA Service Call' },
   { value: 'page_change', label: 'Page Change' },
   { value: 'notification', label: 'Notification' },
+  { value: 'delay', label: 'Delay' },
+  { value: 'mqtt_publish', label: 'MQTT Publish' },
+  { value: 'ha_service_call', label: 'HA Service Call' },
   { value: 'http_request', label: 'HTTP Request' },
   { value: 'keyboard_shortcut', label: 'Keyboard Shortcut' },
   { value: 'media_control', label: 'Media Control' },
@@ -311,7 +438,30 @@ const actionStepTypes = [
   { value: 'sync_action', label: 'Sync Action (all nodes, timed)' },
 ]
 
-const editingAction = ref({ id: '', name: '', enabled: true, steps: [], _existing: false })
+// Digital-input events an action can be bound to (must match firmware names).
+const inputEvents = ['Press', 'Release', 'LongPress', 'DoublePress', 'TriplePress', 'Hold', 'Repeat']
+const outputCommands = [
+  { value: 'digital', label: 'On / Off' },
+  { value: 'rgb', label: 'Colour' },
+  { value: 'brightness', label: 'Brightness' },
+  { value: 'animation', label: 'Animation' },
+]
+const animations = ['solid', 'off', 'blink', 'breathe', 'rainbow', 'chase', 'colorwipe']
+
+const pagesForDisplay = (displayId) =>
+  pagesList.value.filter(p => !displayId || p.displayId === displayId)
+
+// <input type="color"> helpers — convert between hex and the step's r/g/b ints.
+const toHex = (n) => Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0')
+const stepHex = (step) => `#${toHex(step.r || 0)}${toHex(step.g || 0)}${toHex(step.b || 0)}`
+function setStepColor(step, hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex || '')
+  if (!m) return
+  step.r = parseInt(m[1], 16); step.g = parseInt(m[2], 16); step.b = parseInt(m[3], 16)
+}
+
+const newTrigger = () => ({ source: 'manual', input_id: '', event: 'Press' })
+const editingAction = ref({ id: '', name: '', enabled: true, trigger: newTrigger(), steps: [], _existing: false })
 const editingMacro = ref({ id: '', name: '', enabled: true, actionsText: '', _existing: false })
 
 const formatTs = (ms) => ms ? `${(ms / 1000).toFixed(1)}s` : '—'
@@ -327,6 +477,20 @@ async function refresh() {
     actions.value = actData.actions || []
     macros.value = macData.macros || []
     history.value = (actData.history || []).slice().reverse()
+
+    // Dropdown sources — best-effort, don't fail the whole view if one errors.
+    const [out, vars, ins, disp, pages] = await Promise.all([
+      api.get('/api/outputs/state').catch(() => ({ outputs: [] })),
+      api.get('/api/variables').catch(() => ({ variables: {} })),
+      api.get('/api/inputs').catch(() => ({ digital: [] })),
+      api.get('/api/displays').catch(() => ({ displays: [] })),
+      api.get('/api/displays/pages').catch(() => ({ pages: [] })),
+    ])
+    outputsList.value = out.outputs || []
+    variablesList.value = Object.keys(vars.variables || {})
+    inputsList.value = (ins.digital || []).map(i => i.id).filter(Boolean)
+    displaysList.value = (disp.displays || []).map(d => d.id).filter(Boolean)
+    pagesList.value = pages.pages || []
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Failed to load data' }
   } finally {
@@ -335,13 +499,14 @@ async function refresh() {
 }
 
 function openNewAction() {
-  editingAction.value = { id: '', name: '', enabled: true, steps: [], _existing: false }
+  editingAction.value = { id: '', name: '', enabled: true, trigger: newTrigger(), steps: [], _existing: false }
   actionDialog.value = true
 }
 
 function editAction(action) {
   editingAction.value = {
     ...action,
+    trigger: { ...newTrigger(), ...(action.trigger || {}) },
     steps: action.steps ? JSON.parse(JSON.stringify(action.steps)) : [],
     _existing: true,
   }
@@ -349,7 +514,7 @@ function editAction(action) {
 }
 
 function addStep() {
-  editingAction.value.steps.push({ type: 'delay', delay_ms: 100 })
+  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid' })
 }
 
 function removeStep(idx) {
@@ -359,10 +524,14 @@ function removeStep(idx) {
 async function saveAction() {
   saving.value = true
   try {
+    const t = editingAction.value.trigger || newTrigger()
     const payload = {
       id: editingAction.value.id,
       name: editingAction.value.name,
       enabled: editingAction.value.enabled,
+      trigger: t.source === 'input'
+        ? { source: 'input', input_id: t.input_id, event: t.event }
+        : { source: 'manual', input_id: '', event: '' },
       steps: editingAction.value.steps,
       conditions: [],
     }

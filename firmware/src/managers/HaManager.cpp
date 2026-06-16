@@ -1,5 +1,26 @@
 #include "HaManager.h"
 
+#include "../hardware/SensorManager.h"
+#include "../hardware/OutputManager.h"
+#include "../core/StorageManager.h"
+
+namespace {
+// Map a sensor metric key to a Home Assistant unit + device_class. Unknown metrics
+// fall through with empty strings (still published, just without unit/class).
+void metricMeta(const String& metric, String& unit, String& deviceClass) {
+    unit = ""; deviceClass = "";
+    if      (metric == "temperature_c")    { unit = "°C";  deviceClass = "temperature"; }
+    else if (metric == "humidity_pct")     { unit = "%";   deviceClass = "humidity"; }
+    else if (metric == "pressure_hpa")     { unit = "hPa"; deviceClass = "pressure"; }
+    else if (metric == "altitude_m")       { unit = "m"; }
+    else if (metric == "lux")              { unit = "lx";  deviceClass = "illuminance"; }
+    else if (metric == "bus_voltage_v")    { unit = "V";   deviceClass = "voltage"; }
+    else if (metric == "shunt_voltage_mv") { unit = "mV";  deviceClass = "voltage"; }
+    else if (metric == "current_ma")       { unit = "mA";  deviceClass = "current"; }
+    else if (metric == "power_mw")         { unit = "mW";  deviceClass = "power"; }
+}
+}  // namespace
+
 HaManager& HaManager::instance() {
     static HaManager inst;
     return inst;
@@ -13,13 +34,26 @@ void HaManager::begin() {
         return;
     }
 
-    // Publish discovery when MQTT connects (and re-connects)
+    // Build entities + publish discovery when MQTT connects (and re-connects).
     EventBus::instance().subscribe(EventType::MqttConnected, [this](const Event&) {
         LOG_I(TAG, "MQTT connected — publishing HA discovery");
+        buildEntities();
         publishDiscovery();
+        publishAllStates();
     });
 
-    LOG_I(TAG, "HA manager ready (" + String(_entities.size()) + " entities pre-registered)");
+    // Forward live state from the hardware managers to HA state topics.
+    EventBus::instance().subscribe(EventType::SensorValueUpdated, [this](const Event& e) {
+        onSensorEvent(e.payload);
+    });
+    EventBus::instance().subscribe(EventType::OutputStateChanged, [this](const Event& e) {
+        onOutputEvent(e.payload);
+    });
+    EventBus::instance().subscribe(EventType::InputDigitalChanged, [this](const Event& e) {
+        onInputEvent(e.sourceId, e.payload);
+    });
+
+    LOG_I(TAG, "HA manager ready");
 }
 
 void HaManager::registerEntity(const HaEntity& entity) {
@@ -193,4 +227,111 @@ void HaManager::handleCommand(const String& topic, const String& payload) {
     String evtPayload;
     serializeJson(doc, evtPayload);
     EventBus::instance().publish(EventType::ActionTriggered, entityId, evtPayload);
+}
+
+// ── Auto-discovery entity bridge ───────────────────────────────────────────────
+
+void HaManager::buildEntities() {
+    if (_entitiesBuilt) return;
+    _entitiesBuilt = true;
+
+    // Sensors → one read-only HA sensor per metric (id = "<sensorId>_<metric>").
+    for (const auto& inst : SensorManager::instance().sensors()) {
+        if (!inst.driver) continue;
+        const String sid = inst.config.id;
+        for (const auto& metric : inst.driver->metricKeys()) {
+            HaEntity e;
+            e.type = HaEntityType::Sensor;
+            e.id   = sid + "_" + metric;
+            e.name = sid + " " + metric;
+            metricMeta(metric, e.unit, e.deviceClass);
+            registerEntity(e);
+        }
+    }
+
+    // Outputs → controllable HA switches; route the command back to the output.
+    {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        OutputManager::instance().fillStateJson(arr);
+        for (JsonObjectConst o : arr) {
+            const String oid = o["id"] | String("");
+            if (!oid.length()) continue;
+            HaEntity e;
+            e.type = HaEntityType::Switch;
+            e.id   = oid;
+            e.name = oid;
+            registerEntity(e);
+            onCommand(oid, [](const String& entityId, const String& payload) {
+                OutputManager::instance().setDigital(entityId, payload == "ON");
+            });
+        }
+    }
+
+    // Digital inputs → HA binary sensors (id = input id).
+    {
+        JsonDocument doc;
+        if (StorageManager::instance().readJson(OF_INPUTS_PATH, doc) &&
+            doc["digital"].is<JsonArrayConst>()) {
+            for (JsonObjectConst d : doc["digital"].as<JsonArrayConst>()) {
+                const String iid = d["id"] | String("");
+                if (!iid.length()) continue;
+                HaEntity e;
+                e.type = HaEntityType::BinarySensor;
+                e.id   = iid;
+                e.name = iid;
+                registerEntity(e);
+            }
+        }
+    }
+
+    LOG_I(TAG, "Built " + String(_entities.size()) + " HA entities from config");
+}
+
+void HaManager::publishAllStates() {
+    // Outputs: current on/off.
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
+    OutputManager::instance().fillStateJson(arr);
+    for (JsonObjectConst o : arr) {
+        const String oid = o["id"] | String("");
+        if (oid.length()) publishState(oid, (o["on"] | false) ? "ON" : "OFF");
+    }
+
+    // Binary sensors: default to OFF until the first press/release arrives so they
+    // don't show as "unavailable" in HA.
+    for (const auto& kv : _entities) {
+        if (kv.second.type == HaEntityType::BinarySensor) {
+            publishState(kv.second.id, "OFF");
+        }
+    }
+}
+
+void HaManager::onSensorEvent(const String& payload) {
+    if (!payload.length()) return;
+    JsonDocument doc;
+    if (deserializeJson(doc, payload)) return;
+    const String id = doc["id"] | String("");
+    if (!id.length() || !doc["values"].is<JsonObjectConst>()) return;
+    for (JsonPairConst kv : doc["values"].as<JsonObjectConst>()) {
+        publishState(id + "_" + String(kv.key().c_str()), String(kv.value().as<float>()));
+    }
+}
+
+void HaManager::onOutputEvent(const String& payload) {
+    if (!payload.length()) return;
+    JsonDocument doc;
+    if (deserializeJson(doc, payload)) return;
+    const String id = doc["id"] | String("");
+    if (id.length()) publishState(id, (doc["on"] | false) ? "ON" : "OFF");
+}
+
+void HaManager::onInputEvent(const String& sourceId, const String& payload) {
+    if (!sourceId.length() || !payload.length()) return;
+    JsonDocument doc;
+    if (deserializeJson(doc, payload)) return;
+    const String event = doc["event"] | String("");
+    // Map the press/release edges to the binary-sensor state; ignore gestures.
+    if (event == "Press")        publishState(sourceId, "ON");
+    else if (event == "Release") publishState(sourceId, "OFF");
 }

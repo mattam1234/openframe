@@ -3,6 +3,8 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <functional>
+#include <algorithm>
+#include <vector>
 #include "../core/PlatformCompat.h"
 #include "../OpenFrameConfig.h"
 #include "../core/StorageManager.h"
@@ -12,6 +14,7 @@
 #include "../hardware/SensorManager.h"
 #include "../hardware/DisplayManager.h"
 #include "../hardware/ModuleManager.h"
+#include "../hardware/HardwareInfo.h"
 #include "../managers/ActionEngine.h"
 #include "../managers/MacroManager.h"
 #include "../managers/OtaManager.h"
@@ -373,6 +376,17 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleInputsUpdate(request, body);
     });
 
+    // NOTE: ESPAsyncWebServer matches a handler registered for "/api/outputs"
+    // against any URL starting with "/api/outputs/" (WebHandlerImpl canHandle),
+    // and the first registered handler wins. So sub-routes MUST be registered
+    // before their parent, or the parent swallows them (e.g. /api/outputs/control
+    // would hit handleOutputsUpdate and wipe the config). Children first:
+    server.on("/api/outputs/state", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendOutputsState(request);
+    });
+    registerJsonPost(server, "/api/outputs/control", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleOutputsControl(request, body);
+    });
     server.on("/api/outputs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendOutputs(request);
     });
@@ -387,18 +401,26 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleSensorsUpdate(request, body);
     });
 
+    // Sub-route before parent (see note above).
+    server.on("/api/displays/pages", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendDisplayPages(request);
+    });
     server.on("/api/displays", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendDisplays(request);
     });
     registerJsonPost(server, "/api/displays", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleDisplaysUpdate(request, body);
     });
-    server.on("/api/displays/pages", HTTP_GET, [](AsyncWebServerRequest* request) {
-        ApiServer::instance().sendDisplayPages(request);
-    });
 
     server.on("/api/modules", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendModules(request);
+    });
+
+    server.on("/api/hardware", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendHardware(request);
+    });
+    registerJsonPost(server, "/api/hardware/adopt", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleHardwareAdopt(request, body);
     });
 
     server.on("/api/actions", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -416,14 +438,16 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     });
 
     // ── Profiles ──────────────────────────────────────────────────────────────
+    // Sub-route before parent: "/api/profiles" would otherwise swallow
+    // "/api/profiles/activate" (see canHandle subpath note above).
+    registerJsonPost(server, "/api/profiles/activate", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleProfileActivate(request, body);
+    });
     server.on("/api/profiles", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendProfiles(request);
     });
     registerJsonPost(server, "/api/profiles", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleProfileCreate(request, body);
-    });
-    registerJsonPost(server, "/api/profiles/activate", [](AsyncWebServerRequest* request, const String& body) {
-        ApiServer::instance().handleProfileActivate(request, body);
     });
     server.on("/api/profiles/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
         const String url = request->url();
@@ -432,6 +456,13 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     });
 
     // ── Templates ─────────────────────────────────────────────────────────────
+    // Sub-route GET before parent GET: "/api/templates" would otherwise swallow
+    // "/api/templates/<id>" (see canHandle subpath note above).
+    server.on("/api/templates/*", HTTP_GET, [](AsyncWebServerRequest* request) {
+        const String url = request->url();
+        const String templateId = url.substring(url.lastIndexOf('/') + 1);
+        ApiServer::instance().sendTemplateById(request, templateId);
+    });
     server.on("/api/templates", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendTemplates(request);
     });
@@ -440,11 +471,6 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     });
     registerJsonPost(server, "/api/templates/import", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleTemplateImport(request, body);
-    });
-    server.on("/api/templates/*", HTTP_GET, [](AsyncWebServerRequest* request) {
-        const String url = request->url();
-        const String templateId = url.substring(url.lastIndexOf('/') + 1);
-        ApiServer::instance().sendTemplateById(request, templateId);
     });
     server.on("/api/templates/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
         const String url = request->url();
@@ -997,6 +1023,64 @@ void ApiServer::sendOutputs(AsyncWebServerRequest* request) const {
     sendJson(request, doc);
 }
 
+void ApiServer::sendOutputsState(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["outputs"].to<JsonArray>();
+    OutputManager::instance().fillStateJson(arr);
+    doc["count"] = arr.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleOutputsControl(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument req;
+    if (deserializeJson(req, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+    const String id      = req["id"]      | String("");
+    const String command = req["command"] | String("");
+    if (!id.length() || !command.length()) {
+        sendError(request, 400, "id and command are required");
+        return;
+    }
+
+    auto& outputs = OutputManager::instance();
+    auto clampByte = [](int v) -> uint8_t { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); };
+
+    bool ok = false;
+    if (command == "digital") {
+        ok = outputs.setDigital(id, req["on"] | false);
+    } else if (command == "brightness") {
+        ok = outputs.setBrightness(id, clampByte(req["brightness"] | 0));
+    } else if (command == "rgb") {
+        ok = outputs.setRgb(id, clampByte(req["r"] | 0), clampByte(req["g"] | 0), clampByte(req["b"] | 0));
+    } else if (command == "animation") {
+        // Optional colour rides along with the animation request.
+        if (req["r"].is<int>() || req["g"].is<int>() || req["b"].is<int>()) {
+            outputs.setRgb(id, clampByte(req["r"] | 0), clampByte(req["g"] | 0), clampByte(req["b"] | 0));
+        }
+        const LedAnimation anim = ledAnimationFromString(req["animation"] | String("solid"));
+        ok = outputs.setAnimation(id, anim, clampByte(req["speed"] | 0));
+    } else if (command == "beep") {
+        ok = outputs.beep(id, static_cast<uint16_t>(req["frequency"] | 1000),
+                              static_cast<uint16_t>(req["duration_ms"] | 200));
+    } else {
+        sendError(request, 400, "Unknown command");
+        return;
+    }
+
+    if (!ok) {
+        sendError(request, 404, "Unknown output, or command not supported for its type");
+        return;
+    }
+
+    JsonDocument doc;
+    doc["ok"] = true;
+    auto arr = doc["outputs"].to<JsonArray>();
+    outputs.fillStateJson(arr);
+    sendJson(request, doc);
+}
+
 void ApiServer::sendSensors(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     if (!StorageManager::instance().readJson(OF_SENSORS_PATH, doc)) {
@@ -1090,6 +1174,13 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
         return;
     }
 
+    // Require at least one of the expected arrays so a malformed request can't
+    // wipe the inputs config to an empty file.
+    if (!source["digital"].is<JsonArrayConst>() && !source["analog"].is<JsonArrayConst>()) {
+        sendError(request, 400, "Missing 'digital'/'analog' arrays");
+        return;
+    }
+
     JsonDocument toSave;
     auto digital = toSave["digital"].to<JsonArray>();
     auto analog = toSave["analog"].to<JsonArray>();
@@ -1148,10 +1239,18 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
         return;
     }
 
+    // Require an explicit "outputs" array. Without this guard a body that lacks
+    // the key (e.g. a misrouted /api/outputs/control request) would silently
+    // persist an empty config and reboot — wiping every configured output.
+    if (!source["outputs"].is<JsonArrayConst>()) {
+        sendError(request, 400, "Missing 'outputs' array");
+        return;
+    }
+
     JsonDocument toSave;
     auto outputs = toSave["outputs"].to<JsonArray>();
 
-    if (source["outputs"].is<JsonArrayConst>()) {
+    {
         for (JsonObjectConst item : source["outputs"].as<JsonArrayConst>()) {
             auto out = outputs.add<JsonObject>();
             out["id"] = item["id"] | String("");
@@ -1196,10 +1295,15 @@ void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String
         return;
     }
 
+    if (!source["sensors"].is<JsonArrayConst>()) {
+        sendError(request, 400, "Missing 'sensors' array");
+        return;
+    }
+
     JsonDocument toSave;
     auto sensors = toSave["sensors"].to<JsonArray>();
 
-    if (source["sensors"].is<JsonArrayConst>()) {
+    {
         for (JsonObjectConst item : source["sensors"].as<JsonArrayConst>()) {
             auto out = sensors.add<JsonObject>();
             out["id"] = item["id"] | String("");
@@ -1330,11 +1434,128 @@ void ApiServer::sendModules(AsyncWebServerRequest* request) const {
         auto obj = arr.add<JsonObject>();
         obj["address"] = m.address;
         obj["type"] = m.typeLabel;
+        if (m.chipModel.length())       obj["chip_model"]       = m.chipModel;
+        if (m.suggestedDriver.length()) obj["suggested_driver"] = m.suggestedDriver;
         obj["online"] = m.online;
         obj["last_seen_ms"] = m.lastSeenMs;
     }
     doc["count"] = ModuleManager::instance().modules().size();
     sendJson(request, doc);
+}
+
+void ApiServer::sendHardware(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+
+    // Board / SoC self-report
+    fillHardwareInfo(doc["board"].to<JsonObject>());
+
+    // Identified I2C bus scan (mirrors /api/modules but framed as a discovery view)
+    auto i2c = doc["i2c"].to<JsonObject>();
+    auto arr = i2c["devices"].to<JsonArray>();
+    for (const auto& m : ModuleManager::instance().modules()) {
+        if (!m.online) continue;
+        auto obj = arr.add<JsonObject>();
+        obj["address"]     = m.address;
+        obj["address_hex"] = "0x" + String(m.address, HEX);
+        obj["type"]        = m.typeLabel;
+        if (m.chipModel.length())       obj["chip_model"]       = m.chipModel;
+        if (m.suggestedDriver.length()) obj["suggested_driver"] = m.suggestedDriver;
+        // Adoptable = we have a sensor driver that maps to this chip.
+        obj["adoptable"]   = m.suggestedDriver.length() > 0;
+    }
+    i2c["error_count"] = ModuleManager::instance().i2cErrorCount();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleHardwareAdopt(AsyncWebServerRequest* request, const String& body) {
+    // Optional body: {"addresses":[118, 104]} restricts adoption to those I2C
+    // addresses. An empty/missing list adopts every adoptable detected device.
+    JsonDocument req;
+    if (body.length() && deserializeJson(req, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+
+    std::vector<uint8_t> filter;
+    bool haveFilter = false;
+    if (req["addresses"].is<JsonArrayConst>()) {
+        haveFilter = true;
+        for (JsonVariantConst v : req["addresses"].as<JsonArrayConst>()) {
+            filter.push_back(static_cast<uint8_t>(v.as<unsigned>()));
+        }
+    }
+    auto wanted = [&](uint8_t addr) {
+        if (!haveFilter) return true;
+        return std::find(filter.begin(), filter.end(), addr) != filter.end();
+    };
+
+    // Load the current sensor config so adoption is additive and idempotent.
+    JsonDocument doc;
+    StorageManager::instance().readJson(OF_SENSORS_PATH, doc);
+    if (!doc["sensors"].is<JsonArray>()) {
+        doc["sensors"].to<JsonArray>();
+    }
+    JsonArray sensors = doc["sensors"].as<JsonArray>();
+
+    auto alreadyPresent = [&](const String& type, uint8_t addr) {
+        for (JsonObjectConst s : sensors) {
+            const String t = s["type"] | String("");
+            const uint8_t a = s["address"] | 0;
+            if (t == type && a == addr) return true;
+        }
+        return false;
+    };
+
+    JsonDocument response;
+    auto added   = response["added"].to<JsonArray>();
+    auto skipped = response["skipped"].to<JsonArray>();
+
+    for (const auto& m : ModuleManager::instance().modules()) {
+        if (!m.online || !m.suggestedDriver.length()) continue;
+        if (!wanted(m.address)) continue;
+
+        if (alreadyPresent(m.suggestedDriver, m.address)) {
+            auto s = skipped.add<JsonObject>();
+            s["address"] = m.address;
+            s["type"]    = m.suggestedDriver;
+            s["reason"]  = "already configured";
+            continue;
+        }
+
+        const String id = m.suggestedDriver + "_" + String(m.address, HEX);
+        auto entry = sensors.add<JsonObject>();
+        entry["id"]               = id;
+        entry["type"]             = m.suggestedDriver;
+        entry["enabled"]          = true;
+        entry["poll_interval_ms"] = 5000;
+        entry["variable_prefix"]  = "";
+        entry["address"]          = m.address;
+        entry["pin"]              = 0;
+
+        auto a = added.add<JsonObject>();
+        a["id"]      = id;
+        a["address"] = m.address;
+        a["type"]    = m.suggestedDriver;
+    }
+
+    if (added.size() == 0) {
+        response["ok"] = true;
+        response["restartRequired"] = false;
+        response["message"] = "No new devices to adopt";
+        sendJson(request, response);
+        return;
+    }
+
+    if (!StorageManager::instance().writeJson(OF_SENSORS_PATH, doc)) {
+        sendError(request, 500, "Failed to save sensors");
+        return;
+    }
+
+    response["ok"] = true;
+    response["restartRequired"] = true;
+    response["message"] = String(added.size()) + " sensor(s) adopted. Restarting to apply.";
+    sendJson(request, response);
+    scheduleRestart();
 }
 
 void ApiServer::sendActions(AsyncWebServerRequest* request) const {
@@ -1397,6 +1618,7 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         if (typeStr == "variable_set") return ActionType::VariableSet;
         if (typeStr == "variable_increment") return ActionType::VariableIncrement;
         if (typeStr == "variable_toggle") return ActionType::VariableToggle;
+        if (typeStr == "output_control") return ActionType::OutputControl;
         if (typeStr == "ha_service_call") return ActionType::HaServiceCall;
         if (typeStr == "page_change") return ActionType::PageChange;
         if (typeStr == "notification") return ActionType::Notification;
@@ -1411,6 +1633,13 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         action.id = item["id"] | String("");
         action.name = item["name"] | String("");
         action.enabled = item["enabled"] | true;
+
+        if (item["trigger"].is<JsonObjectConst>()) {
+            JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
+            action.trigger.source  = t["source"]   | String("");
+            action.trigger.inputId = t["input_id"] | String("");
+            action.trigger.event   = t["event"]    | String("");
+        }
 
         if (item["conditions"].is<JsonArrayConst>()) {
             for (JsonObjectConst cond : item["conditions"].as<JsonArrayConst>()) {
@@ -1442,6 +1671,15 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
                 s.keysCombo = step["keys"] | String("");
                 s.mediaCommand = step["media_command"] | String("");
                 s.nodeId = step["node_id"] | String("");
+                s.outputId = step["output_id"] | String("");
+                s.command = step["command"] | String("");
+                s.on = step["on"] | false;
+                s.red = step["r"] | 0;
+                s.green = step["g"] | 0;
+                s.blue = step["b"] | 0;
+                s.brightnessVal = step["brightness"] | 0;
+                s.animation = step["animation"] | String("");
+                s.speed = step["speed"] | 128;
                 action.steps.push_back(s);
             }
         }
