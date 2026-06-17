@@ -11,12 +11,13 @@
     "dev": "tsx watch src/index.ts",
     "simulate": "tsx tools/simulate.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test --test-concurrency=1 test/registry.test.ts test/alerts.test.ts test/templates.test.ts test/history.test.ts test/firmware-store.test.ts test/notifier.test.ts test/rate-limit.test.ts test/provision.test.ts test/auth.test.ts test/audit.test.ts test/integration.test.ts"
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"tools/**/*.ts\"",
+    "test": "node --import tsx --test --test-concurrency=1 test/registry.test.ts test/alerts.test.ts test/templates.test.ts test/history.test.ts test/firmware-store.test.ts test/notifier.test.ts test/rate-limit.test.ts test/provision.test.ts test/auth.test.ts test/audit.test.ts test/jobs.test.ts test/integration.test.ts"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1",
     "mqtt": "^5.10.1",
+    "multer": "^1.4.5-lts.1",
     "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   },
@@ -26,8 +27,11 @@
     "@types/node": "^22.10.2",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "aedes": "^1.0.2",
     "aedes-server-factory": "^0.2.1",
+    "eslint": "^8.57.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

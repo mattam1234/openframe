@@ -17,3 +17,34 @@ export class RateLimiter {
     return true;
   }
 }
+
+// Failure-based lockout: after `maxFails` consecutive failures a key is locked out
+// for `lockMs`, regardless of rate. Resets on success. Complements RateLimiter
+// (which throttles overall attempt rate) to make brute force impractical (#80).
+export class FailureLockout {
+  private readonly fails = new Map<string, { count: number; until: number }>();
+
+  constructor(private readonly maxFails: number, private readonly lockMs: number) {}
+
+  // True if the key is currently locked out.
+  locked(key: string, now: number = Date.now()): boolean {
+    const e = this.fails.get(key);
+    if (!e) return false;
+    if (e.until && e.until <= now) { this.fails.delete(key); return false; }  // lock expired
+    return e.until > now;
+  }
+
+  // Record a failed attempt. Returns the remaining lock duration in ms (0 if not locked).
+  recordFailure(key: string, now: number = Date.now()): number {
+    const e = this.fails.get(key) ?? { count: 0, until: 0 };
+    e.count += 1;
+    if (e.count >= this.maxFails) e.until = now + this.lockMs;
+    this.fails.set(key, e);
+    return e.until > now ? e.until - now : 0;
+  }
+
+  // Clear a key's failure record (call on a successful login).
+  reset(key: string): void {
+    this.fails.delete(key);
+  }
+}

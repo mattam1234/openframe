@@ -19,7 +19,7 @@ export class FirmwareStore {
 
   // Keep only safe, flat filenames — no path traversal, no surprises.
   static sanitize(name: string): string {
-    return path.basename(name).replace(/[^\w.\-]/g, '_');
+    return path.basename(name).replace(/[^\w.-]/g, '_');
   }
 
   list(): FirmwareFile[] {

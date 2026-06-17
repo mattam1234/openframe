@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenFrame — Jobs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>OpenFrame Fleet</h1>
+    <nav class="nav"><a href="/">Fleet</a><a href="topology.html">Topology</a><a href="provision.html">Provision</a><a href="templates.html">Templates</a><a href="jobs.html" class="active">Jobs</a><a href="firmware.html">Firmware</a><a href="alerts.html">Alerts</a></nav>
+    <div class="conn"></div>
+  </header>
+
+  <main>
+    <p class="hint">Scheduled jobs run a fleet command automatically — e.g. a nightly reboot or a
+      periodic <code>get_status</code> reconcile. Target by tag, explicit ids, or the whole fleet.</p>
+
+    <section class="detail">
+      <div class="panel">
+        <h2 id="form-title">New job</h2>
+        <input type="hidden" id="job-id" />
+        <h3>Name</h3>
+        <input id="job-name" type="text" placeholder="e.g. Nightly reboot" />
+        <h3>Command type</h3>
+        <input id="job-type" type="text" list="cmd-types" placeholder="reboot" />
+        <datalist id="cmd-types">
+          <option value="reboot"></option>
+          <option value="get_status"></option>
+          <option value="identify"></option>
+          <option value="apply_config"></option>
+          <option value="activate_profile"></option>
+        </datalist>
+        <h3>Payload (JSON, optional)</h3>
+        <textarea id="job-payload" rows="4" placeholder='{}'></textarea>
+        <h3>Schedule</h3>
+        <div class="row">
+          <select id="job-mode">
+            <option value="interval">Every N minutes</option>
+            <option value="daily">Daily at (UTC)</option>
+          </select>
+          <input id="job-interval" type="number" min="1" value="1440" title="interval minutes" />
+          <input id="job-time" type="time" value="03:00" title="daily time (UTC)" />
+        </div>
+        <h3>Target</h3>
+        <input id="job-tags" type="text" placeholder="tags (comma-separated; blank = all)" />
+        <label class="chk"><input type="checkbox" id="job-online" /> online only</label>
+        <div class="row">
+          <button id="save-job">Save</button>
+          <button id="reset-job" class="ghost">New</button>
+          <span id="form-msg" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Jobs</h2>
+        <table class="kv"><tbody id="job-list"></tbody></table>
+        <p id="job-empty" class="empty hidden">No jobs yet.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="auth.js"></script>
+  <script src="jobs.js"></script>
+</body>
+</html>

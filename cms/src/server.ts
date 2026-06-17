@@ -11,7 +11,8 @@ import { AlertManager } from './alerts';
 import { FirmwareStore } from './firmware-store';
 import { makeAuth, tokenMatches } from './auth';
 import { AuditLog } from './audit';
-import { RateLimiter } from './rate-limit';
+import { RateLimiter, FailureLockout } from './rate-limit';
+import { Job, JobStore, JobScheduler } from './jobs';
 import { buildProvisionConfig, provisionUrl, provisionQrDataUrl } from './provision';
 
 interface TargetSpec {
@@ -23,7 +24,7 @@ interface TargetSpec {
 // Resolve the set of device ids a bulk/deploy request targets. Precedence:
 // explicit deviceIds → devices matching any of `tags` → the whole fleet. The
 // onlineOnly flag further filters the tag/fleet cases.
-function resolveTargets(registry: DeviceRegistry, body: TargetSpec): string[] {
+export function resolveTargets(registry: DeviceRegistry, body: TargetSpec): string[] {
   if (Array.isArray(body.deviceIds) && body.deviceIds.length) {
     return body.deviceIds.filter((id): id is string => typeof id === 'string');
   }
@@ -38,7 +39,7 @@ function resolveTargets(registry: DeviceRegistry, body: TargetSpec): string[] {
 
 // Fan a command out to many devices concurrently; one device failing (e.g. a
 // timeout) never rejects the whole batch — it becomes a per-device error entry.
-async function fanOut(
+export async function fanOut(
   bridge: MqttBridge,
   deviceIds: string[],
   type: string,
@@ -67,6 +68,8 @@ export function createServer(
   authToken?: string,
   viewerToken?: string,
   audit?: AuditLog,
+  jobs?: JobStore,
+  scheduler?: JobScheduler,
 ): http.Server {
   const app = express();
   const auth = makeAuth(authToken, viewerToken);
@@ -82,11 +85,18 @@ export function createServer(
   app.get('/api/auth', (req, res) => {
     res.json({ authRequired: auth.enabled, authed: auth.ok(req), role: auth.role(req) });
   });
-  // Throttle login attempts per client to make a configured token unbruteforceable.
+  // Throttle login attempts per client, and lock an IP out after repeated failures,
+  // to make a configured token unbruteforceable (#80).
   const loginLimiter = new RateLimiter(10, 60_000);
+  const loginLockout = new FailureLockout(5, 5 * 60_000);  // 5 fails → 5 min lockout
   app.post('/api/login', (req, res) => {
     if (!auth.enabled) { res.json({ ok: true, authRequired: false }); return; }
-    if (!loginLimiter.allow(req.ip ?? 'unknown')) {
+    const ip = req.ip ?? 'unknown';
+    if (loginLockout.locked(ip)) {
+      res.status(429).json({ ok: false, error: 'too many failed attempts — locked out, try again later' });
+      return;
+    }
+    if (!loginLimiter.allow(ip)) {
       res.status(429).json({ ok: false, error: 'too many attempts, slow down' });
       return;
     }
@@ -98,10 +108,16 @@ export function createServer(
         : (viewerToken && tokenMatches(provided, viewerToken)) ? viewerToken
         : null);
     if (matched) {
+      loginLockout.reset(ip);
       res.setHeader('Set-Cookie', auth.loginCookie(matched));
       res.json({ ok: true, role: authToken && matched === authToken ? 'admin' : 'viewer' });
     } else {
-      res.status(401).json({ ok: false, error: 'invalid token' });
+      const lockedMs = loginLockout.recordFailure(ip);
+      if (lockedMs > 0) {
+        res.status(429).json({ ok: false, error: 'too many failed attempts — locked out, try again later' });
+      } else {
+        res.status(401).json({ ok: false, error: 'invalid token' });
+      }
     }
   });
   app.post('/api/logout', (_req, res) => {
@@ -111,6 +127,43 @@ export function createServer(
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, mqtt: bridge.connected, devices: registry.list().length });
+  });
+
+  // Prometheus exposition for the whole fleet (#65). Not under /api, so it's
+  // scrapable without the API token (it carries no secrets — just telemetry).
+  app.get('/metrics', (_req, res) => {
+    const devs = registry.list();
+    const online = devs.filter((d) => d.online).length;
+    const esc = (s: string) => String(s).replace(/[\\"\n]/g, '');
+    const lines: string[] = [];
+    const help = (name: string, type: string, helpText: string) => {
+      lines.push(`# HELP ${name} ${helpText}`, `# TYPE ${name} ${type}`);
+    };
+
+    help('openframe_cms_devices_total', 'gauge', 'Devices known to the CMS.');
+    lines.push(`openframe_cms_devices_total ${devs.length}`);
+    help('openframe_cms_devices_online', 'gauge', 'Devices currently online.');
+    lines.push(`openframe_cms_devices_online ${online}`);
+    help('openframe_cms_mqtt_connected', 'gauge', '1 if the CMS broker link is up.');
+    lines.push(`openframe_cms_mqtt_connected ${bridge.connected ? 1 : 0}`);
+
+    // Per-device gauges, labelled by device id.
+    const gauge = (name: string, type: string, helpText: string, pick: (d: typeof devs[number]) => number | undefined) => {
+      help(name, type, helpText);
+      for (const d of devs) {
+        const v = pick(d);
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          lines.push(`${name}{device="${esc(d.deviceId)}"} ${v}`);
+        }
+      }
+    };
+    gauge('openframe_device_online', 'gauge', 'Per-device online state (1/0).', (d) => (d.online ? 1 : 0));
+    gauge('openframe_device_free_heap_bytes', 'gauge', 'Per-device free heap.', (d) => d.freeHeap);
+    gauge('openframe_device_rssi_dbm', 'gauge', 'Per-device WiFi RSSI.', (d) => d.rssi);
+    gauge('openframe_device_uptime_seconds', 'counter', 'Per-device uptime.', (d) => (d.uptimeMs != null ? Math.floor(d.uptimeMs / 1000) : undefined));
+    gauge('openframe_device_cpu_load_percent', 'gauge', 'Per-device CPU load.', (d) => d.cpuLoadPercent);
+
+    res.type('text/plain; version=0.0.4').send(lines.join('\n') + '\n');
   });
 
   // Everything under /api below this point requires a valid token (when enabled).
@@ -263,6 +316,61 @@ export function createServer(
     const okCount = results.filter((r) => r.ok).length;
     audit?.record({ role: roleOf(req), action: 'template.deploy', target: template.id, detail: template.command.type, count: results.length, ok: okCount === results.length });
     res.json({ template: template.id, count: results.length, ok: okCount, results });
+  });
+
+  // ── Scheduled fleet jobs (#63) ───────────────────────────────────────────────
+  app.get('/api/jobs', (_req, res) => {
+    res.json({ jobs: jobs ? jobs.list() : [] });
+  });
+
+  app.post('/api/jobs', (req, res) => {
+    if (!jobs) { res.status(503).json({ error: 'jobs not available' }); return; }
+    const b = req.body ?? {};
+    const sched = b.schedule ?? {};
+    if (typeof b.id !== 'string' || !b.id || typeof b.name !== 'string' ||
+        typeof b.command?.type !== 'string' ||
+        (sched.mode !== 'interval' && sched.mode !== 'daily')) {
+      res.status(400).json({ error: 'id, name, command.type and a valid schedule are required' });
+      return;
+    }
+    const job: Job = {
+      id: b.id,
+      name: b.name,
+      enabled: b.enabled !== false,
+      schedule: {
+        mode: sched.mode,
+        intervalMin: sched.mode === 'interval' ? Math.max(1, Number(sched.intervalMin) || 0) : undefined,
+        dailyMinute: sched.mode === 'daily' ? Math.min(1439, Math.max(0, Number(sched.dailyMinute) || 0)) : undefined,
+      },
+      command: { type: b.command.type, payload: b.command.payload },
+      target: {
+        deviceIds: Array.isArray(b.target?.deviceIds) ? b.target.deviceIds : undefined,
+        tags: Array.isArray(b.target?.tags) ? b.target.tags : undefined,
+        onlineOnly: !!b.target?.onlineOnly,
+      },
+    };
+    // Preserve runtime bookkeeping across edits.
+    const prev = jobs.get(job.id);
+    if (prev) { job.lastRun = prev.lastRun; job.lastResult = prev.lastResult; job.lastDailyDay = prev.lastDailyDay; }
+    audit?.record({ role: roleOf(req), action: 'job.save', target: job.id, detail: job.command.type, ok: true });
+    res.json(jobs.upsert(job));
+  });
+
+  app.delete('/api/jobs/:id', (req, res) => {
+    if (!jobs) { res.status(503).json({ error: 'jobs not available' }); return; }
+    const removed = jobs.remove(req.params.id);
+    if (removed) audit?.record({ role: roleOf(req), action: 'job.delete', target: req.params.id, ok: true });
+    res.json({ removed });
+  });
+
+  // Run a job immediately, regardless of schedule.
+  app.post('/api/jobs/:id/run', async (req, res) => {
+    if (!jobs || !scheduler) { res.status(503).json({ error: 'jobs not available' }); return; }
+    const job = jobs.get(req.params.id);
+    if (!job) { res.status(404).json({ error: 'unknown job' }); return; }
+    const result = await scheduler.runOne(job);
+    audit?.record({ role: roleOf(req), action: 'job.run', target: job.id, detail: job.command.type, count: result.ok + result.failed, ok: result.failed === 0 });
+    res.json({ job: job.id, ...result });
   });
 
   // ── Provisioning: generate an onboarding QR for a new device's captive portal ─

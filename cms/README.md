@@ -147,7 +147,9 @@ login overlay). `GET /api/health` and firmware downloads at `/firmware/:name`
 stay public (devices have no token). Comparison is constant-time, and login
 attempts are rate-limited (10/min per client) to resist brute force. For broker
 auth, see `mosquitto/mosquitto.conf`; for stronger exposure, also put the CMS
-behind a reverse proxy with TLS.
+behind a reverse proxy with TLS. See [`DEPLOYMENT.md`](DEPLOYMENT.md) for concrete
+reverse-proxy (Caddy/nginx) and mosquitto auth+TLS config and a public-exposure
+checklist.
 
 The server shuts down gracefully on SIGINT/SIGTERM (closes the MQTT connection),
 so `docker stop` leaves a clean last-will/disconnect.

@@ -129,6 +129,17 @@ describe('CMS integration', () => {
     assert.equal(miss.status, 400, 'no devices match -> 400');
   });
 
+  it('exposes Prometheus /metrics with fleet + per-device gauges', async () => {
+    const res = await fetch(api('/metrics'));
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/plain/);
+    const body = await res.text();
+    assert.match(body, /openframe_cms_devices_total \d+/);
+    assert.match(body, /# TYPE openframe_cms_devices_online gauge/);
+    // The ingested device should appear as a labelled per-device series.
+    assert.ok(body.includes(`openframe_device_online{device="${DEV}"}`), 'per-device gauge present');
+  });
+
   it('template create + deploy carries the payload to the device', async () => {
     const created = await (await postJson('/api/templates', { name: 'cfg', command: { type: 'apply_config', payload: { device: { name: 'Lobby' } } } })).json() as any;
     const dep = await (await postJson(`/api/templates/${created.id}/deploy`, { deviceIds: [DEV] })).json() as any;

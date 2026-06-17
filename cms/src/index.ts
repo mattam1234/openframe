@@ -1,8 +1,9 @@
 import { loadConfig } from './config';
 import { DeviceRegistry } from './registry';
 import { MqttBridge } from './mqtt';
-import { createServer } from './server';
+import { createServer, resolveTargets, fanOut } from './server';
 import { JsonStore } from './store';
+import { Job, JobStore, JobScheduler } from './jobs';
 import { TemplateStore, Template } from './templates';
 import { HistoryStore, Sample } from './history';
 import { AlertManager } from './alerts';
@@ -39,6 +40,18 @@ if (cfg.alertWebhookUrl) {
 
 const bridge = new MqttBridge(cfg, registry);
 
+// Scheduled fleet jobs (#63): run a fleet command on a schedule. The runner
+// resolves the job's target set and fans the command out via the broker.
+const jobs = new JobStore(new JsonStore<{ jobs: Job[] }>(cfg.dataDir, 'jobs.json'));
+const scheduler = new JobScheduler(jobs, async (job) => {
+  const ids = resolveTargets(registry, job.target);
+  if (!ids.length) return { ok: 0, failed: 0 };
+  const results = await fanOut(bridge, ids, job.command.type, job.command.payload);
+  const ok = results.filter((r) => r.ok).length;
+  return { ok, failed: results.length - ok };
+});
+scheduler.start();
+
 // On every fleet-state change: persist, record telemetry, and re-evaluate alerts.
 registry.on('change', (device) => {
   store.saveDebounced(() => ({ devices: registry.list() }));
@@ -50,7 +63,7 @@ registry.on('change', (device) => {
 const sweep = setInterval(() => registry.sweep(), Math.min(cfg.offlineTimeoutMs, 15_000));
 sweep.unref?.();
 
-const server = createServer(registry, bridge, templates, history, alerts, firmware, cfg.publicUrl, cfg.authToken, cfg.viewerToken, audit);
+const server = createServer(registry, bridge, templates, history, alerts, firmware, cfg.publicUrl, cfg.authToken, cfg.viewerToken, audit, jobs, scheduler);
 if (cfg.authToken) console.log('[cms] token auth enabled');
 if (cfg.viewerToken) console.log('[cms] read-only viewer token enabled');
 
