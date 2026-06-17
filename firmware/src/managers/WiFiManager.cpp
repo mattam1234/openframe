@@ -263,6 +263,26 @@ bool WiFiManager::connectToBestConfiguredNetwork() {
     }
 
     const auto& target = configured[bestConfiguredIndex];
+
+    // Optional static IP — request it before begin(). Falls back to DHCP if the
+    // address doesn't parse, or if gateway is blank (a sane default is derived).
+    const auto& wc = ConfigManager::instance().config().wifi;
+    IPAddress ip;
+    if (wc.staticIp.length() && ip.fromString(wc.staticIp)) {
+        IPAddress gw, sn, d1, d2;
+        if (!(wc.gateway.length() && gw.fromString(wc.gateway))) {
+            gw = ip; gw[3] = 1;  // default gateway = x.x.x.1
+        }
+        if (!(wc.subnet.length() && sn.fromString(wc.subnet))) sn = IPAddress(255, 255, 255, 0);
+        if (!(wc.dns1.length() && d1.fromString(wc.dns1))) d1 = gw;
+        d2.fromString(wc.dns2);  // ok if blank → 0.0.0.0
+        if (!WiFi.config(ip, gw, sn, d1, d2)) {
+            LOG_W(TAG, "Static IP config rejected — falling back to DHCP");
+        } else {
+            LOG_I(TAG, "Static IP " + wc.staticIp + " (gw " + gw.toString() + ")");
+        }
+    }
+
     WiFi.begin(target.ssid.c_str(), target.password.c_str());
 
     if (bestRssi > -1000) {

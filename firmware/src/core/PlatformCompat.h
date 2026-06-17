@@ -79,6 +79,8 @@
     inline uint32_t of_free_psram()  { return 0; }
     inline uint32_t of_psram_size()  { return 0; }
     inline uint32_t of_min_free_heap() { return ESP.getFreeHeap(); }
+    // Largest contiguous allocatable block — gap vs. free heap = fragmentation.
+    inline uint32_t of_largest_free_block() { return ESP.getMaxFreeBlockSize(); }
 
     // ── PWM / tone compatibility ──────────────────────────────────────────────
     // The ESP8266 has no LEDC peripheral or PWM channels; PWM is pin-based via
@@ -172,6 +174,8 @@
     inline uint32_t of_free_psram()    { return ESP.getFreePsram(); }
     inline uint32_t of_psram_size()    { return ESP.getPsramSize(); }
     inline uint32_t of_min_free_heap() { return ESP.getMinFreeHeap(); }
+    // Largest contiguous allocatable block — gap vs. free heap = fragmentation.
+    inline uint32_t of_largest_free_block() { return ESP.getMaxAllocHeap(); }
 
     // ── PWM / tone compatibility ──────────────────────────────────────────────
     // ESP32 uses the channel-based LEDC peripheral. These wrap the legacy LEDC

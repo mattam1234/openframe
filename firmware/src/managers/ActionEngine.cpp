@@ -1,6 +1,7 @@
 #include "ActionEngine.h"
 
 #include <ArduinoJson.h>
+#include <time.h>
 #include "../core/PlatformCompat.h"
 #include "../hardware/DisplayManager.h"
 #include "../hardware/OutputManager.h"
@@ -8,6 +9,7 @@
 #include "../managers/HaManager.h"
 #include "../managers/MqttManager.h"
 #include "../managers/NodeLink.h"
+#include "../managers/SceneManager.h"
 #include "../managers/TimeManager.h"
 
 namespace {
@@ -29,6 +31,8 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "variable_increment") return ActionType::VariableIncrement;
     if (s == "variable_toggle")    return ActionType::VariableToggle;
     if (s == "output_control")     return ActionType::OutputControl;
+    if (s == "wait_until")         return ActionType::WaitUntil;
+    if (s == "scene_restore")      return ActionType::SceneRestore;
     if (s == "ha_service_call")    return ActionType::HaServiceCall;
     if (s == "page_change")        return ActionType::PageChange;
     if (s == "notification")       return ActionType::Notification;
@@ -36,6 +40,11 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "media_control")      return ActionType::MediaControl;
     if (s == "remote_action")      return ActionType::RemoteAction;
     if (s == "sync_action")        return ActionType::SyncAction;
+    if (s == "if")                 return ActionType::If;
+    if (s == "else")               return ActionType::Else;
+    if (s == "endif")              return ActionType::EndIf;
+    if (s == "repeat")             return ActionType::Repeat;
+    if (s == "endrepeat")          return ActionType::EndRepeat;
     return ActionType::Delay;
 }
 
@@ -48,6 +57,8 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::VariableIncrement: return "variable_increment";
         case ActionType::VariableToggle:    return "variable_toggle";
         case ActionType::OutputControl:     return "output_control";
+        case ActionType::WaitUntil:         return "wait_until";
+        case ActionType::SceneRestore:      return "scene_restore";
         case ActionType::HaServiceCall:     return "ha_service_call";
         case ActionType::PageChange:        return "page_change";
         case ActionType::Notification:      return "notification";
@@ -55,6 +66,11 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::MediaControl:      return "media_control";
         case ActionType::RemoteAction:      return "remote_action";
         case ActionType::SyncAction:        return "sync_action";
+        case ActionType::If:                return "if";
+        case ActionType::Else:              return "else";
+        case ActionType::EndIf:             return "endif";
+        case ActionType::Repeat:            return "repeat";
+        case ActionType::EndRepeat:         return "endrepeat";
         default:                            return "delay";
     }
 }
@@ -140,6 +156,10 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.speed        = item["speed"] | 128;
         s.frequency    = item["frequency"] | 2000;
         s.durationMs   = item["duration_ms"] | 200;
+        s.angle        = item["angle"] | 90;
+        s.position     = item["position"] | 0;
+        s.op           = item["op"] | String("eq");
+        s.repeatCount  = item["repeat_count"] | 1;
         out.push_back(s);
     }
 }
@@ -181,7 +201,11 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
                 if (s.command == "brightness") obj["brightness"] = s.brightnessVal;
                 if (s.command == "animation") { obj["animation"] = s.animation; obj["speed"] = s.speed; }
                 if (s.command == "beep") { obj["frequency"] = s.frequency; obj["duration_ms"] = s.durationMs; }
+                if (s.command == "angle") { obj["angle"] = s.angle; }
+                if (s.command == "move") { obj["position"] = s.position; }
                 break;
+            case ActionType::WaitUntil:         obj["variable_id"] = s.variableId; obj["op"] = s.op; obj["value"] = s.value; obj["delay_ms"] = s.delayMs; break;
+            case ActionType::SceneRestore:      obj["value"] = s.value; break;
             case ActionType::HaServiceCall:     obj["ha_service"] = s.haService; obj["ha_entity_id"] = s.haEntityId; obj["body"] = s.body; break;
             case ActionType::PageChange:        obj["display_id"] = s.displayId; obj["page_id"] = s.pageId; break;
             case ActionType::Notification:      obj["message"] = s.message; break;
@@ -189,6 +213,11 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
             case ActionType::MediaControl:      obj["media_command"] = s.mediaCommand; break;
             case ActionType::RemoteAction:      obj["node_id"] = s.nodeId; obj["value"] = s.value; break;
             case ActionType::SyncAction:        obj["value"] = s.value; obj["delay_ms"] = s.delayMs; break;
+            case ActionType::If:                obj["variable_id"] = s.variableId; obj["op"] = s.op; obj["value"] = s.value; break;
+            case ActionType::Repeat:            obj["repeat_count"] = s.repeatCount; break;
+            case ActionType::Else:
+            case ActionType::EndIf:
+            case ActionType::EndRepeat:         break;  // markers carry no fields
         }
     }
 }
@@ -209,14 +238,87 @@ bool ActionRunner::run(const ActionConfig& action, String& error) {
         return true;
     }
 
-    for (const auto& step : action.steps) {
-        auto it = _executors.find(step.type);
-        if (it == _executors.end()) {
-            error = "No executor for action type";
-            return false;
+    const auto& steps = action.steps;
+    const int n = static_cast<int>(steps.size());
+
+    // ── Match control-flow brackets up front ──────────────────────────────────
+    // jumpIfFalse[ifIdx]   : pc to resume at when the If condition is false
+    // jumpElseEnd[elseIdx] : pc of the matching EndIf (Else jumps here after the
+    //                        true branch ran)
+    // endOfRepeat[repIdx]  : pc of the matching EndRepeat
+    std::vector<int> jumpIfFalse(n, -1), jumpElseEnd(n, -1), endOfRepeat(n, -1), elseForIf(n, -1);
+    std::vector<int> ifStack, repStack;
+    for (int i = 0; i < n; ++i) {
+        switch (steps[i].type) {
+            case ActionType::If:    ifStack.push_back(i); break;
+            case ActionType::Else:  if (!ifStack.empty()) elseForIf[ifStack.back()] = i; break;
+            case ActionType::EndIf:
+                if (!ifStack.empty()) {
+                    const int ifIdx = ifStack.back(); ifStack.pop_back();
+                    if (elseForIf[ifIdx] >= 0) {
+                        jumpIfFalse[ifIdx]            = elseForIf[ifIdx] + 1;  // run else body
+                        jumpElseEnd[elseForIf[ifIdx]] = i;                     // else → endif
+                    } else {
+                        jumpIfFalse[ifIdx] = i;  // no else → skip to endif
+                    }
+                }
+                break;
+            case ActionType::Repeat:    repStack.push_back(i); break;
+            case ActionType::EndRepeat:
+                if (!repStack.empty()) { endOfRepeat[repStack.back()] = i; repStack.pop_back(); }
+                break;
+            default: break;
         }
-        if (!it->second(step, error)) {
-            return false;
+    }
+
+    // ── Execute ───────────────────────────────────────────────────────────────
+    struct LoopFrame { int startIdx; int endIdx; uint16_t remaining; };
+    std::vector<LoopFrame> loops;
+    constexpr int GUARD_MAX = 100000;  // backstop against malformed nesting
+    int guard = 0;
+
+    for (int pc = 0; pc < n; ++pc) {
+        if (++guard > GUARD_MAX) { error = "Action step guard tripped (check loops/brackets)"; return false; }
+        const ActionStep& s = steps[pc];
+
+        switch (s.type) {
+            case ActionType::If: {
+                Condition c; c.variableId = s.variableId; c.op = conditionOpFromString(s.op); c.value = s.value;
+                if (!evaluateCondition(c) && jumpIfFalse[pc] >= 0) {
+                    pc = jumpIfFalse[pc] - 1;  // -1: the for-loop ++ lands us on the target
+                }
+                break;  // condition true → fall into the body
+            }
+            case ActionType::Else:
+                // Hit only after the true branch ran → jump past the else body.
+                if (jumpElseEnd[pc] >= 0) pc = jumpElseEnd[pc];
+                break;
+            case ActionType::EndIf:
+                break;  // no-op marker
+            case ActionType::Repeat: {
+                const int end = endOfRepeat[pc];
+                if (s.repeatCount == 0 && end >= 0) {
+                    pc = end;  // zero iterations → skip the body
+                } else if (end >= 0) {
+                    loops.push_back({ pc, end, s.repeatCount });
+                }
+                break;
+            }
+            case ActionType::EndRepeat:
+                if (!loops.empty() && loops.back().endIdx == pc) {
+                    if (--loops.back().remaining > 0) {
+                        pc = loops.back().startIdx;  // for-loop ++ re-enters the body
+                    } else {
+                        loops.pop_back();
+                    }
+                }
+                break;
+            default: {
+                auto it = _executors.find(s.type);
+                if (it == _executors.end()) { error = "No executor for action type"; return false; }
+                if (!it->second(s, error)) return false;
+                break;
+            }
         }
     }
     return true;
@@ -310,6 +412,7 @@ bool ActionEngine::begin() {
 
 void ActionEngine::loop() {
     evaluateSchedules();
+    evaluateDebounced();
 
     if (_scheduled.empty()) return;
     // Fire scheduled (synchronized) triggers once the cluster clock reaches them.
@@ -350,8 +453,16 @@ void ActionEngine::evaluateSchedules() {
             }
         } else if (a.trigger.scheduleMode == "daily") {
             if (a.trigger.dailySeconds < 0 || !haveClock) continue;
-            const int32_t  day      = static_cast<int32_t>(epoch / 86400UL);
-            const uint32_t secOfDay = epoch % 86400UL;
+            // Convert the UTC epoch to local time (honours the configured TZ + DST)
+            // so "daily at 08:00" means 08:00 wall-clock, not 08:00 UTC.
+            time_t t = static_cast<time_t>(epoch);
+            struct tm lt;
+            localtime_r(&t, &lt);
+            const uint32_t secOfDay = lt.tm_hour * 3600UL + lt.tm_min * 60UL + lt.tm_sec;
+            // A unique, monotonic-per-local-day key (only compared for inequality).
+            // tm_yday resets at year end but tm_year increments, so the key still
+            // advances. (tm_gmtoff isn't available in this newlib build.)
+            const int32_t  day      = lt.tm_year * 1000 + lt.tm_yday;
             // Arm so a time that already passed today isn't "caught up" on boot.
             if (!a.scheduleArmed) {
                 a.scheduleArmed = true;
@@ -432,6 +543,8 @@ bool ActionEngine::saveActions() const {
         trig["schedule_mode"] = action.trigger.scheduleMode;
         trig["interval_sec"]  = action.trigger.intervalSec;
         trig["daily_seconds"] = action.trigger.dailySeconds;
+        trig["debounce_ms"]   = action.trigger.debounceMs;
+        trig["cooldown_ms"]   = action.trigger.cooldownMs;
         serializeConditions(action.conditions, obj["conditions"].to<JsonArray>());
         serializeSteps(action.steps, obj["steps"].to<JsonArray>());
     }
@@ -459,6 +572,8 @@ bool ActionEngine::loadActions() {
             action.trigger.scheduleMode = t["schedule_mode"] | String("");
             action.trigger.intervalSec  = t["interval_sec"]  | 0;
             action.trigger.dailySeconds = t["daily_seconds"] | -1;
+            action.trigger.debounceMs   = t["debounce_ms"]   | 0;
+            action.trigger.cooldownMs   = t["cooldown_ms"]   | 0;
         }
 
         if (item["conditions"].is<JsonArrayConst>()) {
@@ -479,6 +594,31 @@ void ActionEngine::registerBuiltInExecutors() {
     runner.registerExecutor(ActionType::Delay, [](const ActionStep& step, String&) -> bool {
         if (step.delayMs > 0) delay(step.delayMs);
         return true;
+    });
+
+    // Block until (variableId op value) holds, or the timeout elapses. delayMs is
+    // the timeout (0 → a 30s safety cap so a never-true condition can't hang the
+    // device forever). A timeout fails the step, aborting the rest of the action.
+    runner.registerExecutor(ActionType::WaitUntil, [](const ActionStep& step, String& error) -> bool {
+        Condition c;
+        c.variableId = step.variableId;
+        c.op         = conditionOpFromString(step.op);
+        c.value      = expandTemplate(step.value);
+        const uint32_t timeout = step.delayMs > 0 ? step.delayMs : 30000;
+        const uint32_t start   = millis();
+        while (!ActionRunner::instance().testCondition(c)) {
+            if (millis() - start >= timeout) {
+                error = "wait_until timed out after " + String(timeout) + "ms";
+                return false;
+            }
+            delay(10);  // delay() yields to WiFi/RTOS, so the watchdog stays fed
+        }
+        return true;
+    });
+
+    runner.registerExecutor(ActionType::SceneRestore, [](const ActionStep& step, String& error) -> bool {
+        if (!step.value.length()) { error = "scene_restore needs a scene name"; return false; }
+        return SceneManager::instance().restore(expandTemplate(step.value), error);
     });
 
     runner.registerExecutor(ActionType::MqttPublish, [](const ActionStep& step, String& error) -> bool {
@@ -588,6 +728,10 @@ void ActionEngine::registerBuiltInExecutors() {
             ok = out.setAnimation(step.outputId, ledAnimationFromString(step.animation), step.speed);
         } else if (step.command == "beep") {
             ok = out.beep(step.outputId, step.frequency, step.durationMs);
+        } else if (step.command == "angle") {
+            ok = out.setAngle(step.outputId, step.angle);
+        } else if (step.command == "move") {
+            ok = out.setPosition(step.outputId, step.position);  // absolute step target
         } else {
             error = "Unknown output command: " + step.command;
             return false;
@@ -701,12 +845,47 @@ void ActionEngine::onInputEvent(const String& inputId, const String& payload) {
     const String event = doc["event"] | String("");
     if (!event.length()) return;
 
-    // Run every enabled action bound to this (input, event) pair.
-    for (const auto& action : _actions) {
+    const uint32_t nowMs = millis();
+
+    // Run every enabled action bound to this (input, event) pair, honouring its
+    // debounce/cooldown modifiers.
+    for (auto& action : _actions) {
         if (!action.enabled) continue;
         if (action.trigger.source != "input") continue;
         if (action.trigger.inputId != inputId) continue;
         if (action.trigger.event != event) continue;
-        triggerAction(action.id);
+
+        if (action.trigger.debounceMs > 0) {
+            // Defer (and coalesce) — the actual fire happens in evaluateDebounced()
+            // once the input has been quiet for the debounce window.
+            action.debounceFireMs = nowMs + action.trigger.debounceMs;
+            if (action.debounceFireMs == 0) action.debounceFireMs = 1;  // avoid the "none" sentinel
+            continue;
+        }
+        fireFromTrigger(action);
+    }
+}
+
+bool ActionEngine::fireFromTrigger(ActionConfig& action) {
+    const uint32_t nowMs = millis();
+    if (action.trigger.cooldownMs > 0 && action.everFired &&
+        (nowMs - action.lastFiredMs) < action.trigger.cooldownMs) {
+        return false;  // still cooling down — drop this trigger
+    }
+    action.lastFiredMs = nowMs;
+    action.everFired   = true;
+    triggerAction(action.id);
+    return true;
+}
+
+void ActionEngine::evaluateDebounced() {
+    const uint32_t nowMs = millis();
+    for (auto& action : _actions) {
+        if (action.debounceFireMs == 0) continue;
+        // Unsigned wrap-safe "now >= due": the window is small relative to 2^32.
+        if ((int32_t)(nowMs - action.debounceFireMs) < 0) continue;
+        action.debounceFireMs = 0;
+        if (!action.enabled) continue;
+        fireFromTrigger(action);
     }
 }

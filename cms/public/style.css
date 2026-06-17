@@ -152,6 +152,14 @@ button + button { margin-left: 6px; }
 
 .empty { color: var(--muted); font-size: 14px; }
 .empty.hidden { display: none; }
+.hidden { display: none; }
+
+/* Config diff-before-apply (#62) */
+.config-diff { margin: 8px 0; font-size: 13px; }
+.diff-added   { color: #4caf50; font-weight: 600; }
+.diff-removed { color: #e53935; font-weight: 600; }
+.diff-changed { color: #fb8c00; font-weight: 600; }
+button.danger { background: #b71c1c; color: #fff; }
 
 /* link from the fleet grid to a device drill-in */
 a.devlink { color: var(--accent); text-decoration: none; }

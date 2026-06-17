@@ -51,12 +51,30 @@
                     <div class="font-weight-medium">{{ action.name || action.id }}</div>
                     <div class="text-caption text-medium-emphasis">{{ action.id }}</div>
                   </td>
-                  <td>{{ action.steps?.length ?? 0 }}</td>
+                  <td>
+                    {{ action.steps?.length ?? 0 }}
+                    <div v-if="lastRunByAction[action.id]" class="text-caption text-medium-emphasis d-flex align-center ga-1">
+                      <v-icon size="x-small" :color="lastRunByAction[action.id].success ? 'success' : 'error'">
+                        {{ lastRunByAction[action.id].success ? 'mdi-check' : 'mdi-close' }}
+                      </v-icon>
+                      {{ formatTs(lastRunByAction[action.id].timestamp_ms) }}
+                    </div>
+                  </td>
                   <td>{{ action.conditions?.length ?? 0 }}</td>
                   <td>
-                    <v-icon :color="action.enabled ? 'success' : 'default'" size="small">
-                      {{ action.enabled ? 'mdi-check-circle' : 'mdi-circle-outline' }}
-                    </v-icon>
+                    <v-tooltip :text="action.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'" location="top">
+                      <template #activator="{ props }">
+                        <v-btn
+                          v-bind="props"
+                          :icon="action.enabled ? 'mdi-check-circle' : 'mdi-circle-outline'"
+                          :color="action.enabled ? 'success' : 'default'"
+                          size="small"
+                          variant="text"
+                          :loading="togglingId === action.id"
+                          @click="toggleEnabled(action)"
+                        />
+                      </template>
+                    </v-tooltip>
                   </td>
                   <td class="text-right">
                     <v-btn
@@ -181,6 +199,56 @@
             </v-table>
           </v-card-text>
         </v-card>
+
+        <!-- Scenes (#39) -->
+        <v-card class="mt-4">
+          <v-card-title class="d-flex align-center justify-space-between">
+            Scenes
+            <v-chip size="small">{{ scenes.length }}</v-chip>
+          </v-card-title>
+          <v-card-text>
+            <div class="text-caption text-medium-emphasis mb-2">
+              Snapshot the current output + variable state, then restore it in one tap (or from a "Restore Scene" action step).
+            </div>
+            <div class="d-flex ga-2 mb-3">
+              <v-text-field
+                v-model="newSceneName"
+                label="New scene name"
+                density="compact"
+                hide-details
+                @keyup.enter="captureScene"
+              />
+              <v-btn
+                color="primary"
+                :loading="sceneBusy"
+                :disabled="!newSceneName.trim()"
+                prepend-icon="mdi-camera"
+                @click="captureScene"
+              >
+                Capture
+              </v-btn>
+            </div>
+            <v-table density="compact">
+              <tbody>
+                <tr v-for="scene in scenes" :key="scene.name">
+                  <td>
+                    <div class="font-weight-medium">{{ scene.name }}</div>
+                    <div class="text-caption text-medium-emphasis">
+                      {{ scene.outputs }} output{{ scene.outputs === 1 ? '' : 's' }} · {{ scene.variables }} var{{ scene.variables === 1 ? '' : 's' }}
+                    </div>
+                  </td>
+                  <td class="text-right">
+                    <v-btn icon="mdi-play" size="small" variant="text" color="success" :loading="sceneBusy" @click="restoreScene(scene.name)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" :loading="sceneBusy" @click="deleteScene(scene.name)" />
+                  </td>
+                </tr>
+                <tr v-if="scenes.length === 0">
+                  <td class="text-medium-emphasis text-center py-4">No scenes captured yet.</td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card-text>
+        </v-card>
       </v-col>
     </v-row>
 
@@ -261,6 +329,30 @@
                   label="Event"
                   density="compact"
                   hide-details
+                />
+              </v-col>
+              <v-col cols="12" sm="6">
+                <v-text-field
+                  v-model.number="editingAction.trigger.debounce_ms"
+                  label="Debounce (ms)"
+                  type="number"
+                  min="0"
+                  density="compact"
+                  hide-details
+                  hint="Wait until the input is quiet this long, then fire once (coalesces chatter). 0 = off."
+                  persistent-hint
+                />
+              </v-col>
+              <v-col cols="12" sm="6">
+                <v-text-field
+                  v-model.number="editingAction.trigger.cooldown_ms"
+                  label="Cooldown (ms)"
+                  type="number"
+                  min="0"
+                  density="compact"
+                  hide-details
+                  hint="Minimum gap between fires; events arriving sooner are dropped (throttle). 0 = off."
+                  persistent-hint
                 />
               </v-col>
             </template>
@@ -395,6 +487,25 @@
                       <v-text-field v-model.number="step.duration_ms" label="Duration (ms)" type="number" :min="20" :max="5000" density="compact" hide-details />
                     </v-col>
                   </v-row>
+                  <v-slider
+                    v-if="step.command === 'angle'"
+                    v-model.number="step.angle"
+                    :min="0" :max="180" :step="1"
+                    label="Angle (°)"
+                    thumb-label
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                  />
+                  <v-text-field
+                    v-if="step.command === 'move'"
+                    v-model.number="step.position"
+                    label="Target position (steps)"
+                    type="number"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                  />
                 </template>
 
                 <!-- Variable steps: pick from the device's variable list -->
@@ -474,6 +585,44 @@
                     class="mt-2"
                   />
                 </template>
+
+                <!-- If: condition; runs steps up to the matching Else/End If only when true -->
+                <template v-if="step.type === 'if'">
+                  <v-row class="mt-1" align="center">
+                    <v-col cols="12" sm="5">
+                      <v-select v-model="step.variable_id" :items="variablesList" label="Variable" density="compact" hide-details />
+                    </v-col>
+                    <v-col cols="6" sm="3">
+                      <v-select v-model="step.op" :items="conditionOps" item-title="label" item-value="value" label="Op" density="compact" hide-details />
+                    </v-col>
+                    <v-col cols="6" sm="4">
+                      <v-text-field v-model="step.value" label="Value" density="compact" hide-details />
+                    </v-col>
+                  </v-row>
+                </template>
+                <template v-if="step.type === 'wait_until'">
+                  <v-row class="mt-1" align="center">
+                    <v-col cols="12" sm="5">
+                      <v-select v-model="step.variable_id" :items="variablesList" label="Variable" density="compact" hide-details />
+                    </v-col>
+                    <v-col cols="6" sm="3">
+                      <v-select v-model="step.op" :items="conditionOps" item-title="label" item-value="value" label="Op" density="compact" hide-details />
+                    </v-col>
+                    <v-col cols="6" sm="4">
+                      <v-text-field v-model="step.value" label="Value" density="compact" hide-details />
+                    </v-col>
+                  </v-row>
+                  <v-text-field v-model.number="step.delay_ms" type="number" min="0" label="Timeout (ms)" hint="0 = 30s cap. On timeout the step fails and the action stops." persistent-hint density="compact" class="mt-2" />
+                </template>
+                <template v-if="step.type === 'scene_restore'">
+                  <v-combobox v-model="step.value" :items="scenes.map(s => s.name)" label="Scene" hint="Supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
+                </template>
+                <template v-if="step.type === 'repeat'">
+                  <v-text-field v-model.number="step.repeat_count" type="number" :min="1" :max="65535" label="Repeat count" hint="Loops the steps up to the matching End Repeat" persistent-hint density="compact" class="mt-2" />
+                </template>
+                <div v-if="['else','endif','endrepeat'].includes(step.type)" class="text-caption text-medium-emphasis mt-2">
+                  Block marker — pair it with its matching {{ step.type === 'endrepeat' ? 'Repeat' : 'If' }} step.
+                </div>
               </v-card-text>
             </v-card>
           </div>
@@ -530,7 +679,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import api from '../api/client'
 import { useWebSocketStore } from '../stores/websocket'
 
@@ -539,10 +688,24 @@ const loading = ref(false)
 const saving = ref(false)
 const statusMessage = ref(null)
 const triggeringId = ref(null)
+const togglingId = ref(null)
 
 const actions = ref([])
 const macros = ref([])
 const history = ref([])
+const scenes = ref([])
+const newSceneName = ref('')
+const sceneBusy = ref(false)
+
+// Most-recent history entry per action id, for the inline last-run indicator.
+// `history` is newest-first (reversed on load), so the first match wins.
+const lastRunByAction = computed(() => {
+  const map = {}
+  for (const entry of history.value) {
+    if (entry.action_id && !map[entry.action_id]) map[entry.action_id] = entry
+  }
+  return map
+})
 
 // Lists that populate the editor dropdowns ("choose from a list").
 const outputsList = ref([])    // [{id, type}]
@@ -566,6 +729,8 @@ const actionStepTypes = [
   { value: 'page_change', label: 'Page Change' },
   { value: 'notification', label: 'Notification' },
   { value: 'delay', label: 'Delay' },
+  { value: 'wait_until', label: 'Wait Until (variable)' },
+  { value: 'scene_restore', label: 'Restore Scene' },
   { value: 'mqtt_publish', label: 'MQTT Publish' },
   { value: 'ha_service_call', label: 'HA Service Call' },
   { value: 'http_request', label: 'HTTP Request' },
@@ -573,6 +738,11 @@ const actionStepTypes = [
   { value: 'media_control', label: 'Media Control' },
   { value: 'remote_action', label: 'Remote Action (another node)' },
   { value: 'sync_action', label: 'Sync Action (all nodes, timed)' },
+  { value: 'if', label: 'If (condition)' },
+  { value: 'else', label: 'Else' },
+  { value: 'endif', label: 'End If' },
+  { value: 'repeat', label: 'Repeat (loop start)' },
+  { value: 'endrepeat', label: 'End Repeat' },
 ]
 
 // Digital-input events an action can be bound to (must match firmware names).
@@ -583,8 +753,10 @@ const outputCommands = [
   { value: 'brightness', label: 'Brightness' },
   { value: 'animation', label: 'Animation' },
   { value: 'beep', label: 'Beep (buzzer)' },
+  { value: 'angle', label: 'Angle (servo)' },
+  { value: 'move', label: 'Move to (stepper)' },
 ]
-const animations = ['solid', 'off', 'blink', 'breathe', 'rainbow', 'chase', 'colorwipe']
+const animations = ['solid', 'off', 'blink', 'breathe', 'rainbow', 'chase', 'colorwipe', 'fire']
 // Suggested keyboard combos (free text is also allowed — the combobox is editable).
 const keyboardPresets = [
   'CTRL+C', 'CTRL+V', 'CTRL+ALT+DELETE', 'CTRL+SHIFT+ESC',
@@ -625,6 +797,7 @@ function setStepColor(step, hex) {
 const newTrigger = () => ({
   source: 'manual', input_id: '', event: 'Press',
   schedule_mode: 'interval', interval_sec: 60, daily_time: '08:00',
+  debounce_ms: 0, cooldown_ms: 0,
 })
 
 // HH:MM (UTC) <-> seconds-since-midnight helpers for the daily schedule.
@@ -648,13 +821,15 @@ async function refresh() {
   loading.value = true
   statusMessage.value = null
   try {
-    const [actData, macData] = await Promise.all([
+    const [actData, macData, sceneData] = await Promise.all([
       api.get('/api/actions'),
       api.get('/api/macros'),
+      api.get('/api/scenes').catch(() => ({ scenes: [] })),
     ])
     actions.value = actData.actions || []
     macros.value = macData.macros || []
     history.value = (actData.history || []).slice().reverse()
+    scenes.value = sceneData.scenes || []
 
     // Dropdown sources — best-effort, don't fail the whole view if one errors.
     const [out, vars, ins, disp, pages] = await Promise.all([
@@ -707,7 +882,7 @@ function removeCondition(idx) {
 }
 
 function addStep() {
-  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid', frequency: 2000, duration_ms: 200, keys: '', media_command: 'play_pause' })
+  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid', frequency: 2000, duration_ms: 200, angle: 90, position: 0, keys: '', media_command: 'play_pause', op: 'eq', repeat_count: 1 })
 }
 
 function removeStep(idx) {
@@ -720,7 +895,11 @@ async function saveAction() {
     const t = editingAction.value.trigger || newTrigger()
     let trigger
     if (t.source === 'input') {
-      trigger = { source: 'input', input_id: t.input_id, event: t.event }
+      trigger = {
+        source: 'input', input_id: t.input_id, event: t.event,
+        debounce_ms: Math.max(0, parseInt(t.debounce_ms, 10) || 0),
+        cooldown_ms: Math.max(0, parseInt(t.cooldown_ms, 10) || 0),
+      }
     } else if (t.source === 'schedule') {
       trigger = {
         source: 'schedule',
@@ -798,9 +977,65 @@ async function triggerAction(id) {
   }
 }
 
+// Quick enable/disable without opening the editor. registerAction is upsert-by-id,
+// so posting the single action with `enabled` flipped leaves the others untouched.
+async function toggleEnabled(action) {
+  togglingId.value = action.id
+  try {
+    await api.post('/api/actions', { actions: [{ ...action, enabled: !action.enabled }] })
+    await refresh()
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Toggle failed' }
+  } finally {
+    togglingId.value = null
+  }
+}
+
 function triggerMacro(id) {
   wsStore.send('action_trigger', { id, type: 'macro' })
   statusMessage.value = { type: 'info', text: `Triggered macro: ${id}` }
+}
+
+// ── Scenes (#39) ──────────────────────────────────────────────────────────────
+async function captureScene() {
+  const name = (newSceneName.value || '').trim()
+  if (!name) return
+  sceneBusy.value = true
+  try {
+    const res = await api.post('/api/scenes/capture', { name })
+    scenes.value = res.scenes || scenes.value
+    newSceneName.value = ''
+    statusMessage.value = { type: 'success', text: `Captured scene "${name}".` }
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Capture failed' }
+  } finally {
+    sceneBusy.value = false
+  }
+}
+
+async function restoreScene(name) {
+  sceneBusy.value = true
+  try {
+    await api.post('/api/scenes/restore', { name })
+    statusMessage.value = { type: 'success', text: `Restored scene "${name}".` }
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Restore failed' }
+  } finally {
+    sceneBusy.value = false
+  }
+}
+
+async function deleteScene(name) {
+  sceneBusy.value = true
+  try {
+    const res = await api.delete(`/api/scenes/${encodeURIComponent(name)}`)
+    scenes.value = res.scenes || scenes.value.filter(s => s.name !== name)
+    statusMessage.value = { type: 'success', text: `Deleted scene "${name}".` }
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Delete failed' }
+  } finally {
+    sceneBusy.value = false
+  }
 }
 
 function confirmDelete(kind, item) {

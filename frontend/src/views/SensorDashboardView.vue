@@ -211,9 +211,16 @@
               </template>
               <v-list-item-title>{{ labelForMetric(metric.key) }}</v-list-item-title>
               <template #append>
-                <span class="text-body-2 font-weight-medium">
-                  {{ formatValue(metric.value, metric.key) }}
-                </span>
+                <div class="d-flex align-center ga-2">
+                  <Sparkline
+                    :values="historyFor(sensor.id, metric.key)"
+                    color="rgb(var(--v-theme-primary))"
+                    class="text-primary"
+                  />
+                  <span class="text-body-2 font-weight-medium" style="min-width:72px;text-align:right">
+                    {{ formatValue(metric.value, metric.key) }}
+                  </span>
+                </div>
               </template>
             </v-list-item>
             <v-list-item v-if="sensor.metrics.length === 0">
@@ -258,9 +265,10 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import api from '../api/client'
 import { useWebSocketStore } from '../stores/websocket'
+import Sparkline from '../components/Sparkline.vue'
 
 const wsStore = useWebSocketStore()
 const loading = ref(false)
@@ -385,6 +393,28 @@ const filteredSensors = computed(() => {
   const q = search.value.toLowerCase()
   return sensors.value.filter(s => s.id.toLowerCase().includes(q) || s.type.toLowerCase().includes(q))
 })
+
+// Rolling in-browser history per "<sensorId>::<metricKey>" for the sparklines.
+// Capped so memory stays bounded on a long-lived tab; resets on reload.
+const HISTORY_LEN = 40
+const history = ref({})
+
+const historyFor = (sensorId, key) => history.value[`${sensorId}::${key}`] || []
+
+// Append every fresh live reading. Watching wsStore.sensors (the real-time feed)
+// rather than the merged computed avoids re-recording the REST snapshot.
+watch(() => wsStore.sensors, (sensorsMap) => {
+  for (const [id, data] of Object.entries(sensorsMap || {})) {
+    for (const [key, value] of Object.entries(data.values || {})) {
+      if (typeof value !== 'number') continue
+      const k = `${id}::${key}`
+      const arr = history.value[k] ? history.value[k].slice() : []
+      arr.push(value)
+      if (arr.length > HISTORY_LEN) arr.splice(0, arr.length - HISTORY_LEN)
+      history.value[k] = arr
+    }
+  }
+}, { deep: true })
 
 const sensorVariables = computed(() => {
   return Object.entries(wsStore.variables)

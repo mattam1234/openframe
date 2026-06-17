@@ -10,6 +10,7 @@ import { HistoryStore } from './history';
 import { AlertManager } from './alerts';
 import { FirmwareStore } from './firmware-store';
 import { makeAuth, tokenMatches } from './auth';
+import { AuditLog } from './audit';
 import { RateLimiter } from './rate-limit';
 import { buildProvisionConfig, provisionUrl, provisionQrDataUrl } from './provision';
 
@@ -64,9 +65,14 @@ export function createServer(
   firmware: FirmwareStore,
   publicUrl?: string,
   authToken?: string,
+  viewerToken?: string,
+  audit?: AuditLog,
 ): http.Server {
   const app = express();
-  const auth = makeAuth(authToken);
+  const auth = makeAuth(authToken, viewerToken);
+  // Role attached by auth.middleware; 'open' when auth is disabled on the LAN.
+  const roleOf = (req: unknown): string =>
+    (req as { role?: string }).role ?? (auth.enabled ? 'unknown' : 'open');
   app.use(express.json({ limit: '256kb' }));
   // Static UI (incl. the login overlay) is served without auth; the API below is
   // gated. Firmware binaries stay public so token-less devices can fetch them.
@@ -74,7 +80,7 @@ export function createServer(
 
   // ── Auth (public endpoints) ──────────────────────────────────────────────────
   app.get('/api/auth', (req, res) => {
-    res.json({ authRequired: auth.enabled, authed: auth.ok(req) });
+    res.json({ authRequired: auth.enabled, authed: auth.ok(req), role: auth.role(req) });
   });
   // Throttle login attempts per client to make a configured token unbruteforceable.
   const loginLimiter = new RateLimiter(10, 60_000);
@@ -85,9 +91,15 @@ export function createServer(
       return;
     }
     const provided = (req.body ?? {}).token;
-    if (typeof provided === 'string' && tokenMatches(provided, authToken!)) {
-      res.setHeader('Set-Cookie', auth.loginCookie(authToken!));
-      res.json({ ok: true });
+    // Accept either the admin or the viewer token; the cookie carries whichever
+    // matched, so the role is re-derived from it on every subsequent request.
+    const matched = typeof provided === 'string' &&
+      ((authToken && tokenMatches(provided, authToken)) ? authToken
+        : (viewerToken && tokenMatches(provided, viewerToken)) ? viewerToken
+        : null);
+    if (matched) {
+      res.setHeader('Set-Cookie', auth.loginCookie(matched));
+      res.json({ ok: true, role: authToken && matched === authToken ? 'admin' : 'viewer' });
     } else {
       res.status(401).json({ ok: false, error: 'invalid token' });
     }
@@ -144,9 +156,31 @@ export function createServer(
     res.json(registry.get(req.params.id));
   });
 
+  app.put('/api/devices/:id/notes', (req, res) => {
+    const notes = (req.body ?? {}).notes;
+    if (typeof notes !== 'string') {
+      res.status(400).json({ error: 'notes must be a string' });
+      return;
+    }
+    if (notes.length > 2000) {
+      res.status(400).json({ error: 'notes too long (max 2000 chars)' });
+      return;
+    }
+    if (!registry.setNotes(req.params.id, notes)) {
+      res.status(404).json({ error: 'unknown device' });
+      return;
+    }
+    res.json(registry.get(req.params.id));
+  });
+
   // ── Alerts ───────────────────────────────────────────────────────────────────
   app.get('/api/alerts', (_req, res) => {
     res.json({ active: alerts.activeAlerts(), recent: alerts.recentAlerts() });
+  });
+
+  // ── Audit log: who pushed what, when, and the result ─────────────────────────
+  app.get('/api/audit', (_req, res) => {
+    res.json({ entries: audit ? audit.list() : [] });
   });
 
   // Single-device command: publish to <base>/<id>/cmd and await the ack.
@@ -158,8 +192,10 @@ export function createServer(
     }
     try {
       const result = await bridge.sendCommand(req.params.id, { type, payload });
+      audit?.record({ role: roleOf(req), action: 'device.cmd', target: req.params.id, detail: type, ok: !!(result as { ok?: boolean })?.ok });
       res.json(result);
     } catch (err) {
+      audit?.record({ role: roleOf(req), action: 'device.cmd', target: req.params.id, detail: type, ok: false });
       res.status(504).json({ error: err instanceof Error ? err.message : 'command failed' });
     }
   });
@@ -179,7 +215,9 @@ export function createServer(
       return;
     }
     const results = await fanOut(bridge, targets, type, payload);
-    res.json({ count: results.length, ok: results.filter((r) => r.ok).length, results });
+    const okCount = results.filter((r) => r.ok).length;
+    audit?.record({ role: roleOf(req), action: 'commands.bulk', detail: type, count: results.length, ok: okCount === results.length });
+    res.json({ count: results.length, ok: okCount, results });
   });
 
   // ── Template library ─────────────────────────────────────────────────────────
@@ -222,7 +260,9 @@ export function createServer(
       return;
     }
     const results = await fanOut(bridge, targets, template.command.type, template.command.payload);
-    res.json({ template: template.id, count: results.length, ok: results.filter((r) => r.ok).length, results });
+    const okCount = results.filter((r) => r.ok).length;
+    audit?.record({ role: roleOf(req), action: 'template.deploy', target: template.id, detail: template.command.type, count: results.length, ok: okCount === results.length });
+    res.json({ template: template.id, count: results.length, ok: okCount, results });
   });
 
   // ── Provisioning: generate an onboarding QR for a new device's captive portal ─
@@ -287,8 +327,42 @@ export function createServer(
     }
     const base = publicUrl.replace(/\/+$/, '');
     const url = `${base}/firmware/${encodeURIComponent(name)}`;
+
+    // Staged/canary rollout: deploy to the first `canary` devices, and only push
+    // to the rest if their command-ack rate clears `minAckRate` (default 100%).
+    // This catches an obviously-bad rollout (offline/rejecting devices) before it
+    // hits the whole fleet. (Ack = the device accepted the OTA command; true
+    // flash-success gating would watch the heartbeat `version` change over time —
+    // see the Fleet grid; left as a follow-up needing device telemetry.)
+    const canaryN = Math.floor(Number((req.body ?? {}).canary) || 0);
+    const minAckRate = typeof (req.body ?? {}).minAckRate === 'number' ? (req.body as { minAckRate: number }).minAckRate : 1;
+
+    if (canaryN > 0 && canaryN < targets.length) {
+      const canaryTargets = targets.slice(0, canaryN);
+      const canaryResults = await fanOut(bridge, canaryTargets, 'ota_url', { url });
+      const canaryOk = canaryResults.filter((r) => r.ok).length;
+      const ackRate = canaryOk / canaryTargets.length;
+      if (ackRate < minAckRate) {
+        audit?.record({ role: roleOf(req), action: 'firmware.deploy', target: name, detail: 'canary-halted', count: canaryTargets.length, ok: false });
+        res.json({
+          url, staged: true, halted: true,
+          reason: `canary ack ${Math.round(ackRate * 100)}% < required ${Math.round(minAckRate * 100)}% — rollout halted`,
+          canaryCount: canaryTargets.length, canary: canaryResults,
+        });
+        return;
+      }
+      const restResults = await fanOut(bridge, targets.slice(canaryN), 'ota_url', { url });
+      const all = [...canaryResults, ...restResults];
+      const okAll = all.filter((r) => r.ok).length;
+      audit?.record({ role: roleOf(req), action: 'firmware.deploy', target: name, detail: 'staged', count: all.length, ok: okAll === all.length });
+      res.json({ url, staged: true, halted: false, canaryCount: canaryTargets.length, count: all.length, ok: okAll, results: all });
+      return;
+    }
+
     const results = await fanOut(bridge, targets, 'ota_url', { url });
-    res.json({ url, count: results.length, ok: results.filter((r) => r.ok).length, results });
+    const okCount = results.filter((r) => r.ok).length;
+    audit?.record({ role: roleOf(req), action: 'firmware.deploy', target: name, detail: 'ota_url', count: results.length, ok: okCount === results.length });
+    res.json({ url, count: results.length, ok: okCount, results });
   });
 
   // ── WebSocket live updates ─────────────────────────────────────────────────

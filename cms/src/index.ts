@@ -7,6 +7,7 @@ import { TemplateStore, Template } from './templates';
 import { HistoryStore, Sample } from './history';
 import { AlertManager } from './alerts';
 import { FirmwareStore } from './firmware-store';
+import { AuditLog, AuditEntry } from './audit';
 import { notifyAlert } from './notifier';
 import { Device } from './types';
 
@@ -28,6 +29,7 @@ const history = new HistoryStore(
 );
 const alerts = new AlertManager({ lowHeapBytes: cfg.alertLowHeapBytes, lowRssiDbm: cfg.alertLowRssiDbm });
 const firmware = new FirmwareStore(cfg.dataDir);
+const audit = new AuditLog(new JsonStore<{ entries: AuditEntry[] }>(cfg.dataDir, 'audit.json'));
 
 if (cfg.alertWebhookUrl) {
   const hook = cfg.alertWebhookUrl;
@@ -48,8 +50,9 @@ registry.on('change', (device) => {
 const sweep = setInterval(() => registry.sweep(), Math.min(cfg.offlineTimeoutMs, 15_000));
 sweep.unref?.();
 
-const server = createServer(registry, bridge, templates, history, alerts, firmware, cfg.publicUrl, cfg.authToken);
+const server = createServer(registry, bridge, templates, history, alerts, firmware, cfg.publicUrl, cfg.authToken, cfg.viewerToken, audit);
 if (cfg.authToken) console.log('[cms] token auth enabled');
+if (cfg.viewerToken) console.log('[cms] read-only viewer token enabled');
 
 // Graceful shutdown: stop accepting connections, disconnect MQTT cleanly, exit.
 let shuttingDown = false;

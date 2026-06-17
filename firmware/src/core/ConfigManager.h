@@ -19,6 +19,14 @@ struct WifiConfig {
     String password;
     bool   apMode = false;
     std::vector<WifiNetworkConfig> networks;
+    // Optional static IP (STA mode). When staticIp is set + parses, the device
+    // requests it instead of DHCP — stable addressing for the CMS. gateway/subnet
+    // default sensibly; dns1/dns2 are optional. Empty staticIp = DHCP.
+    String staticIp;
+    String gateway;
+    String subnet = "255.255.255.0";
+    String dns1;
+    String dns2;
 };
 
 struct MqttConfig {
@@ -28,6 +36,11 @@ struct MqttConfig {
     String   password;
     String   baseTopic = "openframe";
     bool     enabled   = false;
+    // TLS: when enabled, connect over MQTTS (typically port 8883). A CA cert
+    // uploaded to OF_MQTT_CA_PATH is used as the trust anchor; tlsInsecure skips
+    // certificate validation (convenient for self-signed brokers, less secure).
+    bool     tls         = false;
+    bool     tlsInsecure = false;
 };
 
 struct HaConfig {
@@ -41,9 +54,27 @@ struct OtaConfig {
     bool   autoCheck         = false;
 };
 
+struct TimeConfig {
+    // SNTP servers (queried in order). The system clock is always kept in UTC.
+    String ntpServer  = "pool.ntp.org";
+    String ntpServer2 = "time.nist.gov";
+    // POSIX TZ string — drives localtime() and daily schedules, incl. automatic
+    // DST. Empty = UTC. e.g. "CET-1CEST,M3.5.0,M10.5.0/3" (Central Europe),
+    // "EST5EDT,M3.2.0,M11.1.0" (US Eastern).
+    String tz;
+};
+
 struct DeviceConfig {
     String   name      = "OpenFrame";
     String   boardType;   // filled at runtime from compile-time define
+    // Optional API token. When set, /api mutations, uploads, deletes, the live
+    // WebSocket, and the secret-bearing /api/config read require it (Bearer
+    // header or ?token=). Empty = open (LAN-trusted default).
+    String   apiToken;
+    // Optional factory-reset button: hold this GPIO LOW for resetHoldMs at boot
+    // to wipe config (WiFi credentials are preserved). -1 = disabled.
+    int      resetPin    = -1;
+    uint16_t resetHoldMs = 5000;
 };
 
 // Peer-to-peer mesh link between nodes (ESP-NOW). See fleet-and-mesh-roadmap.md
@@ -68,6 +99,7 @@ struct AppConfig {
     HaConfig       ha;
     OtaConfig      ota;
     NodeLinkConfig nodelink;
+    TimeConfig     time;
 };
 
 // ── ConfigManager ─────────────────────────────────────────────────────────────
@@ -84,6 +116,10 @@ public:
 
     // Reset to defaults and save
     void resetToDefaults();
+
+    // Wipe config back to defaults but keep WiFi credentials (so a misconfigured
+    // device stays reachable on its network), then save.
+    void factoryResetKeepWifi();
 
     // Serialise / deserialise helpers
     void toJson(JsonDocument& doc) const;

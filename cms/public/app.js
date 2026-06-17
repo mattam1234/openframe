@@ -15,9 +15,19 @@ const tplSelectEl = document.getElementById('tpl-select');
 const bulkResultEl = document.getElementById('bulk-result');
 const navBadge = document.getElementById('nav-badge');
 const tagFilterEl = document.getElementById('tag-filter');
+const searchEl = document.getElementById('search');
 
 function filterTags() {
   return tagFilterEl.value.split(',').map((t) => t.trim()).filter(Boolean);
+}
+
+// Free-text search across the visible/identifying fields, incl. notes (#64).
+function matchesSearch(d) {
+  const q = (searchEl?.value || '').trim().toLowerCase();
+  if (!q) return true;
+  const hay = [d.deviceId, d.name, d.board, d.ip, d.notes, (d.tags || []).join(' ')]
+    .filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q);
 }
 
 const activeAlerts = new Map();
@@ -105,9 +115,12 @@ function updateSelectionUI() {
 }
 
 function render() {
-  const list = [...devices.values()].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+  const all = [...devices.values()].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+  const list = all.filter(matchesSearch);
   const online = list.filter((d) => d.online).length;
-  summaryEl.textContent = `${list.length} device(s) · ${online} online · ${list.length - online} offline`;
+  const filtered = all.length - list.length;
+  summaryEl.textContent = `${list.length} device(s) · ${online} online · ${list.length - online} offline`
+    + (filtered ? ` · ${filtered} hidden by search` : '');
   emptyEl.classList.toggle('hidden', list.length > 0);
 
   rowsEl.innerHTML = '';
@@ -170,6 +183,7 @@ selectAllEl.onchange = () => {
   render();
 };
 tagFilterEl.oninput = updateSelectionUI;
+if (searchEl) searchEl.oninput = render;
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';

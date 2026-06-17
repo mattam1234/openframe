@@ -196,6 +196,17 @@ const mdi = {
   }),
 }
 
+// Theme (#46): saved choice wins; otherwise follow the OS preference (dark default).
+const initialTheme = (() => {
+  try {
+    const saved = localStorage.getItem('of-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+  } catch { /* private mode */ }
+  const prefersLight = typeof window !== 'undefined' && window.matchMedia
+    && window.matchMedia('(prefers-color-scheme: light)').matches
+  return prefersLight ? 'light' : 'dark'
+})()
+
 const vuetify = createVuetify({
   icons: {
     defaultSet: 'mdi',
@@ -203,7 +214,7 @@ const vuetify = createVuetify({
     sets: { mdi },
   },
   theme: {
-    defaultTheme: 'dark',
+    defaultTheme: initialTheme,
   },
 })
 

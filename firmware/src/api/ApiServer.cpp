@@ -17,6 +17,7 @@
 #include "../hardware/HardwareInfo.h"
 #include "../managers/ActionEngine.h"
 #include "../managers/MacroManager.h"
+#include "../managers/SceneManager.h"
 #include "../managers/OtaManager.h"
 #include "../managers/VariableManager.h"
 #include "../managers/WiFiManager.h"
@@ -72,7 +73,9 @@ void registerJsonPost(AsyncWebServer& server, const char* path, JsonBodyHandler 
             body->concat(reinterpret_cast<const char*>(data), len);
 
             if (index + len == total) {
-                handler(request, *body);
+                if (ApiServer::instance().requireAuth(request)) {
+                    handler(request, *body);
+                }
                 freeTempStringBody(request);
             }
         });
@@ -179,6 +182,12 @@ void serializeVariable(JsonObject obj, const Variable& var) {
     obj["type"] = varTypeToString(var.type);
     obj["label"] = var.label;
     obj["persistent"] = var.persistent;
+    if (var.hasRange) { obj["min"] = var.rangeMin; obj["max"] = var.rangeMax; }
+    if (var.unit.length()) obj["unit"] = var.unit;
+    if (!var.options.empty()) {
+        auto opts = obj["options"].to<JsonArray>();
+        for (const auto& o : var.options) opts.add(o);
+    }
 
     switch (var.type) {
         case VarType::Integer: obj["value"] = var.valueInt; break;
@@ -345,7 +354,44 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().sendStatus(request);
     });
 
+    // Prometheus exposition endpoint (#84) — plain-text telemetry, left open like
+    // the other read-only status endpoints so scrapers don't need the API token.
+    server.on("/metrics", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendMetrics(request);
+    });
+
+    // Config backup/restore — sub-routes registered BEFORE "/api/config" so the
+    // parent GET handler doesn't swallow them (see canHandle subpath note above).
+    server.on("/api/config/backups", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
+        ApiServer::instance().sendConfigBackups(request);
+    });
+    server.on("/api/config/backup", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
+        ApiServer::instance().handleConfigBackupCreate(request);
+    });
+    server.on("/api/factory-reset", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
+        // Snapshot first (so even a reset is recoverable), then wipe keeping WiFi.
+        ApiServer::instance().createConfigBackup();
+        ConfigManager::instance().factoryResetKeepWifi();
+        JsonDocument doc;
+        doc["ok"] = true;
+        doc["message"] = "Factory reset (WiFi kept). Restarting.";
+        ApiServer::instance().sendJson(request, doc);
+        ApiServer::instance().scheduleRestart();
+    });
+    registerJsonPost(server, "/api/config/restore", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleConfigRestore(request, body);
+    });
+    server.on("/api/config/backups/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
+        ApiServer::instance().handleConfigBackupDelete(request);
+    });
+
     server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest* request) {
+        // Config carries WiFi/MQTT secrets — gate it even though it's a GET.
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().sendConfig(request);
     });
     server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -364,6 +410,14 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
 
     server.on("/api/logs", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendLogs(request);
+    });
+
+    server.on("/api/crashlog", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument doc;
+        if (!StorageManager::instance().readJson(OF_CRASHLOG_PATH, doc)) {
+            doc["resets"].to<JsonArray>();
+        }
+        ApiServer::instance().sendJson(request, doc);
     });
 
     server.on("/api/ota/check", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -431,6 +485,7 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleActionsUpdate(request, body);
     });
     server.on("/api/actions/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         const String url = request->url();
         const String actionId = url.substring(url.lastIndexOf('/') + 1);
         ApiServer::instance().handleActionDelete(request, actionId);
@@ -443,9 +498,28 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleMacrosUpdate(request, body);
     });
     server.on("/api/macros/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         const String url = request->url();
         const String macroId = url.substring(url.lastIndexOf('/') + 1);
         ApiServer::instance().handleMacroDelete(request, macroId);
+    });
+
+    // ── Scenes (#39) ────────────────────────────────────────────────────────────
+    // Specific sub-routes before the "/api/scenes" parent + wildcard delete.
+    registerJsonPost(server, "/api/scenes/capture", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleSceneCapture(request, body);
+    });
+    registerJsonPost(server, "/api/scenes/restore", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleSceneRestore(request, body);
+    });
+    server.on("/api/scenes", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendScenes(request);
+    });
+    server.on("/api/scenes/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
+        const String url = request->url();
+        const String name = url.substring(url.lastIndexOf('/') + 1);
+        ApiServer::instance().handleSceneDelete(request, name);
     });
 
     // ── Profiles ──────────────────────────────────────────────────────────────
@@ -461,6 +535,7 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleProfileCreate(request, body);
     });
     server.on("/api/profiles/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         const String url = request->url();
         const String profileId = url.substring(url.lastIndexOf('/') + 1);
         ApiServer::instance().handleProfileDelete(request, profileId);
@@ -484,6 +559,7 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleTemplateImport(request, body);
     });
     server.on("/api/templates/*", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         const String url = request->url();
         const String templateId = url.substring(url.lastIndexOf('/') + 1);
         const bool removed = StorageManager::instance().remove("/templates/" + templateId + ".json");
@@ -522,22 +598,31 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     });
 
     // ── Filesystem browser ────────────────────────────────────────────────────
+    // The whole FS browser is gated for read too: /api/fs/download can read any
+    // file (incl. /config.json with its secrets), so leaving reads open while
+    // gating writes would be a trivial auth bypass.
     server.on("/api/fs/stat", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().sendFsStat(request);
     });
     server.on("/api/fs/selftest", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().sendFsSelfTest(request);
     });
     server.on("/api/fs/list", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().sendFsList(request);
     });
     server.on("/api/fs/download", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().sendFsDownload(request);
     });
     server.on("/api/fs", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().handleFsDelete(request);
     });
     server.on("/api/fs/mkdir", HTTP_POST, [](AsyncWebServerRequest* request) {
+        if (!ApiServer::instance().requireAuth(request)) return;
         ApiServer::instance().handleFsMkdir(request);
     });
     registerJsonPost(server, "/api/fs/rename", [](AsyncWebServerRequest* request, const String& body) {
@@ -563,8 +648,10 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
             }
             body->concat(reinterpret_cast<const char*>(data), len);
             if (index + len == total) {
-                String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
-                ApiServer::instance().handleFsUpload(request, path, *body);
+                if (ApiServer::instance().requireAuth(request)) {
+                    String path = request->hasParam("path") ? request->getParam("path")->value() : String("");
+                    ApiServer::instance().handleFsUpload(request, path, *body);
+                }
                 freeTempStringBody(request);
             }
         });
@@ -604,6 +691,39 @@ void ApiServer::sendStatus(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     deserializeJson(doc, buildStatusJson());
     sendJson(request, doc);
+}
+
+void ApiServer::sendMetrics(AsyncWebServerRequest* request) const {
+    auto& health = HealthMonitor::instance();
+    const bool wifiUp = WiFiManager::instance().isConnected();
+
+    // All series carry a device="<id>" label so a fleet scrape stays distinct.
+    String dev = WiFiManager::instance().deviceId();
+    dev.replace("\\", "");  // keep the label value clean
+    dev.replace("\"", "");
+    const String L = "{device=\"" + dev + "\"} ";
+
+    String m;
+    m.reserve(1024);
+    auto metric = [&](const char* name, const char* type, const char* help, const String& value) {
+        m += "# HELP "; m += name; m += " "; m += help; m += "\n";
+        m += "# TYPE "; m += name; m += " "; m += type; m += "\n";
+        m += name; m += L; m += value; m += "\n";
+    };
+
+    metric("openframe_uptime_seconds", "counter", "Device uptime in seconds.", String(millis() / 1000UL));
+    metric("openframe_free_heap_bytes", "gauge", "Current free heap.", String(health.getFreeHeap()));
+    metric("openframe_min_free_heap_bytes", "gauge", "Lowest free heap seen this session.", String(health.getMinFreeHeap()));
+    metric("openframe_largest_free_block_bytes", "gauge", "Largest contiguous allocatable block.", String(health.getLargestFreeBlock()));
+    metric("openframe_heap_fragmentation_percent", "gauge", "Heap fragmentation (0-100).", String(health.getHeapFragPercent()));
+    metric("openframe_cpu_load_percent", "gauge", "Estimated CPU load (0-100).", String(static_cast<int>(health.getCpuLoadPercent())));
+    metric("openframe_boot_count", "gauge", "Consecutive unstable boots.", String(health.getBootCount()));
+    metric("openframe_safe_mode", "gauge", "1 if running in safe mode.", String(health.inSafeMode() ? 1 : 0));
+    metric("openframe_wifi_up", "gauge", "1 if WiFi (STA) is connected.", String(wifiUp ? 1 : 0));
+    metric("openframe_wifi_rssi_dbm", "gauge", "WiFi RSSI in dBm (0 if disconnected).", String(wifiUp ? WiFi.RSSI() : 0));
+    metric("openframe_mqtt_up", "gauge", "1 if connected to the MQTT broker.", String(MqttManager::instance().isConnected() ? 1 : 0));
+
+    request->send(200, "text/plain; version=0.0.4", m);
 }
 
 void ApiServer::sendConfig(AsyncWebServerRequest* request) const {
@@ -667,6 +787,10 @@ void ApiServer::handleConfigUpdate(AsyncWebServerRequest* request, const String&
           ", mqtt=" + String((doc["mqtt"]["enabled"] | false) ? "enabled" : "disabled") +
           ", ha=" + String((doc["ha"]["enabled"] | false) ? "enabled" : "disabled"));
 
+    // Snapshot the current (pre-change) config first, so a bad push can be rolled
+    // back in one tap from the backups list.
+    createConfigBackup();
+
     ConfigManager::instance().fromJson(doc);
     if (!ConfigManager::instance().save()) {
         sendError(request, 500, "Failed to save config");
@@ -682,6 +806,123 @@ void ApiServer::handleConfigUpdate(AsyncWebServerRequest* request, const String&
     publishHealthUpdate();
 
     scheduleRestart();
+}
+
+// ── Config backup/restore slots ─────────────────────────────────────────────
+// Slots live in OF_CONFIG_BACKUP_DIR as "<id>.json" (id = epoch when the clock is
+// known, else millis()), each a verbatim copy of /config.json.
+
+String ApiServer::createConfigBackup() const {
+    auto& storage = StorageManager::instance();
+    String body;
+    if (!storage.readRaw(OF_CONFIG_PATH, body) || body.isEmpty()) return "";
+
+    storage.mkdirs(OF_CONFIG_BACKUP_DIR);
+    const uint32_t epoch = TimeManager::instance().epoch();
+    const uint32_t id = (epoch > 1700000000UL) ? epoch : millis();
+    const String path = String(OF_CONFIG_BACKUP_DIR) + "/" + String(id) + ".json";
+    if (!storage.writeRaw(path, body)) return "";
+
+    pruneConfigBackups(OF_CONFIG_BACKUP_KEEP);
+    LOG_I(TAG, "Config backup created: " + path);
+    return path;
+}
+
+void ApiServer::pruneConfigBackups(size_t keep) const {
+    auto entries = StorageManager::instance().listEntries(OF_CONFIG_BACKUP_DIR);
+    std::vector<String> names;
+    for (const auto& e : entries) {
+        if (!e.isDir && e.name.endsWith(".json")) names.push_back(e.name);
+    }
+    if (names.size() <= keep) return;
+    // Oldest first: ids are numeric (epoch/millis), so numeric sort = chronological.
+    std::sort(names.begin(), names.end(), [](const String& a, const String& b) {
+        return strtoul(a.c_str(), nullptr, 10) < strtoul(b.c_str(), nullptr, 10);
+    });
+    for (size_t i = 0; i + keep < names.size(); ++i) {
+        StorageManager::instance().remove(String(OF_CONFIG_BACKUP_DIR) + "/" + names[i]);
+    }
+}
+
+void ApiServer::sendConfigBackups(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["backups"].to<JsonArray>();
+    auto entries = StorageManager::instance().listEntries(OF_CONFIG_BACKUP_DIR);
+    for (const auto& e : entries) {
+        if (e.isDir || !e.name.endsWith(".json")) continue;
+        String id = e.name;
+        id.remove(id.length() - 5);  // strip ".json"
+        auto o = arr.add<JsonObject>();
+        o["id"] = id;
+        o["size"] = e.size;
+        // id is an epoch when > the sentinel, else a relative millis stamp.
+        const uint32_t n = strtoul(id.c_str(), nullptr, 10);
+        o["epoch"] = (n > 1700000000UL) ? n : 0;
+    }
+    doc["count"] = arr.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleConfigBackupCreate(AsyncWebServerRequest* request) {
+    const String path = createConfigBackup();
+    if (path.isEmpty()) {
+        sendError(request, 500, "Failed to create backup");
+        return;
+    }
+    sendConfigBackups(request);
+}
+
+void ApiServer::handleConfigRestore(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument req;
+    if (deserializeJson(req, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+    const String id = req["id"] | String("");
+    if (!id.length() || id.indexOf('/') >= 0 || id.indexOf("..") >= 0) {
+        sendError(request, 400, "Valid backup id required");
+        return;
+    }
+    const String path = String(OF_CONFIG_BACKUP_DIR) + "/" + id + ".json";
+    String snapshot;
+    if (!StorageManager::instance().readRaw(path, snapshot) || snapshot.isEmpty()) {
+        sendError(request, 404, "Backup not found");
+        return;
+    }
+    // Validate it parses before clobbering the live config.
+    JsonDocument check;
+    if (deserializeJson(check, snapshot)) {
+        sendError(request, 422, "Backup is not valid JSON");
+        return;
+    }
+    // Snapshot the current config too, so a restore is itself undoable.
+    createConfigBackup();
+    if (!StorageManager::instance().writeRaw(OF_CONFIG_PATH, snapshot)) {
+        sendError(request, 500, "Failed to write restored config");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"] = true;
+    response["restored"] = id;
+    response["restartRequired"] = true;
+    response["message"] = "Config restored. Restarting to apply.";
+    sendJson(request, response);
+    scheduleRestart();
+}
+
+void ApiServer::handleConfigBackupDelete(AsyncWebServerRequest* request) {
+    const String url = request->url();
+    const String id = url.substring(url.lastIndexOf('/') + 1);
+    if (!id.length() || id.indexOf("..") >= 0) {
+        sendError(request, 400, "Valid backup id required");
+        return;
+    }
+    const bool removed = StorageManager::instance().remove(String(OF_CONFIG_BACKUP_DIR) + "/" + id + ".json");
+    JsonDocument doc;
+    doc["ok"] = removed;
+    doc["id"] = id;
+    sendJson(request, doc, removed ? 200 : 404);
 }
 
 void ApiServer::handleVariablesUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -863,6 +1104,36 @@ void ApiServer::sendJson(AsyncWebServerRequest* request, const JsonDocument& doc
     request->send(status, "application/json", toJsonString(doc));
 }
 
+// Constant-time string compare. Length differs → short-circuit (length isn't
+// the secret); equal lengths are compared without an early-out so the time taken
+// doesn't leak how many leading characters matched.
+static bool tokenEquals(const String& a, const String& b) {
+    if (a.length() != b.length()) return false;
+    uint8_t diff = 0;
+    for (size_t i = 0; i < a.length(); ++i) {
+        diff |= static_cast<uint8_t>(a[i]) ^ static_cast<uint8_t>(b[i]);
+    }
+    return diff == 0;
+}
+
+bool ApiServer::requireAuth(AsyncWebServerRequest* request) const {
+    const String& token = ConfigManager::instance().config().device.apiToken;
+    if (token.isEmpty()) return true;  // LAN-trusted default — auth disabled
+
+    // Header-only: never accept the token via query string — query strings leak
+    // through server logs, browser history, and the Referer header. Callers that
+    // can't set headers (download links) fetch the bytes and build a blob URL.
+    String provided;
+    if (request->hasHeader("Authorization")) {
+        const String h = request->header("Authorization");
+        if (h.startsWith("Bearer ")) provided = h.substring(7);
+    }
+    if (tokenEquals(provided, token)) return true;
+
+    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return false;
+}
+
 void ApiServer::sendError(AsyncWebServerRequest* request, int status, const String& message) const {
     if (!request) return;
     JsonDocument doc;
@@ -911,6 +1182,8 @@ String ApiServer::buildStatusJson() const {
     doc["uptime"] = formatUptime(uptimeMs);
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["minFreeHeap"] = of_min_free_heap();
+    doc["largestFreeBlock"] = HealthMonitor::instance().getLargestFreeBlock();
+    doc["heapFragPercent"] = HealthMonitor::instance().getHeapFragPercent();
     doc["freePsram"] = of_free_psram();
     doc["psramSize"] = of_psram_size();
     doc["cpuLoadPercent"] = static_cast<int>(HealthMonitor::instance().getCpuLoadPercent());
@@ -1083,6 +1356,11 @@ void ApiServer::handleOutputsControl(AsyncWebServerRequest* request, const Strin
     } else if (command == "beep") {
         ok = outputs.beep(id, static_cast<uint16_t>(req["frequency"] | 1000),
                               static_cast<uint16_t>(req["duration_ms"] | 200));
+    } else if (command == "angle") {
+        const int angle = req["angle"] | 90;
+        ok = outputs.setAngle(id, static_cast<uint8_t>(angle < 0 ? 0 : (angle > 180 ? 180 : angle)));
+    } else if (command == "move") {
+        ok = outputs.setPosition(id, req["position"] | 0);  // absolute step target
     } else {
         sendError(request, 400, "Unknown command");
         return;
@@ -1291,6 +1569,14 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
 
             if (item["led_count"].is<int>()) out["led_count"] = item["led_count"].as<int>();
             if (item["brightness"].is<int>()) out["brightness"] = item["brightness"].as<int>();
+
+            if (item["servo_min_us"].is<int>()) out["servo_min_us"] = item["servo_min_us"].as<int>();
+            if (item["servo_max_us"].is<int>()) out["servo_max_us"] = item["servo_max_us"].as<int>();
+
+            if (item["pin_dir"].is<int>()) out["pin_dir"] = item["pin_dir"].as<int>();
+            if (item["pin_enable"].is<int>()) out["pin_enable"] = item["pin_enable"].as<int>();
+            if (item["steps_per_rev"].is<int>()) out["steps_per_rev"] = item["steps_per_rev"].as<int>();
+            if (item["max_step_hz"].is<int>()) out["max_step_hz"] = item["max_step_hz"].as<int>();
         }
     }
 
@@ -1645,6 +1931,11 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         if (typeStr == "media_control") return ActionType::MediaControl;
         if (typeStr == "remote_action") return ActionType::RemoteAction;
         if (typeStr == "sync_action") return ActionType::SyncAction;
+        if (typeStr == "if") return ActionType::If;
+        if (typeStr == "else") return ActionType::Else;
+        if (typeStr == "endif") return ActionType::EndIf;
+        if (typeStr == "repeat") return ActionType::Repeat;
+        if (typeStr == "endrepeat") return ActionType::EndRepeat;
         return ActionType::Delay;
     };
 
@@ -1661,6 +1952,8 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
             action.trigger.scheduleMode = t["schedule_mode"] | String("");
             action.trigger.intervalSec  = t["interval_sec"]  | 0;
             action.trigger.dailySeconds = t["daily_seconds"] | -1;
+            action.trigger.debounceMs   = t["debounce_ms"]   | 0;
+            action.trigger.cooldownMs   = t["cooldown_ms"]   | 0;
         }
 
         if (item["conditions"].is<JsonArrayConst>()) {
@@ -1704,6 +1997,10 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
                 s.speed = step["speed"] | 128;
                 s.frequency = step["frequency"] | 2000;
                 s.durationMs = step["duration_ms"] | 200;
+                s.angle = step["angle"] | 90;
+                s.position = step["position"] | 0;
+                s.op = step["op"] | String("eq");
+                s.repeatCount = step["repeat_count"] | 1;
                 action.steps.push_back(s);
             }
         }
@@ -1812,6 +2109,50 @@ void ApiServer::handleMacroDelete(AsyncWebServerRequest* request, const String& 
         return;
     }
     sendMacros(request);
+}
+
+// ── Scene handlers (#39) ──────────────────────────────────────────────────────
+
+void ApiServer::sendScenes(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["scenes"].to<JsonArray>();
+    SceneManager::instance().fillListJson(arr);
+    doc["count"] = arr.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleSceneCapture(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) { sendError(request, 400, "Invalid JSON"); return; }
+    const String name = doc["name"] | String("");
+    if (!name.length()) { sendError(request, 400, "Missing scene name"); return; }
+    if (!SceneManager::instance().capture(name)) {
+        sendError(request, 500, "Failed to capture scene (storage error or scene limit reached)");
+        return;
+    }
+    sendScenes(request);
+}
+
+void ApiServer::handleSceneRestore(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) { sendError(request, 400, "Invalid JSON"); return; }
+    const String name = doc["name"] | String("");
+    if (!name.length()) { sendError(request, 400, "Missing scene name"); return; }
+    String error;
+    if (!SceneManager::instance().restore(name, error)) {
+        sendError(request, 404, error.length() ? error : "Failed to restore scene");
+        return;
+    }
+    sendScenes(request);
+}
+
+void ApiServer::handleSceneDelete(AsyncWebServerRequest* request, const String& name) {
+    if (!name.length()) { sendError(request, 400, "Missing scene name"); return; }
+    if (!SceneManager::instance().remove(name)) {
+        sendError(request, 404, "Scene not found");
+        return;
+    }
+    sendScenes(request);
 }
 
 // ── Profile handlers ──────────────────────────────────────────────────────────

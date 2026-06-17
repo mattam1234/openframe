@@ -29,6 +29,14 @@ public:
     // Consecutive unstable-boot count that triggered this boot's mode decision.
     uint32_t getBootCount() const { return _bootCount; }
 
+    // ── Heap health (#87) ─────────────────────────────────────────────────────
+    // Sampled once per measurement window in markLoopStart().
+    uint32_t getFreeHeap() const         { return _freeHeap; }
+    uint32_t getMinFreeHeap() const      { return _minFreeHeap; }       // session low-water mark
+    uint32_t getLargestFreeBlock() const { return _largestFreeBlock; }
+    // 0–100: how far the largest block is below total free heap. High = fragmented.
+    uint8_t  getHeapFragPercent() const  { return _heapFragPercent; }
+
 private:
     HealthMonitor() = default;
 
@@ -42,7 +50,18 @@ private:
     uint32_t _bootCount        = 0;
     bool     _stableMarked     = false;
 
+    // Heap health, refreshed once per window.
+    void     sampleHeap();
+    uint32_t _freeHeap         = 0;
+    uint32_t _minFreeHeap      = 0xFFFFFFFF;
+    uint32_t _largestFreeBlock = 0;
+    uint8_t  _heapFragPercent  = 0;
+    bool     _heapWarned       = false;   // hysteresis so we warn once per episode
+
     static constexpr uint32_t WINDOW_MS = 5000;
+    // Warn when free heap drops below this, or fragmentation exceeds the threshold.
+    static constexpr uint32_t HEAP_LOW_BYTES   = 20000;
+    static constexpr uint8_t  HEAP_FRAG_WARN   = 60;  // percent
     // Consecutive unstable boots before we fall back to safe mode.
     static constexpr uint32_t SAFE_MODE_THRESHOLD = 4;
     // Uptime after which a boot is deemed stable and the crash counter is cleared.

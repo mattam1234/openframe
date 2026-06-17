@@ -28,6 +28,7 @@ enum class NodeMsgType : uint8_t {
     DataReq   = 6,  // reserved
     DataResp  = 7,  // reserved
     TimeSync  = 8,  // payload: epoch seconds, from an authoritative (NTP) node
+    Ack       = 9,  // payload: the acknowledged seq number (reliable unicast)
 };
 
 struct NodeMessage {
@@ -94,6 +95,11 @@ private:
     void   announce();
     static bool idToMac(const String& id, uint8_t mac[6]);
 
+    // Reliable-unicast helpers (ack/retry/dedup).
+    void   sendAck(const String& dstId, uint32_t seq);
+    void   retryPending(uint32_t now);
+    bool   isDuplicate(const String& srcId, uint32_t seq);
+
     INodeLinkBackend*           _backend = nullptr;
     bool                        _enabled = false;
     uint8_t                     _channel = 0;
@@ -104,11 +110,24 @@ private:
     std::map<String, NodePeer>  _peers;
     std::vector<MessageHandler> _handlers;
 
+    // A unicast frame awaiting an Ack; retransmitted until acked or retries run out.
+    struct Pending {
+        String   dstId;
+        uint32_t seq;
+        String   frame;     // the exact bytes to resend (same seq each time)
+        uint8_t  attempts;
+        uint32_t nextMs;
+    };
+    std::vector<Pending>        _pending;
+    std::map<String, uint32_t>  _lastSeq;   // per-src last seq seen, for dedup
+
     void heartbeat();
     void timeSync();
 
     static constexpr uint32_t ANNOUNCE_INTERVAL_MS  = 10000;
     static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 15000;
     static constexpr uint32_t TIMESYNC_INTERVAL_MS  = 30000;
+    static constexpr uint8_t  NL_MAX_RETRIES        = 3;
+    static constexpr uint32_t NL_RETRY_MS           = 300;
     static constexpr const char* TAG = "NodeLink";
 };

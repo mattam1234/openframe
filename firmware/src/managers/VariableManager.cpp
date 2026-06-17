@@ -68,6 +68,10 @@ std::vector<const Variable*> VariableManager::all() const {
 void VariableManager::setInt(const String& id, int32_t value) {
     auto it = _vars.find(id);
     if (it == _vars.end()) return;
+    if (it->second.hasRange) {
+        if (value < it->second.rangeMin) value = static_cast<int32_t>(it->second.rangeMin);
+        if (value > it->second.rangeMax) value = static_cast<int32_t>(it->second.rangeMax);
+    }
     if (it->second.valueInt == value) return;
     it->second.valueInt = value;
     notifyChange(it->second);
@@ -76,6 +80,10 @@ void VariableManager::setInt(const String& id, int32_t value) {
 void VariableManager::setFloat(const String& id, float value) {
     auto it = _vars.find(id);
     if (it == _vars.end()) return;
+    if (it->second.hasRange) {
+        if (value < it->second.rangeMin) value = it->second.rangeMin;
+        if (value > it->second.rangeMax) value = it->second.rangeMax;
+    }
     if (it->second.valueFloat == value) return;
     it->second.valueFloat = value;
     notifyChange(it->second);
@@ -92,6 +100,15 @@ void VariableManager::setBool(const String& id, bool value) {
 void VariableManager::setString(const String& id, const String& value) {
     auto it = _vars.find(id);
     if (it == _vars.end()) return;
+    // Enum: reject values outside the declared option set.
+    if (!it->second.options.empty()) {
+        bool ok = false;
+        for (const auto& opt : it->second.options) { if (opt == value) { ok = true; break; } }
+        if (!ok) {
+            LOG_W(TAG, "Rejected enum value '" + value + "' for " + id);
+            return;
+        }
+    }
     if (it->second.valueString == value) return;
     it->second.valueString = value;
     notifyChange(it->second);
@@ -101,7 +118,21 @@ void VariableManager::subscribe(const String& id, ChangeCallback cb) {
     _callbacks[id].push_back(std::move(cb));
 }
 
+void VariableManager::loop() {
+    if (!_dirty) return;
+    const uint32_t now = millis();
+    if (now - _lastFlushMs < FLUSH_INTERVAL_MS) return;
+    _lastFlushMs = now;
+    if (save()) {
+        _dirty = false;
+        LOG_D(TAG, "Flushed persistent variables");
+    }
+}
+
 void VariableManager::notifyChange(const Variable& var) {
+    // Mark for the next periodic flush so the change survives an unexpected reset.
+    if (var.persistent) _dirty = true;
+
     // Notify per-variable subscribers
     auto it = _callbacks.find(var.id);
     if (it != _callbacks.end()) {
@@ -127,6 +158,12 @@ void VariableManager::toJson(JsonDocument& doc) const {
         obj["type"]     = static_cast<uint8_t>(v.type);
         obj["label"]    = v.label;
         obj["persistent"]= v.persistent;
+        if (v.hasRange) { obj["min"] = v.rangeMin; obj["max"] = v.rangeMax; }
+        if (v.unit.length()) obj["unit"] = v.unit;
+        if (!v.options.empty()) {
+            auto opts = obj["options"].to<JsonArray>();
+            for (const auto& o : v.options) opts.add(o);
+        }
         switch (v.type) {
             case VarType::Integer: obj["value"] = v.valueInt;    break;
             case VarType::Float:   obj["value"] = v.valueFloat;  break;
@@ -145,6 +182,19 @@ bool VariableManager::fromJson(const JsonDocument& doc) {
         v.type       = static_cast<VarType>(item["type"] | 0);
         v.label      = item["label"] | String("");
         v.persistent = item["persistent"] | true;
+        if (item["min"].is<float>() || item["max"].is<float>() ||
+            item["min"].is<int>()   || item["max"].is<int>()) {
+            v.hasRange = true;
+            v.rangeMin = item["min"] | 0.0f;
+            v.rangeMax = item["max"] | 0.0f;
+        }
+        v.unit = item["unit"] | String("");
+        if (item["options"].is<JsonArrayConst>()) {
+            for (JsonVariantConst o : item["options"].as<JsonArrayConst>()) {
+                const String s = o | String("");
+                if (s.length()) v.options.push_back(s);
+            }
+        }
         switch (v.type) {
             case VarType::Integer: v.valueInt    = item["value"] | 0;          break;
             case VarType::Float:   v.valueFloat  = item["value"] | 0.0f;      break;

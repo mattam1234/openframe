@@ -39,6 +39,9 @@
       <div class="bulk">
         <input id="tag-filter" class="tag-filter" type="text" placeholder="tag(s), blank = all" />
         <label class="chk"><input type="checkbox" id="online-only" checked /> online only</label>
+        <label class="chk" title="Roll out to this many devices first; the rest only proceed if the canary batch all ack. 0 = all at once.">
+          canary <input id="canary" type="number" min="0" value="0" style="width:4rem" />
+        </label>
       </div>
     </div>
     <p id="deploy-result" class="bulk-result"></p>

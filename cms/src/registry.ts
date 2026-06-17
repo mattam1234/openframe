@@ -55,6 +55,16 @@ export class DeviceRegistry extends EventEmitter {
     return true;
   }
 
+  // Set a device's free-text notes. Returns false if the device is unknown.
+  setNotes(id: string, notes: string): boolean {
+    const d = this.devices.get(id);
+    if (!d) return false;
+    d.notes = String(notes);
+    d.updatedAt = Date.now();
+    this.emit('change', d);
+    return true;
+  }
+
   applyStatus(id: string, hb: Heartbeat): void {
     const d = this.ensure(id);
     const now = Date.now();

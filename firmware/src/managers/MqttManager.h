@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <functional>
 #include <map>
 #include <vector>
@@ -60,14 +61,23 @@ public:
     bool publishDevice(const String& subtopic, const String& payload, bool retained = false);
 
 private:
-    MqttManager() : _client(_wifiClient) {}
+    MqttManager() = default;
 
     void connect();
+    void configureTransport();   // pick plain vs TLS client + load CA / insecure
     void onMessage(const char* topic, const uint8_t* payload, unsigned int length);
     void resubscribeAll();
 
-    WiFiClient  _wifiClient;
-    PubSubClient _client;
+    WiFiClient        _wifiClient;
+#if defined(ESP32)
+    WiFiClientSecure  _secureClient;
+#elif defined(ESP8266)
+    BearSSL::WiFiClientSecure _secureClient;
+    BearSSL::X509List _caList;   // must outlive _secureClient
+#endif
+    String           _caCert;    // PEM, loaded from OF_MQTT_CA_PATH
+    bool             _tlsActive = false;
+    PubSubClient     _client;
 
     // Registered subscriptions
     struct Subscription {

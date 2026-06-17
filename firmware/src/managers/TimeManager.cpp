@@ -2,6 +2,7 @@
 
 #include <time.h>
 #include "../core/Logger.h"
+#include "../core/ConfigManager.h"
 #include "WiFiManager.h"
 
 TimeManager& TimeManager::instance() {
@@ -10,10 +11,21 @@ TimeManager& TimeManager::instance() {
 }
 
 void TimeManager::begin() {
-    // Start SNTP (UTC). It only succeeds once the device has a network route, so
-    // AP-only / infra-less leaves simply stay on beacon/none. Harmless to call early.
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-    LOG_I(TAG, "SNTP configured (UTC)");
+    const auto& tc = ConfigManager::instance().config().time;
+    const char* s1 = tc.ntpServer.length()  ? tc.ntpServer.c_str()  : "pool.ntp.org";
+    const char* s2 = tc.ntpServer2.length() ? tc.ntpServer2.c_str() : "time.nist.gov";
+
+    // Start SNTP (system clock kept in UTC). Only succeeds once the device has a
+    // network route, so AP-only / infra-less leaves stay on beacon/none. The TZ is
+    // applied separately so localtime()/daily schedules respect it (incl. DST).
+    configTime(0, 0, s1, s2);
+    if (tc.tz.length()) {
+        setenv("TZ", tc.tz.c_str(), 1);
+        tzset();
+        LOG_I(TAG, "SNTP configured (servers: " + String(s1) + ", " + String(s2) + "; TZ=" + tc.tz + ")");
+    } else {
+        LOG_I(TAG, "SNTP configured (servers: " + String(s1) + ", " + String(s2) + "; UTC)");
+    }
 }
 
 void TimeManager::loop() {

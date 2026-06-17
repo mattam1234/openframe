@@ -25,6 +25,16 @@ struct Variable {
     // Metadata
     String  label;
     bool    persistent = true;
+    // Optional typing constraints (#11):
+    //  • range — clamps Integer/Float sets to [rangeMin, rangeMax]
+    //  • unit  — display suffix (e.g. "°C", "%")
+    //  • options — when non-empty, a String var is an enum; sets outside the set
+    //    are rejected
+    bool                 hasRange = false;
+    float                rangeMin = 0.0f;
+    float                rangeMax = 0.0f;
+    String               unit;
+    std::vector<String>  options;
 };
 
 // ── VariableManager ───────────────────────────────────────────────────────────
@@ -37,6 +47,11 @@ public:
 
     bool begin();
     bool save();
+
+    // Periodically flush persistent variables to LittleFS when they've changed,
+    // so an unexpected reset (brownout / power loss) loses at most one interval of
+    // updates rather than everything since the last explicit save.
+    void loop();
 
     // Define a variable (idempotent — only registers if not already present)
     void define(const String& id, VarType type, const String& label = "", bool persistent = true);
@@ -68,5 +83,8 @@ private:
 
     std::map<String, Variable>                       _vars;
     std::map<String, std::vector<ChangeCallback>>    _callbacks;
+    bool      _dirty       = false;   // a persistent var changed since last flush
+    uint32_t  _lastFlushMs = 0;
+    static constexpr uint32_t FLUSH_INTERVAL_MS = 30000;
     static constexpr const char* TAG = "Variables";
 };

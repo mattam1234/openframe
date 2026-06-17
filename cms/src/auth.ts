@@ -26,31 +26,53 @@ export function extractToken(req: Request): string | null {
   return null;
 }
 
+export type Role = 'admin' | 'viewer';
+
 export interface Auth {
   enabled: boolean;
   ok: (req: Request) => boolean;
+  role: (req: Request) => Role | null;
   middleware: RequestHandler;
   loginCookie: (token: string) => string;
   clearCookie: () => string;
 }
 
-// Shared-token auth. When no token is configured, auth is disabled (the
-// zero-config LAN default) and everything is allowed.
-export function makeAuth(token?: string): Auth {
-  const enabled = !!token;
-  const ok = (req: Request): boolean => {
-    if (!enabled) return true;
+// Read-only HTTP methods a viewer may use; anything else needs admin.
+function isReadMethod(method: string): boolean {
+  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+}
+
+// Token auth with two roles. `adminToken` grants full access; the optional
+// `viewerToken` grants read-only access (GET/HEAD only) so you can hand out a
+// dashboard-only credential. When neither is configured, auth is disabled (the
+// zero-config LAN default) and everything is allowed as admin.
+export function makeAuth(adminToken?: string, viewerToken?: string): Auth {
+  const enabled = !!adminToken || !!viewerToken;
+
+  const role = (req: Request): Role | null => {
+    if (!enabled) return 'admin';
     const t = extractToken(req);
-    return t != null && tokenMatches(t, token!);
+    if (t == null) return null;
+    if (adminToken && tokenMatches(t, adminToken)) return 'admin';
+    if (viewerToken && tokenMatches(t, viewerToken)) return 'viewer';
+    return null;
   };
+  const ok = (req: Request): boolean => role(req) !== null;
+
   const middleware: RequestHandler = (req, res, next) => {
-    if (ok(req)) return next();
-    res.status(401).json({ error: 'unauthorized' });
+    const r = role(req);
+    if (r == null) { res.status(401).json({ error: 'unauthorized' }); return; }
+    if (r === 'viewer' && !isReadMethod(req.method)) {
+      res.status(403).json({ error: 'forbidden: read-only (viewer) credential' });
+      return;
+    }
+    (req as unknown as { role: Role }).role = r;
+    next();
   };
   // The cookie value IS the shared token; HttpOnly keeps it out of reach of JS
   // (so an XSS can't exfiltrate it), SameSite=Strict blocks cross-site use.
   const loginCookie = (t: string) =>
     `${COOKIE}=${encodeURIComponent(t)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800`;
   const clearCookie = () => `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
-  return { enabled, ok, middleware, loginCookie, clearCookie };
+  return { enabled, ok, role, middleware, loginCookie, clearCookie };
 }

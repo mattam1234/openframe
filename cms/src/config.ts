@@ -27,6 +27,8 @@ export interface Config {
   alertWebhookUrl?: string;
   /** If set, the API + dashboard require this shared token (else open on the LAN). */
   authToken?: string;
+  /** Optional read-only token: holders may GET but not mutate (viewer role). */
+  viewerToken?: string;
 }
 
 function num(value: string | undefined, fallback: number): number {
@@ -51,5 +53,6 @@ export function loadConfig(): Config {
     publicUrl: process.env.CMS_PUBLIC_URL || undefined,
     alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || undefined,
     authToken: process.env.CMS_AUTH_TOKEN || undefined,
+    viewerToken: process.env.CMS_VIEWER_TOKEN || undefined,
   };
 }

@@ -1,5 +1,7 @@
 #include "MqttManager.h"
 #include "WiFiManager.h"
+#include "../core/StorageManager.h"
+#include "../OpenFrameConfig.h"
 
 namespace {
 // Translate a PubSubClient state() code into a human-readable reason.
@@ -36,6 +38,7 @@ void MqttManager::begin() {
         return;
     }
 
+    configureTransport();
     _client.setServer(cfg.host.c_str(), cfg.port);
     _client.setKeepAlive(60);
     // PubSubClient uses one buffer for both RX and TX. 2 KB leaves headroom for
@@ -103,6 +106,44 @@ bool MqttManager::publishDevice(const String& subtopic, const String& payload, b
 }
 
 // ── Private ───────────────────────────────────────────────────────────────────
+
+void MqttManager::configureTransport() {
+    const auto& cfg = ConfigManager::instance().config().mqtt;
+    _tlsActive = cfg.tls;
+
+    if (!cfg.tls) {
+        _client.setClient(_wifiClient);
+        return;
+    }
+
+    const bool haveCa = StorageManager::instance().readRaw(OF_MQTT_CA_PATH, _caCert) && _caCert.length();
+
+#if defined(ESP32)
+    if (cfg.tlsInsecure) {
+        _secureClient.setInsecure();
+    } else if (haveCa) {
+        _secureClient.setCACert(_caCert.c_str());
+    }
+    _client.setClient(_secureClient);
+#elif defined(ESP8266)
+    // BearSSL is RAM-hungry; cap the TLS buffers so it fits alongside the async
+    // web server and the rest of the stack.
+    _secureClient.setBufferSizes(1024, 1024);
+    if (cfg.tlsInsecure) {
+        _secureClient.setInsecure();
+    } else if (haveCa) {
+        _caList.append(_caCert.c_str());
+        _secureClient.setTrustAnchors(&_caList);
+    }
+    _client.setClient(_secureClient);
+#endif
+
+    if (!cfg.tlsInsecure && !haveCa) {
+        LOG_W(TAG, "TLS on but no CA at " OF_MQTT_CA_PATH " and not insecure — TLS handshake will fail. "
+                   "Upload a CA via the file browser or enable tls_insecure.");
+    }
+    LOG_I(TAG, String("MQTT TLS enabled") + (cfg.tlsInsecure ? " (insecure — cert not validated)" : ""));
+}
 
 void MqttManager::connect() {
     const auto& cfg = ConfigManager::instance().config().mqtt;

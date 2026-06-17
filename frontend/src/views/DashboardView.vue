@@ -6,6 +6,18 @@
     </h1>
 
     <v-alert
+      v-if="status.apMode"
+      type="info"
+      variant="tonal"
+      class="mb-4"
+      icon="mdi-rocket-launch"
+      title="Finish setup"
+    >
+      This device isn't connected to your network yet.
+      <router-link to="/setup" class="text-decoration-none font-weight-medium">Run the setup wizard →</router-link>
+    </v-alert>
+
+    <v-alert
       v-if="status.safeMode"
       type="error"
       variant="tonal"
@@ -214,6 +226,21 @@
             </v-table>
 
             <v-alert
+              v-if="crashlog.length"
+              type="error"
+              variant="tonal"
+              density="compact"
+              class="mt-3"
+              title="Recent crash resets"
+            >
+              <ul class="text-body-2 mt-1">
+                <li v-for="(c, i) in crashlog.slice(-5).reverse()" :key="i">
+                  <strong>{{ c.reason }}</strong> <span class="text-medium-emphasis">(boot #{{ c.boot }})</span>
+                </li>
+              </ul>
+            </v-alert>
+
+            <v-alert
               v-if="sensorFailures.length"
               type="warning"
               density="compact"
@@ -246,6 +273,7 @@ const deviceStore = useDeviceStore()
 
 const storage = ref({ total: 0, used: 0, free: 0 })
 const outputs = ref([])
+const crashlog = ref([])
 
 function mergeOutputs(list) {
   if (!Array.isArray(list)) return
@@ -266,6 +294,7 @@ onMounted(() => {
   deviceStore.fetchStatus().catch(() => {})
   api.fs.stat().then((s) => { storage.value = s }).catch(() => {})
   api.get('/api/outputs/state').then((d) => { outputs.value = d.outputs || [] }).catch(() => {})
+  api.get('/api/crashlog').then((d) => { crashlog.value = d.resets || [] }).catch(() => {})
 })
 
 const storagePercent = computed(() =>

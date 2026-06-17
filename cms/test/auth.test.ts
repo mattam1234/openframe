@@ -97,6 +97,63 @@ describe('CMS auth (token configured)', () => {
   });
 });
 
+describe('CMS auth (admin + viewer roles)', () => {
+  const ADMIN = 'admin-token';
+  const VIEWER = 'viewer-token';
+  const PORT = 4157;
+  let server: http.Server;
+  let bridge: MqttBridge;
+
+  const api = (p: string, init?: RequestInit) => fetch(`http://127.0.0.1:${PORT}${p}`, init);
+
+  before(async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'of-auth-roles-'));
+    const cfg = { mqttUrl: 'mqtt://127.0.0.1:1', baseTopic: 'openframe', offlineTimeoutMs: 90000, commandTimeoutMs: 500, port: PORT, dataDir } as any;
+    const registry = new DeviceRegistry(cfg.offlineTimeoutMs);
+    bridge = new MqttBridge(cfg, registry);
+    server = createServer(
+      registry, bridge,
+      new TemplateStore(new JsonStore(dataDir, 't.json')),
+      new HistoryStore(new JsonStore(dataDir, 'h.json'), 720),
+      new AlertManager({ lowHeapBytes: 1, lowRssiDbm: -200 }),
+      new FirmwareStore(dataDir),
+      'http://x', ADMIN, VIEWER,
+    );
+    await new Promise<void>((r) => server.listen(PORT, r));
+  });
+  after(async () => {
+    try { bridge.close(); } catch {}
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  it('viewer token can read', async () => {
+    const res = await api('/api/devices', { headers: { Authorization: `Bearer ${VIEWER}` } });
+    assert.equal(res.status, 200);
+  });
+
+  it('viewer token cannot mutate (403)', async () => {
+    const res = await api('/api/devices/abc/tags', {
+      method: 'PUT', headers: { Authorization: `Bearer ${VIEWER}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['x'] }),
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('admin token can mutate', async () => {
+    const res = await api('/api/devices/abc/tags', {
+      method: 'PUT', headers: { Authorization: `Bearer ${ADMIN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['x'] }),
+    });
+    // 404 (unknown device) proves the write was authorized past the role gate.
+    assert.equal(res.status, 404);
+  });
+
+  it('/api/auth reports the role', async () => {
+    const body = await (await api('/api/auth', { headers: { Authorization: `Bearer ${VIEWER}` } })).json() as any;
+    assert.equal(body.role, 'viewer');
+  });
+});
+
 describe('CMS auth (disabled by default)', () => {
   const PORT = 4156;
   let server: http.Server;

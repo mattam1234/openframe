@@ -35,6 +35,13 @@
               hint="Stable MAC-derived identifier used by the fleet/CMS"
               persistent-hint
             />
+            <v-text-field
+              v-model="form.device.api_token"
+              label="API token (optional)"
+              type="password"
+              hint="Set to require this token for API writes, uploads, deletes & config read. Blank = open on the LAN. Saved to this browser too so you stay logged in."
+              persistent-hint
+            />
           </v-card-text>
         </v-card>
       </v-col>
@@ -92,6 +99,21 @@
             </v-table>
 
             <v-switch v-model="form.wifi.ap_mode" label="Force AP Mode" color="primary" />
+
+            <v-divider class="my-2" />
+            <div class="text-subtitle-2 mb-1">Static IP (optional)</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              Leave the IP blank for DHCP. A blank gateway defaults to x.x.x.1; blank DNS uses the gateway. Applied on next connect/restart.
+            </div>
+            <v-text-field v-model="form.wifi.static_ip" label="IP Address" placeholder="192.168.1.50" density="compact" hide-details class="mb-2" />
+            <v-row no-gutters class="ga-2">
+              <v-col><v-text-field v-model="form.wifi.gateway" label="Gateway" placeholder="192.168.1.1" density="compact" hide-details /></v-col>
+              <v-col><v-text-field v-model="form.wifi.subnet" label="Subnet" density="compact" hide-details /></v-col>
+            </v-row>
+            <v-row no-gutters class="ga-2 mt-2">
+              <v-col><v-text-field v-model="form.wifi.dns1" label="DNS 1" density="compact" hide-details /></v-col>
+              <v-col><v-text-field v-model="form.wifi.dns2" label="DNS 2 (optional)" density="compact" hide-details /></v-col>
+            </v-row>
           </v-card-text>
         </v-card>
       </v-col>
@@ -107,6 +129,20 @@
             <v-text-field v-model="form.mqtt.user" label="Username" />
             <v-text-field v-model="form.mqtt.password" label="Password" type="password" />
             <v-text-field v-model="form.mqtt.base_topic" label="Base Topic" />
+            <v-switch v-model="form.mqtt.tls" label="Use TLS (MQTTS)" color="primary" hide-details />
+            <v-switch
+              v-if="form.mqtt.tls"
+              v-model="form.mqtt.tls_insecure"
+              label="Skip certificate validation (insecure)"
+              color="warning"
+              hide-details
+            />
+            <div v-if="form.mqtt.tls && !form.mqtt.tls_insecure" class="text-caption text-medium-emphasis mt-1">
+              Upload your broker's CA certificate (PEM) as
+              <code>/mqtt_ca.pem</code> in the
+              <router-link to="/files" class="text-decoration-none">file browser</router-link>.
+              Remember to set the port to 8883.
+            </div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -151,6 +187,67 @@
           </v-card-text>
         </v-card>
       </v-col>
+
+      <v-col cols="12" md="6">
+        <v-card title="Time &amp; Schedules">
+          <v-card-subtitle>NTP keeps the clock accurate; the timezone makes daily schedules fire at local wall-clock time (with automatic DST).</v-card-subtitle>
+          <v-card-text>
+            <v-text-field v-model="form.time.ntp_server" label="NTP Server" hint="e.g. pool.ntp.org" persistent-hint />
+            <v-text-field v-model="form.time.ntp_server2" label="NTP Server (fallback)" class="mt-2" />
+            <v-combobox
+              v-model="form.time.tz"
+              :items="tzPresets"
+              item-title="label"
+              item-value="value"
+              :return-object="false"
+              label="Timezone (POSIX TZ)"
+              hint="Pick a preset or enter a POSIX TZ string. Blank = UTC."
+              persistent-hint
+              class="mt-2"
+            />
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
+        <v-card title="Config Backups">
+          <v-card-subtitle>A snapshot is taken automatically before every settings change. Restore one to roll back instantly.</v-card-subtitle>
+          <v-card-text>
+            <v-btn size="small" variant="tonal" prepend-icon="mdi-content-save-all" :loading="backupsLoading" @click="createBackup">
+              Back up now
+            </v-btn>
+            <v-table density="compact" class="mt-3">
+              <thead>
+                <tr><th class="text-left">Backup</th><th class="text-left">Size</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="b in backups" :key="b.id">
+                  <td>{{ b.epoch ? new Date(b.epoch * 1000).toLocaleString() : `#${b.id}` }}</td>
+                  <td>{{ b.size }} B</td>
+                  <td class="text-right">
+                    <v-btn size="x-small" variant="text" color="primary" @click="restoreBackup(b.id)">Restore</v-btn>
+                    <v-btn size="x-small" variant="text" color="error" icon="mdi-delete" @click="deleteBackup(b.id)" />
+                  </td>
+                </tr>
+                <tr v-if="backups.length === 0"><td colspan="3" class="text-medium-emphasis">No backups yet.</td></tr>
+              </tbody>
+            </v-table>
+
+            <v-divider class="my-3" />
+            <div class="text-caption text-medium-emphasis mb-1">Danger zone</div>
+            <v-btn
+              size="small"
+              :color="confirmReset ? 'error' : undefined"
+              :variant="confirmReset ? 'flat' : 'tonal'"
+              prepend-icon="mdi-restore-alert"
+              @click="factoryReset"
+            >
+              {{ confirmReset ? 'Click again to confirm wipe' : 'Factory reset (keep WiFi)' }}
+            </v-btn>
+            <v-btn v-if="confirmReset" size="small" variant="text" class="ml-2" @click="confirmReset = false">Cancel</v-btn>
+          </v-card-text>
+        </v-card>
+      </v-col>
     </v-row>
   </div>
 </template>
@@ -158,6 +255,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useDeviceStore } from '../stores/device'
+import api, { setApiToken } from '../api/client'
 
 const deviceStore = useDeviceStore()
 const saving = ref(false)
@@ -167,13 +265,29 @@ const scannedNetworks = ref([])
 const selectedScannedSsid = ref('')
 
 const form = reactive({
-  device: { name: '', board: '', id: '' },
-  wifi: { ssid: '', password: '', ap_mode: true, networks: [] },
-  mqtt: { enabled: false, host: '', port: 1883, user: '', password: '', base_topic: 'openframe' },
+  device: { name: '', board: '', id: '', api_token: '' },
+  wifi: { ssid: '', password: '', ap_mode: true, networks: [], static_ip: '', gateway: '', subnet: '255.255.255.0', dns1: '', dns2: '' },
+  mqtt: { enabled: false, host: '', port: 1883, user: '', password: '', base_topic: 'openframe', tls: false, tls_insecure: false },
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
   nodelink: { enabled: false, channel: 0, gateway: false, key: '' },
+  time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '' },
 })
+
+// Common POSIX TZ strings (the device applies any valid POSIX TZ; these are just
+// shortcuts). Format: stdOFFSET[dstOFFSET][,start[/time],end[/time]].
+const tzPresets = [
+  { label: 'UTC', value: '' },
+  { label: 'Europe/Amsterdam · Berlin · Paris (CET/CEST)', value: 'CET-1CEST,M3.5.0,M10.5.0/3' },
+  { label: 'Europe/London (GMT/BST)', value: 'GMT0BST,M3.5.0/1,M10.5.0' },
+  { label: 'US Eastern (EST/EDT)', value: 'EST5EDT,M3.2.0,M11.1.0' },
+  { label: 'US Central (CST/CDT)', value: 'CST6CDT,M3.2.0,M11.1.0' },
+  { label: 'US Mountain (MST/MDT)', value: 'MST7MDT,M3.2.0,M11.1.0' },
+  { label: 'US Pacific (PST/PDT)', value: 'PST8PDT,M3.2.0,M11.1.0' },
+  { label: 'Australia Eastern (AEST/AEDT)', value: 'AEST-10AEDT,M10.1.0,M4.1.0/3' },
+  { label: 'Japan (JST, no DST)', value: 'JST-9' },
+  { label: 'India (IST, no DST)', value: 'IST-5:30' },
+]
 
 const scanOptions = computed(() => {
   return scannedNetworks.value.map(n => {
@@ -189,6 +303,7 @@ function applyConfig(config) {
   form.device.name = config?.device?.name || ''
   form.device.board = config?.device?.board || ''
   form.device.id = config?.device?.id || ''
+  form.device.api_token = config?.device?.api_token || ''
   form.wifi.ssid = config?.wifi?.ssid || ''
   form.wifi.password = config?.wifi?.password || ''
   form.wifi.ap_mode = config?.wifi?.ap_mode ?? true
@@ -207,12 +322,19 @@ function applyConfig(config) {
       password: form.wifi.password,
     })
   }
+  form.wifi.static_ip = config?.wifi?.static_ip || ''
+  form.wifi.gateway = config?.wifi?.gateway || ''
+  form.wifi.subnet = config?.wifi?.subnet || '255.255.255.0'
+  form.wifi.dns1 = config?.wifi?.dns1 || ''
+  form.wifi.dns2 = config?.wifi?.dns2 || ''
   form.mqtt.enabled = config?.mqtt?.enabled ?? false
   form.mqtt.host = config?.mqtt?.host || ''
   form.mqtt.port = config?.mqtt?.port ?? 1883
   form.mqtt.user = config?.mqtt?.user || ''
   form.mqtt.password = config?.mqtt?.password || ''
   form.mqtt.base_topic = config?.mqtt?.base_topic || 'openframe'
+  form.mqtt.tls = config?.mqtt?.tls ?? false
+  form.mqtt.tls_insecure = config?.mqtt?.tls_insecure ?? false
   form.ha.enabled = config?.ha?.enabled ?? false
   form.ha.discovery_prefix = config?.ha?.discovery_prefix || 'homeassistant'
   form.ota.enabled = config?.ota?.enabled ?? true
@@ -222,6 +344,9 @@ function applyConfig(config) {
   form.nodelink.channel = config?.nodelink?.channel ?? 0
   form.nodelink.gateway = config?.nodelink?.gateway ?? false
   form.nodelink.key = config?.nodelink?.key || ''
+  form.time.ntp_server = config?.time?.ntp_server || 'pool.ntp.org'
+  form.time.ntp_server2 = config?.time?.ntp_server2 || 'time.nist.gov'
+  form.time.tz = config?.time?.tz || ''
 }
 
 function addManualNetwork() {
@@ -287,6 +412,9 @@ async function saveSettings() {
     payload.wifi.ssid = payload.wifi.networks[0]?.ssid || ''
     payload.wifi.password = payload.wifi.networks[0]?.password || ''
 
+    // Mirror the API token into this browser BEFORE the save reply so we keep
+    // access once the device starts enforcing it.
+    setApiToken(form.device.api_token)
     await deviceStore.saveConfig(payload)
     applyConfig(deviceStore.config)
     statusMessage.value = {
@@ -334,8 +462,58 @@ function applyProvision() {
   }
 }
 
+// ── Config backups ───────────────────────────────────────────────────────────
+const backups = ref([])
+const backupsLoading = ref(false)
+const confirmReset = ref(false)
+
+async function factoryReset() {
+  if (!confirmReset.value) { confirmReset.value = true; return }
+  confirmReset.value = false
+  try {
+    await api.post('/api/factory-reset')
+    statusMessage.value = { type: 'success', text: 'Factory reset done (WiFi kept) — device is rebooting.' }
+  } catch (e) {
+    statusMessage.value = { type: 'error', text: e.message || 'Factory reset failed' }
+  }
+}
+
+async function loadBackups() {
+  try {
+    const res = await api.get('/api/config/backups')
+    backups.value = res.backups || []
+  } catch { /* endpoint may be auth-gated before token is set */ }
+}
+async function createBackup() {
+  backupsLoading.value = true
+  try {
+    const res = await api.post('/api/config/backup')
+    backups.value = res.backups || []
+    statusMessage.value = { type: 'success', text: 'Backup created.' }
+  } catch (e) {
+    statusMessage.value = { type: 'error', text: e.message || 'Backup failed' }
+  } finally { backupsLoading.value = false }
+}
+async function restoreBackup(id) {
+  try {
+    await api.post('/api/config/restore', { id })
+    statusMessage.value = { type: 'success', text: 'Config restored — device is rebooting.' }
+  } catch (e) {
+    statusMessage.value = { type: 'error', text: e.message || 'Restore failed' }
+  }
+}
+async function deleteBackup(id) {
+  try {
+    await api.delete(`/api/config/backups/${encodeURIComponent(id)}`)
+    await loadBackups()
+  } catch (e) {
+    statusMessage.value = { type: 'error', text: e.message || 'Delete failed' }
+  }
+}
+
 onMounted(async () => {
   await loadSettings()
   applyProvision()
+  loadBackups()
 })
 </script>

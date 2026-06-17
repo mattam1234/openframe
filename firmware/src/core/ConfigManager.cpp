@@ -143,6 +143,18 @@ void ConfigManager::resetToDefaults() {
     save();
 }
 
+void ConfigManager::factoryResetKeepWifi() {
+    const WifiConfig wifi = _config.wifi;  // preserve credentials across the wipe
+    applyDefaults();
+    _config.wifi = wifi;
+    // If we have saved networks, don't force AP mode after the reset.
+    if (!_config.wifi.networks.empty() || !_config.wifi.ssid.isEmpty()) {
+        _config.wifi.apMode = false;
+    }
+    LOG_W(TAG, "Factory reset (WiFi preserved)");
+    save();
+}
+
 void ConfigManager::applyDefaults() {
     _config.device.name      = "OpenFrame";
     _config.device.boardType = OF_BOARD_TYPE;
@@ -162,6 +174,9 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     auto device      = doc["device"].to<JsonObject>();
     device["name"]   = _config.device.name;
     device["board"]  = _config.device.boardType;
+    device["api_token"] = _config.device.apiToken;
+    device["reset_pin"] = _config.device.resetPin;
+    device["reset_hold_ms"] = _config.device.resetHoldMs;
 
     auto wifi        = doc["wifi"].to<JsonObject>();
     wifi["ssid"]     = _config.wifi.ssid;
@@ -173,6 +188,11 @@ void ConfigManager::toJson(JsonDocument& doc) const {
         netObj["ssid"] = net.ssid;
         netObj["password"] = net.password;
     }
+    wifi["static_ip"] = _config.wifi.staticIp;
+    wifi["gateway"]   = _config.wifi.gateway;
+    wifi["subnet"]    = _config.wifi.subnet;
+    wifi["dns1"]      = _config.wifi.dns1;
+    wifi["dns2"]      = _config.wifi.dns2;
 
     auto mqtt         = doc["mqtt"].to<JsonObject>();
     mqtt["enabled"]   = _config.mqtt.enabled;
@@ -181,6 +201,8 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     mqtt["user"]      = _config.mqtt.user;
     mqtt["password"]  = _config.mqtt.password;
     mqtt["base_topic"]= _config.mqtt.baseTopic;
+    mqtt["tls"]       = _config.mqtt.tls;
+    mqtt["tls_insecure"] = _config.mqtt.tlsInsecure;
 
     auto ha                    = doc["ha"].to<JsonObject>();
     ha["enabled"]              = _config.ha.enabled;
@@ -196,12 +218,20 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     nodelink["channel"]        = _config.nodelink.channel;
     nodelink["gateway"]        = _config.nodelink.gateway;
     nodelink["key"]            = _config.nodelink.key;
+
+    auto timeObj               = doc["time"].to<JsonObject>();
+    timeObj["ntp_server"]      = _config.time.ntpServer;
+    timeObj["ntp_server2"]     = _config.time.ntpServer2;
+    timeObj["tz"]              = _config.time.tz;
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
     if (doc["device"].is<JsonObjectConst>()) {
         _config.device.name      = doc["device"]["name"]  | _config.device.name;
         _config.device.boardType = doc["device"]["board"] | _config.device.boardType;
+        _config.device.apiToken  = doc["device"]["api_token"] | _config.device.apiToken;
+        _config.device.resetPin    = doc["device"]["reset_pin"]     | _config.device.resetPin;
+        _config.device.resetHoldMs = doc["device"]["reset_hold_ms"] | _config.device.resetHoldMs;
     }
     if (doc["wifi"].is<JsonObjectConst>()) {
         JsonObjectConst wifiObj = doc["wifi"].as<JsonObjectConst>();
@@ -250,6 +280,12 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
             LOG_I(TAG, "WiFi credentials configured; disabling forced AP mode");
             _config.wifi.apMode = false;
         }
+
+        _config.wifi.staticIp = wifiObj["static_ip"] | String("");
+        _config.wifi.gateway  = wifiObj["gateway"]   | String("");
+        _config.wifi.subnet   = wifiObj["subnet"]    | String("255.255.255.0");
+        _config.wifi.dns1     = wifiObj["dns1"]      | String("");
+        _config.wifi.dns2     = wifiObj["dns2"]      | String("");
     }
     if (doc["mqtt"].is<JsonObjectConst>()) {
         _config.mqtt.enabled   = doc["mqtt"]["enabled"]    | false;
@@ -258,6 +294,8 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.mqtt.user      = doc["mqtt"]["user"]       | String("");
         _config.mqtt.password  = doc["mqtt"]["password"]   | String("");
         _config.mqtt.baseTopic = doc["mqtt"]["base_topic"] | String("openframe");
+        _config.mqtt.tls         = doc["mqtt"]["tls"]          | false;
+        _config.mqtt.tlsInsecure = doc["mqtt"]["tls_insecure"] | false;
     }
     if (doc["ha"].is<JsonObjectConst>()) {
         _config.ha.enabled         = doc["ha"]["enabled"]          | false;
@@ -273,6 +311,11 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.nodelink.channel = doc["nodelink"]["channel"] | 0;
         _config.nodelink.gateway = doc["nodelink"]["gateway"] | false;
         _config.nodelink.key     = doc["nodelink"]["key"] | String("");
+    }
+    if (doc["time"].is<JsonObjectConst>()) {
+        _config.time.ntpServer  = doc["time"]["ntp_server"]  | String("pool.ntp.org");
+        _config.time.ntpServer2 = doc["time"]["ntp_server2"] | String("time.nist.gov");
+        _config.time.tz         = doc["time"]["tz"]          | String("");
     }
     return true;
 }

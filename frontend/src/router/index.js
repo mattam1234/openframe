@@ -13,6 +13,7 @@ const routes = [
   { path: '/logs',      component: () => import('../views/LogsView.vue'),            name: 'logs'       },
   { path: '/files',     component: () => import('../views/FilesystemView.vue'),      name: 'files'      },
   { path: '/settings',  component: () => import('../views/SettingsView.vue'),        name: 'settings'   },
+  { path: '/setup',     component: () => import('../views/SetupWizardView.vue'),     name: 'setup'      },
 ]
 
 const router = createRouter({

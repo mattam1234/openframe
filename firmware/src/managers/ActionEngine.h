@@ -30,6 +30,8 @@ enum class ActionType : uint8_t {
     VariableIncrement,
     VariableToggle,
     OutputControl,  // drive an output (LED/relay/RGB/WS2812): on/off, colour, brightness, animation
+    WaitUntil,      // block until (variableId op value) holds, or delayMs timeout elapses (then the step fails)
+    SceneRestore,   // restore a named scene (value = scene name) — see SceneManager
     HaServiceCall,
     PageChange,
     Notification,
@@ -37,6 +39,12 @@ enum class ActionType : uint8_t {
     MediaControl,
     RemoteAction,   // trigger an action on another node over NodeLink (ESP-NOW)
     SyncAction,     // trigger an action on ALL nodes at a shared cluster time
+    // ── Control flow ──────────────────────────────────────────────────────────
+    If,             // run the steps up to Else/EndIf only when the condition holds
+    Else,           // start of the branch run when the matching If is false
+    EndIf,          // close an If/Else block
+    Repeat,         // run the steps up to EndRepeat `repeatCount` times
+    EndRepeat,      // close a Repeat block
 };
 
 struct ActionStep {
@@ -70,6 +78,13 @@ struct ActionStep {
     uint8_t     speed         = 128;
     uint16_t    frequency     = 2000;   // buzzer "beep" tone (Hz)
     uint16_t    durationMs    = 200;    // buzzer "beep" duration
+    uint8_t     angle         = 90;     // servo "angle" command (0–180°)
+    int32_t     position      = 0;      // stepper "move" command (absolute target, steps)
+
+    // Control flow: If uses (variableId, op, value) as its condition; Repeat uses
+    // repeatCount. op is one of eq/ne/lt/lte/gt/gte (matches Condition).
+    String      op;
+    uint16_t    repeatCount   = 1;
 };
 
 // Optional trigger that auto-runs an action when a hardware event fires.
@@ -79,11 +94,18 @@ struct ActionTrigger {
     String event;    // digital-input event: "Press", "Release", "LongPress", "DoublePress"…
 
     // source == "schedule": "interval" runs every intervalSec (millis-based, needs
-    // no wall clock); "daily" runs once per day at dailySeconds past 00:00 UTC
-    // (needs NTP/cluster time — see TimeManager).
+    // no wall clock); "daily" runs once per day at dailySeconds past local midnight
+    // (needs NTP/cluster time + the configured TZ — see TimeManager / TimeConfig).
     String   scheduleMode;
     uint32_t intervalSec  = 0;
     int32_t  dailySeconds = -1;
+
+    // Rate modifiers for input-source triggers (ms; 0 = off). debounce defers the
+    // fire until the input has been quiet for `debounceMs`, coalescing a burst of
+    // chattering events into one. cooldown enforces a minimum gap between fires
+    // (a.k.a. throttle), dropping events that arrive too soon after the last fire.
+    uint32_t debounceMs = 0;
+    uint32_t cooldownMs = 0;
 };
 
 struct ActionConfig {
@@ -99,6 +121,11 @@ struct ActionConfig {
     uint32_t lastScheduleMs = 0;
     int32_t  lastDailyDay   = -1;
     bool     scheduleArmed  = false;
+
+    // Runtime rate-modifier bookkeeping (not persisted) for input triggers.
+    uint32_t lastFiredMs    = 0;   // millis() of the last trigger-driven fire
+    bool     everFired      = false;
+    uint32_t debounceFireMs = 0;   // when a debounced fire is due (0 = none pending)
 };
 
 struct ActionHistoryEntry {
@@ -121,6 +148,9 @@ public:
 
     void registerExecutor(ActionType type, StepExecutor executor);
     bool run(const ActionConfig& action, String& error);
+
+    // Public so step executors (e.g. WaitUntil) can evaluate a single condition.
+    bool testCondition(const Condition& cond) const { return evaluateCondition(cond); }
 
 private:
     ActionRunner() = default;
@@ -159,6 +189,11 @@ private:
     void recordHistory(const String& id, const String& name, bool success, const String& error);
     void onEventTriggered(const Event& event);
     void onInputEvent(const String& inputId, const String& payload);
+    // Fire an action from its trigger, honouring its cooldown (returns false if
+    // suppressed). debounce is handled separately in onInputEvent/loop.
+    bool fireFromTrigger(ActionConfig& action);
+    // Process any input triggers whose debounce window has elapsed.
+    void evaluateDebounced();
     // Fire any "schedule"-source actions whose interval/daily time has elapsed.
     void evaluateSchedules();
 

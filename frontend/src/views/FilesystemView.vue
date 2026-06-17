@@ -164,7 +164,7 @@
                         size="x-small"
                         variant="text"
                         title="Download"
-                        :href="downloadUrl(entry.path)"
+                        @click="download(entry)"
                       />
                       <v-btn
                         icon="mdi-delete"
@@ -396,8 +396,12 @@ function isProtected(path) {
   return path === '/www' || path.startsWith('/www/')
 }
 
-function downloadUrl(path) {
-  return api.fs.downloadUrl(path)
+async function download(entry) {
+  try {
+    await api.fs.download(entry.path)
+  } catch (e) {
+    errorMessage.value = e.message || 'Download failed'
+  }
 }
 
 function formatBytes(bytes) {

@@ -42,11 +42,17 @@
         />
       </template>
       <v-app-bar-title>
-        <router-link to="/" class="text-decoration-none text-white">
+        <router-link to="/" class="text-decoration-none text-high-emphasis">
           OpenFrame
         </router-link>
       </v-app-bar-title>
       <template #append>
+        <v-btn
+          :icon="isDark ? 'mdi-weather-sunny' : 'mdi-weather-night'"
+          variant="text"
+          :title="isDark ? 'Switch to light theme' : 'Switch to dark theme'"
+          @click="toggleTheme"
+        />
         <v-chip
           :color="wsStore.connected ? 'success' : 'error'"
           size="small"
@@ -67,8 +73,17 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useDisplay } from 'vuetify'
+import { useDisplay, useTheme } from 'vuetify'
 import { useWebSocketStore } from './stores/websocket'
+
+// Dark/light theme toggle (#46), persisted to localStorage.
+const theme = useTheme()
+const isDark = computed(() => theme.global.current.value.dark)
+function toggleTheme() {
+  const next = isDark.value ? 'light' : 'dark'
+  theme.global.name.value = next
+  try { localStorage.setItem('of-theme', next) } catch { /* private mode */ }
+}
 
 const drawer = ref(true)
 const rail = ref(false)
@@ -101,5 +116,6 @@ const navItems = [
   { title: 'Logs',            icon: 'mdi-text-box-outline',       to: '/logs' },
   { title: 'Filesystem',      icon: 'mdi-folder-cog-outline',     to: '/files' },
   { title: 'Settings',        icon: 'mdi-cog',                    to: '/settings' },
+  { title: 'Setup Wizard',    icon: 'mdi-rocket-launch',          to: '/setup' },
 ]
 </script>

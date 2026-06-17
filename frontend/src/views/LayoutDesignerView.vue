@@ -108,7 +108,7 @@
                   <th>ID</th>
                   <th>Type</th>
                   <th>Pin</th>
-                  <th>LEDs</th>
+                  <th>LEDs / DIR</th>
                   <th></th>
                 </tr>
               </thead>
@@ -125,7 +125,7 @@
                   <td>
                     <v-select
                       v-model="out.type"
-                      :items="['led', 'rgb', 'ws2812', 'relay', 'buzzer']"
+                      :items="['led', 'rgb', 'ws2812', 'relay', 'buzzer', 'servo', 'stepper']"
                       density="compact"
                       hide-details
                       variant="plain"
@@ -154,6 +154,17 @@
                       variant="plain"
                       style="max-width:80px"
                       placeholder="count"
+                    />
+                    <!-- Steppers: the DIR pin (STEP uses the main Pin column). -->
+                    <v-select
+                      v-else-if="out.type === 'stepper'"
+                      v-model="out.pin_dir"
+                      :items="ioPins"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                      style="min-width:110px"
+                      placeholder="DIR pin"
                     />
                     <span v-else class="text-medium-emphasis">—</span>
                   </td>
@@ -350,7 +361,7 @@ function removeInput(idx) {
 function addOutput() {
   // led_count/brightness only apply to ws2812 but are always sent so the device
   // persists them when the type is switched to an addressable strip.
-  outputs.value.push({ id: `led${outputs.value.length + 1}`, type: 'led', pin: 0, inverted: false, led_count: 1, brightness: 255 })
+  outputs.value.push({ id: `led${outputs.value.length + 1}`, type: 'led', pin: 0, inverted: false, led_count: 1, brightness: 255, pin_dir: 0 })
 }
 
 function removeOutput(idx) {

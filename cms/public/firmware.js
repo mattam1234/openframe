@@ -16,7 +16,10 @@ function fmtTs(t) { return t ? new Date(t).toLocaleString() : '—'; }
 
 function targetSpec() {
   const tags = tagFilterEl.value.split(',').map((t) => t.trim()).filter(Boolean);
-  return tags.length ? { tags, onlineOnly: onlineOnlyEl.checked } : { onlineOnly: onlineOnlyEl.checked };
+  const canaryEl = document.getElementById('canary');
+  const canary = canaryEl ? Math.max(0, parseInt(canaryEl.value, 10) || 0) : 0;
+  const base = tags.length ? { tags, onlineOnly: onlineOnlyEl.checked } : { onlineOnly: onlineOnlyEl.checked };
+  return canary > 0 ? { ...base, canary } : base;
 }
 
 async function load() {
@@ -47,8 +50,14 @@ async function deployFirmware(name, btn) {
     });
     const body = await res.json();
     if (!res.ok) { deployResult.textContent = `error: ${body.error || res.status}`; return; }
-    const failed = body.results.filter((r) => !r.ok);
-    deployResult.textContent = `${name}: accepted by ${body.ok}/${body.count}` +
+    if (body.halted) {
+      const failed = (body.canary || []).filter((r) => !r.ok).map((r) => r.deviceId);
+      deployResult.textContent = `${name}: ${body.reason}` + (failed.length ? ` — no ack: ${failed.join(', ')}` : '');
+      return;
+    }
+    const results = body.results || [];
+    const failed = results.filter((r) => !r.ok);
+    deployResult.textContent = `${name}: ${body.staged ? 'staged, ' : ''}accepted by ${body.ok}/${body.count}` +
       (failed.length ? ` — no ack: ${failed.map((r) => r.deviceId).join(', ')}` : '') +
       `. Watch the Fleet version column.`;
   } catch (e) { deployResult.textContent = `error: ${e.message}`; }

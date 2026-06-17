@@ -11,6 +11,7 @@ const char* ledAnimationToString(LedAnimation a) {
         case LedAnimation::Rainbow:   return "rainbow";
         case LedAnimation::Chase:     return "chase";
         case LedAnimation::ColorWipe: return "colorwipe";
+        case LedAnimation::Fire:      return "fire";
     }
     return "solid";
 }
@@ -22,6 +23,7 @@ LedAnimation ledAnimationFromString(const String& s) {
     if (s == "rainbow")   return LedAnimation::Rainbow;
     if (s == "chase")     return LedAnimation::Chase;
     if (s == "colorwipe") return LedAnimation::ColorWipe;
+    if (s == "fire")      return LedAnimation::Fire;
     return LedAnimation::Solid;
 }
 
@@ -32,6 +34,8 @@ const char* OutputManager::outputTypeToString(OutputType type) {
         case OutputType::Ws2812: return "ws2812";
         case OutputType::Relay:  return "relay";
         case OutputType::Buzzer: return "buzzer";
+        case OutputType::Servo:  return "servo";
+        case OutputType::Stepper: return "stepper";
     }
     return "led";
 }
@@ -65,6 +69,7 @@ void OutputManager::loop() {
         }
     }
     tickAnimations(nowMs);
+    tickSteppers(micros());
 }
 
 bool OutputManager::setDigital(const String& id, bool on) {
@@ -89,6 +94,43 @@ bool OutputManager::beep(const String& id, uint16_t frequency, uint16_t duration
     const int index = findIndexById(id);
     if (index < 0) return false;
     return applyBuzzer(static_cast<size_t>(index), frequency, durationMs);
+}
+
+bool OutputManager::setAngle(const String& id, uint8_t angle) {
+    const int index = findIndexById(id);
+    if (index < 0) return false;
+    return applyServo(static_cast<size_t>(index), angle);
+}
+
+bool OutputManager::setPosition(const String& id, int32_t steps) {
+    const int index = findIndexById(id);
+    if (index < 0) return false;
+    if (_configs[index].type != OutputType::Stepper) return false;
+    _states[index].stepTarget = steps;
+    emitOutputEvent(static_cast<size_t>(index), "SetPosition");
+    return true;
+}
+
+void OutputManager::tickSteppers(uint32_t nowUs) {
+    for (size_t i = 0; i < _configs.size(); ++i) {
+        const auto& cfg = _configs[i];
+        if (cfg.type != OutputType::Stepper) continue;
+        auto& st = _states[i];
+        if (st.stepPos == st.stepTarget) continue;
+
+        const uint32_t intervalUs = 1000000UL / (cfg.maxStepHz ? cfg.maxStepHz : 1000);
+        if (st.lastStepUs != 0 && (nowUs - st.lastStepUs) < intervalUs) continue;
+        st.lastStepUs = nowUs;
+
+        const bool forward = st.stepTarget > st.stepPos;
+        digitalWrite(cfg.pinDir, (forward != cfg.inverted) ? HIGH : LOW);
+        // One step pulse (driver latches on the rising edge; a few µs HIGH is plenty).
+        digitalWrite(cfg.pin, HIGH);
+        delayMicroseconds(3);
+        digitalWrite(cfg.pin, LOW);
+        st.stepPos += forward ? 1 : -1;
+        if (st.stepPos == st.stepTarget) emitOutputEvent(i, "PositionReached");
+    }
 }
 
 bool OutputManager::loadConfig() {
@@ -128,6 +170,8 @@ bool OutputManager::loadConfig() {
         else if (type == "ws2812") cfg.type = OutputType::Ws2812;
         else if (type == "relay") cfg.type = OutputType::Relay;
         else if (type == "buzzer") cfg.type = OutputType::Buzzer;
+        else if (type == "servo") cfg.type = OutputType::Servo;
+        else if (type == "stepper") cfg.type = OutputType::Stepper;
         else continue;
 
         cfg.pin           = item["pin"] | 0;
@@ -136,6 +180,22 @@ bool OutputManager::loadConfig() {
         cfg.pwmChannel    = item["pwm_channel"] | 0;
         cfg.pwmFrequency  = item["pwm_frequency"] | 5000;
         cfg.pwmResolution = item["pwm_resolution"] | 8;
+
+        if (cfg.type == OutputType::Servo) {
+            // Servos are driven at 50 Hz; 16-bit duty gives smooth positioning on
+            // ESP32. (ESP8266 analogWriteFreq is global — a servo there forces all
+            // PWM outputs to 50 Hz, so pair servos with non-PWM outputs.)
+            cfg.pwmFrequency  = item["pwm_frequency"]  | 50;
+            cfg.pwmResolution = item["pwm_resolution"] | 16;
+            cfg.servoMinUs    = item["servo_min_us"]   | 500;
+            cfg.servoMaxUs    = item["servo_max_us"]   | 2500;
+        }
+        if (cfg.type == OutputType::Stepper) {
+            cfg.pinDir      = item["pin_dir"]       | 0;
+            cfg.pinEnable   = item["pin_enable"]    | 0;
+            cfg.stepsPerRev = item["steps_per_rev"] | 200;
+            cfg.maxStepHz   = item["max_step_hz"]   | 1000;
+        }
 
         cfg.pinR          = item["pin_r"] | 0;
         cfg.pinG          = item["pin_g"] | 0;
@@ -186,6 +246,20 @@ void OutputManager::setupOutput(size_t index) {
         case OutputType::Buzzer:
             of_tone_setup(cfg.pin, cfg.pwmChannel, cfg.pwmFrequency, cfg.pwmResolution);
             of_tone_write(cfg.pin, cfg.pwmChannel, 0);
+            break;
+        case OutputType::Servo:
+            of_pwm_setup(cfg.pin, cfg.pwmChannel, cfg.pwmFrequency, cfg.pwmResolution);
+            applyServo(index, 90);  // park at centre
+            break;
+        case OutputType::Stepper:
+            pinMode(cfg.pin, OUTPUT);          // STEP
+            pinMode(cfg.pinDir, OUTPUT);       // DIR
+            digitalWrite(cfg.pin, LOW);
+            digitalWrite(cfg.pinDir, LOW);
+            if (cfg.pinEnable) {               // active-LOW enable
+                pinMode(cfg.pinEnable, OUTPUT);
+                digitalWrite(cfg.pinEnable, LOW);
+            }
             break;
     }
 }
@@ -300,6 +374,28 @@ bool OutputManager::applyBuzzer(size_t index, uint16_t frequency, uint16_t durat
     state.on = frequency > 0;
     state.buzzerUntil = durationMs > 0 ? (millis() + durationMs) : 0;
     emitOutputEvent(index, "Beep");
+    return true;
+}
+
+bool OutputManager::applyServo(size_t index, uint8_t angle) {
+    const auto& cfg = _configs[index];
+    auto& state = _states[index];
+    if (cfg.type != OutputType::Servo) return false;
+
+    if (angle > 180) angle = 180;
+
+    // angle → pulse width (µs) → duty fraction of the 50 Hz (20 ms) period.
+    const uint32_t pulseUs = cfg.servoMinUs +
+        (static_cast<uint32_t>(cfg.servoMaxUs - cfg.servoMinUs) * angle) / 180u;
+    const uint32_t periodUs = 1000000u / (cfg.pwmFrequency ? cfg.pwmFrequency : 50u);
+    const uint32_t maxDuty  = (1u << cfg.pwmResolution) - 1u;
+    uint32_t duty = (pulseUs * maxDuty) / periodUs;
+    if (cfg.inverted) duty = maxDuty - duty;
+
+    of_pwm_write(cfg.pin, cfg.pwmChannel, duty);
+    state.angle = angle;
+    state.on    = true;
+    emitOutputEvent(index, "SetAngle");
     return true;
 }
 
@@ -456,6 +552,17 @@ void OutputManager::renderWs2812(size_t index) {
             for (uint16_t i = 0; i < n; ++i) leds[i] = (i < count) ? c : CRGB::Black;
             break;
         }
+        case LedAnimation::Fire: {
+            // Stateless flame: Perlin noise over position + time drives a heat
+            // palette. Ignores the set colour (fire is its own palette).
+            for (uint16_t i = 0; i < n; ++i) {
+                const uint8_t heat = inoise8(i * 60, state.animPhase * 40);
+                CRGB c = HeatColor(heat);
+                c.nscale8_video(master);
+                leds[i] = c;
+            }
+            break;
+        }
         case LedAnimation::Off:
             break;  // handled above
     }
@@ -499,6 +606,44 @@ void OutputManager::fillStateJson(JsonArray& arr) const {
         if (cfg.type == OutputType::Buzzer) {
             obj["buzzer_freq"] = state.buzzerFreq;
         }
+        if (cfg.type == OutputType::Stepper) {
+            obj["position"]      = state.stepPos;
+            obj["target"]        = state.stepTarget;
+            obj["steps_per_rev"] = cfg.stepsPerRev;
+        }
+        if (cfg.type == OutputType::Servo) {
+            obj["angle"]         = state.angle;
+            obj["servo_min_us"]  = cfg.servoMinUs;
+            obj["servo_max_us"]  = cfg.servoMaxUs;
+        }
+    }
+}
+
+void OutputManager::applyStateJson(JsonArrayConst arr) {
+    for (JsonObjectConst obj : arr) {
+        const String id = obj["id"] | String("");
+        if (!id.length()) continue;
+        const int index = findIndexById(id);
+        if (index < 0) continue;
+        const OutputType type = _configs[index].type;
+
+        // Apply type-specific attributes first, then the on/off state last so the
+        // final digital level reflects the restored colour/brightness.
+        if (type == OutputType::Rgb || type == OutputType::Ws2812) {
+            setRgb(id, obj["r"] | 0, obj["g"] | 0, obj["b"] | 0);
+        }
+        if (type == OutputType::Ws2812) {
+            setAnimation(id, ledAnimationFromString(obj["animation"] | String("solid")),
+                         obj["speed"] | 128);
+        }
+        if (obj["brightness"].is<int>()) setBrightness(id, obj["brightness"].as<int>());
+        if (type == OutputType::Servo && obj["angle"].is<int>()) {
+            setAngle(id, static_cast<uint8_t>(obj["angle"].as<int>()));
+        }
+        if (type == OutputType::Stepper && obj["position"].is<int>()) {
+            setPosition(id, obj["position"].as<int32_t>());
+        }
+        if (obj["on"].is<bool>()) setDigital(id, obj["on"].as<bool>());
     }
 }
 
@@ -519,6 +664,9 @@ void OutputManager::emitOutputEvent(size_t index, const char* action) {
     if (cfg.type == OutputType::Ws2812) {
         doc["animation"] = ledAnimationToString(state.animation);
         doc["speed"] = state.animationSpeed;
+    }
+    if (cfg.type == OutputType::Servo) {
+        doc["angle"] = state.angle;
     }
 
     String payload;

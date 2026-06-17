@@ -39,6 +39,15 @@
       </div>
 
       <div class="panel">
+        <h2>Notes</h2>
+        <textarea id="notes" rows="4" placeholder="Operational notes — location, quirks, maintenance history…"></textarea>
+        <div class="row">
+          <button id="save-notes">Save notes</button>
+          <span id="notes-msg" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="panel">
         <h2>Actions</h2>
         <div class="actions">
           <button data-cmd="identify">Identify</button>
@@ -60,7 +69,12 @@
         <h3>Push config</h3>
         <p class="hint">Partial config JSON (same shape as <code>POST /api/config</code>). The device merges, saves, and reboots.</p>
         <textarea id="config-json" rows="8" placeholder='{ "device": { "name": "Lobby Frame" } }'></textarea>
-        <div class="row"><button id="push-config">Push config &amp; reboot</button></div>
+        <div class="row"><button id="preview-config">Preview changes</button></div>
+        <div id="config-diff" class="config-diff hidden"></div>
+        <div id="config-confirm" class="row hidden">
+          <button id="push-config" class="danger">Confirm push &amp; reboot</button>
+          <button id="cancel-config">Cancel</button>
+        </div>
 
         <h3>Result</h3>
         <pre id="result" class="result">—</pre>

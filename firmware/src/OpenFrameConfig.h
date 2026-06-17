@@ -43,8 +43,13 @@
 #define OF_DISPLAY_PAGES_PATH "/pages"
 #define OF_ACTIONS_PATH "/actions.json"
 #define OF_MACROS_PATH "/macros.json"
+#define OF_SCENES_PATH "/scenes.json"
 #define OF_LOGS_PATH "/logs.json"
 #define OF_NOTIFICATIONS_PATH "/notifications.json"
+#define OF_CRASHLOG_PATH "/crashlog.json"
+#define OF_MQTT_CA_PATH "/mqtt_ca.pem"
+#define OF_CONFIG_BACKUP_DIR "/cfgbak"
+#define OF_CONFIG_BACKUP_KEEP 5
 
 // Ring buffer sizes
 #define OF_LOG_BUFFER_SIZE 1000

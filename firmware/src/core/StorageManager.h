@@ -37,6 +37,9 @@ public:
     // false on error. Does not perform NVS backup.
     bool writeRaw(const String& path, const String& body);
 
+    // Read a whole file into a String. Returns false if missing/unreadable.
+    bool readRaw(const String& path, String& out);
+
     // Delete a file
     bool remove(const String& path);
 

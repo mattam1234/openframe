@@ -13,6 +13,12 @@ public:
     void begin(AsyncWebServer& server);
     void loop();
 
+    // Returns true when the request is allowed: always true if no api_token is
+    // configured (LAN-trusted default), else requires a matching Bearer header
+    // or ?token=. Sends a 401 itself when it returns false. Public so the shared
+    // body-buffering POST helper can gate before invoking a handler.
+    bool requireAuth(AsyncWebServerRequest* request) const;
+
 private:
     ApiServer();
 
@@ -33,6 +39,8 @@ private:
     void sendDisplayPages(AsyncWebServerRequest* request) const;
     void sendActions(AsyncWebServerRequest* request) const;
     void sendMacros(AsyncWebServerRequest* request) const;
+    void sendScenes(AsyncWebServerRequest* request) const;
+    void sendMetrics(AsyncWebServerRequest* request) const;
     void sendModules(AsyncWebServerRequest* request) const;
     void sendHardware(AsyncWebServerRequest* request) const;
     void sendProfiles(AsyncWebServerRequest* request) const;
@@ -51,6 +59,13 @@ private:
     void handleFsUpload(AsyncWebServerRequest* request, const String& path, const String& body);
 
     void handleConfigUpdate(AsyncWebServerRequest* request, const String& body);
+    // Config backup/restore slots (one-tap rollback).
+    void sendConfigBackups(AsyncWebServerRequest* request) const;
+    void handleConfigBackupCreate(AsyncWebServerRequest* request);
+    void handleConfigRestore(AsyncWebServerRequest* request, const String& body);
+    void handleConfigBackupDelete(AsyncWebServerRequest* request);
+    String createConfigBackup() const;   // snapshot /config.json into a new slot
+    void   pruneConfigBackups(size_t keep) const;
     void handleVariablesUpdate(AsyncWebServerRequest* request, const String& body);
     void handleInputsUpdate(AsyncWebServerRequest* request, const String& body);
     void handleOutputsUpdate(AsyncWebServerRequest* request, const String& body);
@@ -62,6 +77,9 @@ private:
     void handleActionDelete(AsyncWebServerRequest* request, const String& actionId);
     void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);
     void handleMacroDelete(AsyncWebServerRequest* request, const String& macroId);
+    void handleSceneCapture(AsyncWebServerRequest* request, const String& body);
+    void handleSceneRestore(AsyncWebServerRequest* request, const String& body);
+    void handleSceneDelete(AsyncWebServerRequest* request, const String& name);
     void handleProfileCreate(AsyncWebServerRequest* request, const String& body);
     void handleProfileActivate(AsyncWebServerRequest* request, const String& body);
     void handleProfileDelete(AsyncWebServerRequest* request, const String& profileId);

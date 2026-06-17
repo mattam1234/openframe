@@ -52,6 +52,17 @@ test('setTags dedupes/trims; unknown device returns false', () => {
   assert.deepEqual(r.get('a')!.tags, ['lobby', 'floor1']);
 });
 
+test('setNotes stores text and emits change; unknown device returns false', () => {
+  const r = new DeviceRegistry(1000);
+  assert.equal(r.setNotes('missing', 'hi'), false);
+  r.applyStatus('a', {});
+  let changed = false;
+  r.on('change', () => { changed = true; });
+  assert.equal(r.setNotes('a', 'mounted in the lobby; flaky PSU'), true);
+  assert.equal(r.get('a')!.notes, 'mounted in the lobby; flaky PSU');
+  assert.equal(changed, true);
+});
+
 test('loadSnapshot restores devices offline and normalizes tags', () => {
   const r = new DeviceRegistry(1000);
   const saved = [{ deviceId: 'a', online: true, lastSeen: 1, lastPresence: 'online', presenceAt: 1, updatedAt: 1 }] as unknown as Device[];

@@ -81,6 +81,45 @@
         </div>
       </template>
 
+      <!-- Servo -->
+      <div v-if="model.type === 'servo'" class="mb-1">
+        <div class="d-flex justify-space-between text-caption text-medium-emphasis">
+          <span>Angle</span><span>{{ model.angle ?? 90 }}°</span>
+        </div>
+        <v-slider
+          :model-value="model.angle ?? 90"
+          :min="0"
+          :max="180"
+          :step="1"
+          density="compact"
+          hide-details
+          @update:model-value="setAngle"
+        />
+      </div>
+
+      <!-- Stepper -->
+      <div v-if="model.type === 'stepper'" class="mb-1">
+        <div class="d-flex justify-space-between text-caption text-medium-emphasis">
+          <span>Position</span>
+          <span>
+            {{ model.position ?? 0 }}<span v-if="model.target != null && model.target !== model.position"> → {{ model.target }}</span> steps
+          </span>
+        </div>
+        <div class="d-flex align-center ga-2 mt-1">
+          <v-btn icon="mdi-rotate-left" size="small" variant="tonal" @click="jog(-(model.steps_per_rev || 200))" />
+          <v-text-field
+            v-model.number="stepTarget"
+            type="number"
+            density="compact"
+            hide-details
+            label="Target"
+            style="max-width: 110px"
+          />
+          <v-btn size="small" variant="tonal" prepend-icon="mdi-arrow-right-bold" @click="moveTo(stepTarget)">Move</v-btn>
+          <v-btn icon="mdi-rotate-right" size="small" variant="tonal" @click="jog(model.steps_per_rev || 200)" />
+        </div>
+      </div>
+
       <!-- Buzzer -->
       <v-btn
         v-if="model.type === 'buzzer'"
@@ -96,7 +135,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import api from '../api/client'
 
 const props = defineProps({
@@ -113,13 +152,18 @@ const hasColor = computed(() => model.type === 'ws2812' || model.type === 'rgb')
 const hasBrightness = computed(() => model.type === 'ws2812' || model.type === 'led')
 const dynamicAnimation = computed(() => !['solid', 'off'].includes(model.animation))
 
-const animations = ['solid', 'off', 'blink', 'breathe', 'rainbow', 'chase', 'colorwipe']
+const animations = ['solid', 'off', 'blink', 'breathe', 'rainbow', 'chase', 'colorwipe', 'fire']
 const presets = ['#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#FFFFFF', '#FF8800']
 
 const typeIcon = computed(() => ({
   led: 'mdi-led-on', rgb: 'mdi-palette', ws2812: 'mdi-led-strip-variant',
-  relay: 'mdi-electric-switch', buzzer: 'mdi-music-note',
+  relay: 'mdi-electric-switch', buzzer: 'mdi-music-note', servo: 'mdi-axis-z-rotate-clockwise',
+  stepper: 'mdi-cog',
 }[model.type] || 'mdi-power-plug'))
+
+// Stepper target entry; seeded from the device's commanded target/position.
+const stepTarget = ref(props.output.target ?? props.output.position ?? 0)
+watch(() => props.output.target, (v) => { if (v != null) stepTarget.value = v })
 
 const toHex = (n) => Math.max(0, Math.min(255, n | 0)).toString(16).padStart(2, '0')
 const hex = computed(() => `#${toHex(model.r)}${toHex(model.g)}${toHex(model.b)}`)
@@ -173,6 +217,11 @@ function setAnimation(anim) {
 }
 
 const beep = () => control({ command: 'beep', frequency: 1000, duration_ms: 200 })
+const setAngle = (v) => { model.angle = v; controlThrottled({ command: 'angle', angle: v }) }
+
+// Stepper: command an absolute target (steps). Firmware steps toward it in loop().
+const moveTo = (steps) => { const t = Number(steps) || 0; model.target = t; control({ command: 'move', position: t }) }
+const jog = (delta) => { const t = (model.position ?? 0) + delta; stepTarget.value = t; moveTo(t) }
 </script>
 
 <style scoped>

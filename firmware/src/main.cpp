@@ -47,6 +47,30 @@ void setup() {
     }
 
     ConfigManager::instance().begin();
+
+    // Factory-reset button: if configured and held LOW at boot for the hold time,
+    // wipe config (keeping WiFi) and reboot. Only blocks when the button is
+    // already down at boot; disabled by default (reset_pin = -1).
+    {
+        const auto& dev = ConfigManager::instance().config().device;
+        if (dev.resetPin >= 0) {
+            pinMode(dev.resetPin, INPUT_PULLUP);
+            if (digitalRead(dev.resetPin) == LOW) {
+                const uint32_t start = millis();
+                bool held = true;
+                while (millis() - start < dev.resetHoldMs) {
+                    if (digitalRead(dev.resetPin) != LOW) { held = false; break; }
+                    delay(10);
+                }
+                if (held) {
+                    LOG_W(TAG, "Factory-reset button held — wiping config (WiFi kept)");
+                    ConfigManager::instance().factoryResetKeepWifi();
+                    ESP.restart();
+                }
+            }
+        }
+    }
+
     VariableManager::instance().begin();
 
     // Arm the watchdog and decide safe mode before any hardware/automation init —
@@ -96,6 +120,7 @@ void setup() {
 void loop() {
     HealthMonitor::instance().markLoopStart();
 
+    VariableManager::instance().loop();
     WiFiManager::instance().loop();
     TimeManager::instance().loop();
     MqttManager::instance().loop();

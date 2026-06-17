@@ -95,8 +95,10 @@ String backupKeyForPath(const String& path) {
 bool shouldBackupJson(const String& path) {
     return path.endsWith(".json") &&
            !path.startsWith("/www/") &&
+           !path.startsWith(OF_CONFIG_BACKUP_DIR "/") &&  // backup slots aren't shadowed
            path != OF_LOGS_PATH &&
            path != OF_NOTIFICATIONS_PATH &&
+           path != OF_CRASHLOG_PATH &&
            path != "/._selftest.json";  // transient self-test artefact
 }
 
@@ -460,6 +462,19 @@ bool StorageManager::writeRaw(const String& path, const String& body) {
         return false;
     }
     LOG_D(TAG, "Wrote raw: " + path + " (" + String(written) + " bytes)");
+    return true;
+}
+
+bool StorageManager::readRaw(const String& path, String& out) {
+    StorageLock lock;
+    if (!LittleFS.exists(path)) return false;
+    File f = LittleFS.open(path, "r");
+    if (!f) {
+        LOG_E(TAG, "Cannot open for read: " + path);
+        return false;
+    }
+    out = f.readString();
+    f.close();
     return true;
 }
 

@@ -44,6 +44,9 @@ function render(device) {
     `<tr><th>${key}</th><td>${fmt(device[key])}</td></tr>`).join('');
   currentTags = device.tags || [];
   renderTags();
+  // Don't clobber the textarea while the operator is typing in it.
+  const notesEl = document.getElementById('notes');
+  if (notesEl && document.activeElement !== notesEl) notesEl.value = device.notes || '';
 }
 
 function renderTags() {
@@ -86,6 +89,17 @@ document.getElementById('add-tag').onclick = () => {
   if (tag && !currentTags.includes(tag)) saveTags([...currentTags, tag]);
   input.value = '';
 };
+document.getElementById('save-notes').onclick = async () => {
+  const msg = document.getElementById('notes-msg');
+  msg.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/notes`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: document.getElementById('notes').value }),
+    });
+    msg.textContent = res.ok ? 'Saved.' : `Failed: ${res.status}`;
+  } catch (e) { msg.textContent = 'Failed: ' + e.message; }
+};
 document.getElementById('activate-profile').onclick = () => {
   const id = document.getElementById('profile-id').value.trim();
   if (!id) { resultEl.textContent = 'enter a profile id'; return; }
@@ -120,12 +134,74 @@ async function loadProfiles() {
   } catch (e) { msg.textContent = `error: ${e.message}`; }
 }
 document.getElementById('load-profiles').onclick = loadProfiles;
-document.getElementById('push-config').onclick = () => {
+// Config diff-before-apply (#62). We diff the JSON about to be pushed against the
+// last config pushed to THIS device from this browser (kept in localStorage), so
+// the operator sees exactly which keys change before it reboots the device.
+const configBaselineKey = `of-cms-lastconfig-${deviceId}`;
+
+function loadConfigBaseline() {
+  try {
+    const raw = localStorage.getItem(configBaselineKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+// Walk two JSON values and collect leaf-level differences as {path, type, before, after}.
+function diffJson(base, next, path = '', out = []) {
+  const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  if (isObj(base) && isObj(next)) {
+    for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
+      diffJson(base[key], next[key], path ? `${path}.${key}` : key, out);
+    }
+  } else if (JSON.stringify(base) !== JSON.stringify(next)) {
+    const type = base === undefined ? 'added' : next === undefined ? 'removed' : 'changed';
+    out.push({ path, type, before: base, after: next });
+  }
+  return out;
+}
+
+function fmtVal(v) {
+  if (v === undefined) return '∅';
+  return escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v));
+}
+
+let pendingConfig = null;
+
+document.getElementById('preview-config').onclick = () => {
+  const diffEl = document.getElementById('config-diff');
+  const confirmEl = document.getElementById('config-confirm');
   const raw = document.getElementById('config-json').value.trim();
   if (!raw) { resultEl.textContent = 'enter config JSON'; return; }
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch (e) { resultEl.textContent = `invalid JSON: ${e.message}`; return; }
-  sendCommand('apply_config', parsed);
+  try { pendingConfig = JSON.parse(raw); }
+  catch (e) { resultEl.textContent = `invalid JSON: ${e.message}`; return; }
+
+  const baseline = loadConfigBaseline();
+  const diffs = diffJson(baseline ?? {}, pendingConfig);
+  const note = baseline
+    ? 'Changes vs. the last config pushed from this browser:'
+    : 'No previous push on record from this browser — every key below is new/unverified:';
+  diffEl.innerHTML = diffs.length
+    ? `<p class="hint">${note}</p><table class="kv"><tbody>${diffs.map((d) =>
+        `<tr><th>${escapeHtml(d.path)}</th><td><span class="diff-${d.type}">${d.type}</span> `
+        + `${fmtVal(d.before)} → ${fmtVal(d.after)}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="hint">No differences from the last pushed config.</p>';
+  diffEl.classList.remove('hidden');
+  confirmEl.classList.toggle('hidden', diffs.length === 0);
+};
+
+document.getElementById('cancel-config').onclick = () => {
+  pendingConfig = null;
+  document.getElementById('config-diff').classList.add('hidden');
+  document.getElementById('config-confirm').classList.add('hidden');
+};
+
+document.getElementById('push-config').onclick = () => {
+  if (!pendingConfig) return;
+  try { localStorage.setItem(configBaselineKey, JSON.stringify(pendingConfig)); } catch { /* ignore */ }
+  sendCommand('apply_config', pendingConfig);
+  document.getElementById('config-diff').classList.add('hidden');
+  document.getElementById('config-confirm').classList.add('hidden');
+  pendingConfig = null;
 };
 
 function drawSpark(canvasId, samples, pick) {

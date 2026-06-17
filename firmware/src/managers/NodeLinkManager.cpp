@@ -57,6 +57,7 @@ void NodeLinkManager::loop() {
     if (now - _lastTimeSyncMs >= TIMESYNC_INTERVAL_MS) {
         timeSync();
     }
+    retryPending(now);
 }
 
 bool NodeLinkManager::send(const String& dstId, NodeMsgType type, const String& payload) {
@@ -66,10 +67,16 @@ bool NodeLinkManager::send(const String& dstId, NodeMsgType type, const String& 
         LOG_W(TAG, "Bad destination id: " + dstId);
         return false;
     }
-    const String frame = encode(dstId, type, ++_seq, payload);
+    const uint32_t seq = ++_seq;
+    const String frame = encode(dstId, type, seq, payload);
     if (frame.length() > MAX_FRAME) {
         LOG_W(TAG, "Frame too large (" + String(frame.length()) + " B) — dropped");
         return false;
+    }
+    // Reliable unicast: queue for retransmit until the peer Acks (or we exhaust
+    // retries). Acks themselves are fire-and-forget (no ack-of-ack).
+    if (type != NodeMsgType::Ack) {
+        _pending.push_back({ dstId, seq, frame, 0, millis() + NL_RETRY_MS });
     }
     return _backend->sendTo(mac, reinterpret_cast<const uint8_t*>(frame.c_str()), frame.length());
 }
@@ -128,6 +135,24 @@ void NodeLinkManager::route(const NodeMessage& msg) {
     peer.id = msg.srcId;
     peer.lastSeenMs = millis();
 
+    // An Ack clears the matching pending retransmit; never forwarded or re-acked.
+    if (msg.type == NodeMsgType::Ack) {
+        const uint32_t ackSeq = static_cast<uint32_t>(msg.payload.toInt());
+        for (auto it = _pending.begin(); it != _pending.end(); ++it) {
+            if (it->dstId == msg.srcId && it->seq == ackSeq) { _pending.erase(it); break; }
+        }
+        return;
+    }
+
+    // Re-ack every unicast addressed to us — even a duplicate, so a peer whose
+    // earlier Ack was lost stops retransmitting. (Broadcasts have no dstId.)
+    if (msg.dstId == self) {
+        sendAck(msg.srcId, msg.seq);
+    }
+
+    // Drop duplicates (retransmits) so a delivered-twice message is processed once.
+    if (isDuplicate(msg.srcId, msg.seq)) return;
+
     switch (msg.type) {
         case NodeMsgType::Announce: {
             const int bar = msg.payload.indexOf('|');
@@ -155,6 +180,45 @@ void NodeLinkManager::route(const NodeMessage& msg) {
     }
 
     for (auto& h : _handlers) h(msg);
+}
+
+void NodeLinkManager::sendAck(const String& dstId, uint32_t seq) {
+    if (!_backend) return;
+    uint8_t mac[6];
+    if (!idToMac(dstId, mac)) return;
+    // Ack carries the acknowledged seq; it does NOT consume our own seq counter
+    // and is never itself queued for retransmit.
+    const String frame = encode(dstId, NodeMsgType::Ack, seq, String(seq));
+    if (frame.length() > MAX_FRAME) return;
+    _backend->sendTo(mac, reinterpret_cast<const uint8_t*>(frame.c_str()), frame.length());
+}
+
+void NodeLinkManager::retryPending(uint32_t now) {
+    for (auto it = _pending.begin(); it != _pending.end();) {
+        if ((int32_t)(now - it->nextMs) < 0) { ++it; continue; }
+        if (it->attempts >= NL_MAX_RETRIES) {
+            LOG_W(TAG, "No ack from " + it->dstId + " (seq " + String(it->seq) + ") after retries — giving up");
+            it = _pending.erase(it);
+            continue;
+        }
+        uint8_t mac[6];
+        if (idToMac(it->dstId, mac)) {
+            _backend->sendTo(mac, reinterpret_cast<const uint8_t*>(it->frame.c_str()), it->frame.length());
+        }
+        it->attempts++;
+        it->nextMs = now + NL_RETRY_MS;
+        ++it;
+    }
+}
+
+bool NodeLinkManager::isDuplicate(const String& srcId, uint32_t seq) {
+    auto it = _lastSeq.find(srcId);
+    // Exact-equal consecutive seq from the same source == a retransmit. New
+    // messages always carry a fresh incrementing seq; a peer reboot resets to a
+    // low seq which won't equal the stored high one, so it's still accepted.
+    if (it != _lastSeq.end() && it->second == seq) return true;
+    _lastSeq[srcId] = seq;
+    return false;
 }
 
 void NodeLinkManager::announce() {

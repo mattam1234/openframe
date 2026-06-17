@@ -157,6 +157,7 @@ On first boot the device creates an `OpenFrame-XXXX` access point. Connect to it
 
 ## Documentation
 
+- [Your First Automation — Quick Start](docs/first-automation-tutorial.md)
 - [Product Specifications](docs/product-specifications.md)
 - [Implementation Plan](docs/implementation-plan.md)
 - [Plugin Architecture](docs/plugin-architecture.md)
