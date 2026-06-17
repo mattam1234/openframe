@@ -224,7 +224,7 @@ async function refresh() {
   }
 }
 
-async function adopt(body, addr) {
+async function adopt(body, _addr) {
   statusMessage.value = null
   try {
     const res = await api.post('/api/hardware/adopt', body)

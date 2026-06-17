@@ -60,10 +60,17 @@
       </v-col>
     </v-row>
 
-    <v-row class="mt-2">
-      <v-col cols="12" md="6">
+    <div class="d-flex align-center justify-space-between mt-2">
+      <h2 class="text-subtitle-1"><v-icon class="mr-1" size="small">mdi-view-grid</v-icon>Panels</h2>
+      <v-btn v-if="layoutCustomised" size="x-small" variant="text" prepend-icon="mdi-restore" @click="resetLayout">Reset layout</v-btn>
+    </div>
+    <v-row>
+      <v-col cols="12" md="6" :style="{ order: orderOf('connection') }" @dragover.prevent @drop="onCardDrop('connection')">
         <v-card>
-          <v-card-title>Connection Status</v-card-title>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Connection Status
+            <v-icon class="drag-handle" size="small" draggable="true" title="Drag to reorder" aria-label="Drag to reorder" @dragstart="onCardDragStart('connection')">mdi-drag</v-icon>
+          </v-card-title>
           <v-card-text class="d-flex flex-column ga-3">
             <div>
               <v-chip :color="wsStore.connected ? 'success' : 'error'" class="mr-2">
@@ -92,9 +99,12 @@
         </v-card>
       </v-col>
 
-      <v-col cols="12" md="6">
+      <v-col cols="12" md="6" :style="{ order: orderOf('subsystems') }" @dragover.prevent @drop="onCardDrop('subsystems')">
         <v-card>
-          <v-card-title>Subsystems</v-card-title>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Subsystems
+            <v-icon class="drag-handle" size="small" draggable="true" title="Drag to reorder" aria-label="Drag to reorder" @dragstart="onCardDragStart('subsystems')">mdi-drag</v-icon>
+          </v-card-title>
           <v-list density="compact">
             <v-list-item>
               <template #prepend><v-icon color="primary">mdi-chip</v-icon></template>
@@ -157,9 +167,12 @@
 
     <!-- ── Phase 8: Extended Health Row ─────────────────────────────────── -->
     <v-row class="mt-2">
-      <v-col cols="12" md="6">
+      <v-col cols="12" md="6" :style="{ order: orderOf('memory') }" @dragover.prevent @drop="onCardDrop('memory')">
         <v-card>
-          <v-card-title>Memory</v-card-title>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Memory
+            <v-icon class="drag-handle" size="small" draggable="true" title="Drag to reorder" aria-label="Drag to reorder" @dragstart="onCardDragStart('memory')">mdi-drag</v-icon>
+          </v-card-title>
           <v-card-text>
             <v-table density="compact">
               <tbody>
@@ -185,9 +198,12 @@
         </v-card>
       </v-col>
 
-      <v-col cols="12" md="6">
+      <v-col cols="12" md="6" :style="{ order: orderOf('diagnostics') }" @dragover.prevent @drop="onCardDrop('diagnostics')">
         <v-card>
-          <v-card-title>Diagnostics</v-card-title>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Diagnostics
+            <v-icon class="drag-handle" size="small" draggable="true" title="Drag to reorder" aria-label="Drag to reorder" @dragstart="onCardDragStart('diagnostics')">mdi-drag</v-icon>
+          </v-card-title>
           <v-card-text>
             <v-table density="compact">
               <tbody>
@@ -254,6 +270,49 @@
                 </li>
               </ul>
             </v-alert>
+
+            <!-- Boot/system self-test (#9) -->
+            <v-btn
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-stethoscope"
+              class="mt-3"
+              :loading="selfTest.busy"
+              @click="runSelfTest"
+            >
+              Run self-test
+            </v-btn>
+            <div v-if="selfTest.result" class="mt-2 text-body-2">
+              <div>RAM: <v-chip size="x-small" :color="selfTest.result.ram?.ok ? 'success' : 'error'">{{ selfTest.result.ram?.ok ? 'OK' : 'LOW' }}</v-chip>
+                {{ Math.round((selfTest.result.ram?.free_heap || 0) / 1024) }} KB free</div>
+              <div>Flash: <v-chip size="x-small" :color="selfTest.result.flash?.ok ? 'success' : 'error'">{{ selfTest.result.flash?.ok ? 'OK' : 'FAIL' }}</v-chip></div>
+              <div>Filesystem: <v-chip size="x-small" :color="selfTest.result.fs?.ok ? 'success' : 'error'">{{ selfTest.result.fs?.ok ? 'OK' : 'FAIL' }}</v-chip>
+                {{ Math.round((selfTest.result.fs?.used || 0) / 1024) }}/{{ Math.round((selfTest.result.fs?.total || 0) / 1024) }} KB</div>
+              <div>I²C devices: {{ (selfTest.result.i2c?.devices || []).join(', ') || 'none found' }}</div>
+            </div>
+            <div v-else-if="selfTest.error" class="mt-2 text-error text-body-2">{{ selfTest.error }}</div>
+
+            <!-- Network diagnostics (#86) -->
+            <v-btn
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-lan-connect"
+              class="mt-3 ml-2"
+              :loading="netDiag.busy"
+              @click="runNetDiag"
+            >
+              Network diagnostics
+            </v-btn>
+            <div v-if="netDiag.result" class="mt-2 text-body-2">
+              <div>WiFi: <v-chip size="x-small" :color="netDiag.result.wifi?.connected ? 'success' : 'error'">{{ netDiag.result.wifi?.connected ? 'up' : 'down' }}</v-chip>
+                {{ netDiag.result.wifi?.ip || '' }}<span v-if="netDiag.result.wifi?.gateway"> · gw {{ netDiag.result.wifi.gateway }}</span></div>
+              <div>DNS: <v-chip size="x-small" :color="netDiag.result.dns?.resolved ? 'success' : 'error'">{{ netDiag.result.dns?.resolved ? 'ok' : 'fail' }}</v-chip>
+                {{ netDiag.result.dns?.host }} → {{ netDiag.result.dns?.ip || '—' }} ({{ netDiag.result.dns?.ms }} ms)</div>
+              <div v-if="netDiag.result.mqtt?.enabled">Broker: <v-chip size="x-small" :color="netDiag.result.mqtt?.reachable ? 'success' : 'error'">{{ netDiag.result.mqtt?.reachable ? 'reachable' : 'unreachable' }}</v-chip>
+                {{ netDiag.result.mqtt?.host }}:{{ netDiag.result.mqtt?.port }}<span v-if="netDiag.result.mqtt?.ms != null"> ({{ netDiag.result.mqtt.ms }} ms)</span></div>
+              <div>Time: <v-chip size="x-small" :color="netDiag.result.ntp?.valid ? 'success' : 'warning'">{{ netDiag.result.ntp?.source }}</v-chip></div>
+            </div>
+            <div v-else-if="netDiag.error" class="mt-2 text-error text-body-2">{{ netDiag.error }}</div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -274,6 +333,77 @@ const deviceStore = useDeviceStore()
 const storage = ref({ total: 0, used: 0, free: 0 })
 const outputs = ref([])
 const crashlog = ref([])
+const selfTest = ref({ busy: false, result: null, error: '' })
+
+async function runSelfTest() {
+  selfTest.value.busy = true
+  selfTest.value.error = ''
+  try {
+    selfTest.value.result = await api.get('/api/selftest')
+  } catch (e) {
+    selfTest.value.error = e.message || 'Self-test failed'
+    selfTest.value.result = null
+  } finally {
+    selfTest.value.busy = false
+  }
+}
+
+// Dashboard panel layout (#48): reorder the panels by dragging their handle; the
+// order is persisted to localStorage and applied via CSS `order` (the v-row is a
+// flex container). New/unknown panels fall back to their default position.
+const DEFAULT_LAYOUT = ['connection', 'subsystems', 'memory', 'diagnostics']
+const LAYOUT_KEY = 'of-dashboard-layout'
+
+function loadLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null')
+    if (Array.isArray(saved) && saved.length) {
+      // Keep only known panels, then append any defaults missing from the saved set.
+      const known = saved.filter((id) => DEFAULT_LAYOUT.includes(id))
+      return [...known, ...DEFAULT_LAYOUT.filter((id) => !known.includes(id))]
+    }
+  } catch { /* ignore */ }
+  return [...DEFAULT_LAYOUT]
+}
+
+const layout = ref(loadLayout())
+const draggedCard = ref(null)
+const layoutCustomised = computed(() => layout.value.join() !== DEFAULT_LAYOUT.join())
+
+function orderOf(id) {
+  const i = layout.value.indexOf(id)
+  return i < 0 ? DEFAULT_LAYOUT.indexOf(id) : i
+}
+function onCardDragStart(id) { draggedCard.value = id }
+function onCardDrop(targetId) {
+  const from = draggedCard.value
+  draggedCard.value = null
+  if (!from || from === targetId) return
+  const next = layout.value.filter((id) => id !== from)
+  const at = next.indexOf(targetId)
+  next.splice(at < 0 ? next.length : at, 0, from)
+  layout.value = next
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+}
+function resetLayout() {
+  layout.value = [...DEFAULT_LAYOUT]
+  try { localStorage.removeItem(LAYOUT_KEY) } catch { /* ignore */ }
+}
+
+const netDiag = ref({ busy: false, result: null, error: '' })
+
+async function runNetDiag() {
+  netDiag.value.busy = true
+  netDiag.value.error = ''
+  try {
+    netDiag.value.result = await api.get('/api/netdiag')
+  } catch (e) {
+    netDiag.value.error = e.message || 'Diagnostics failed'
+    netDiag.value.result = null
+  } finally {
+    netDiag.value.busy = false
+  }
+}
 
 function mergeOutputs(list) {
   if (!Array.isArray(list)) return
@@ -394,4 +524,9 @@ const statusCards = computed(() => [
   },
 ])
 </script>
+
+<style scoped>
+.drag-handle { cursor: grab; opacity: 0.5; }
+.drag-handle:hover { opacity: 1; }
+</style>
 

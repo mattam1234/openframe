@@ -54,6 +54,7 @@
                   size="small"
                   variant="text"
                   color="error"
+                  aria-label="Delete profile"
                   :disabled="profile.active"
                   @click="confirmDelete(profile)"
                 />
@@ -110,6 +111,7 @@
                   size="small"
                   variant="text"
                   color="error"
+                  aria-label="Delete template"
                   @click="deleteTemplate(tmpl.id)"
                 />
               </template>

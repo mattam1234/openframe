@@ -40,6 +40,7 @@
                   <th>ID</th>
                   <th>Type</th>
                   <th>Pin</th>
+                  <th title="ESP32 capacitive touch (digital inputs)">Touch</th>
                   <th></th>
                 </tr>
               </thead>
@@ -74,11 +75,22 @@
                     />
                   </td>
                   <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="removeInput(idx)" />
+                    <!-- ESP32 native capacitive touch — only meaningful for digital inputs. -->
+                    <v-checkbox
+                      v-if="inp.subtype !== 'analog'"
+                      v-model="inp.touch"
+                      density="compact"
+                      hide-details
+                      title="Read this pin as a capacitive touch pad (ESP32)"
+                    />
+                    <span v-else class="text-medium-emphasis">—</span>
+                  </td>
+                  <td>
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove input" @click="removeInput(idx)" />
                   </td>
                 </tr>
                 <tr v-if="inputs.length === 0">
-                  <td colspan="4" class="text-medium-emphasis text-center py-4">
+                  <td colspan="5" class="text-medium-emphasis text-center py-4">
                     No inputs configured.
                   </td>
                 </tr>
@@ -166,10 +178,19 @@
                       style="min-width:110px"
                       placeholder="DIR pin"
                     />
+                    <!-- LED/RGB: opt-in gamma correction for perceptually-linear dimming. -->
+                    <v-checkbox
+                      v-else-if="['led', 'rgb'].includes(out.type)"
+                      v-model="out.gamma"
+                      label="γ"
+                      density="compact"
+                      hide-details
+                      title="Gamma correction (perceptually-linear dimming)"
+                    />
                     <span v-else class="text-medium-emphasis">—</span>
                   </td>
                   <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="removeOutput(idx)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove output" @click="removeOutput(idx)" />
                   </td>
                 </tr>
                 <tr v-if="outputs.length === 0">
@@ -238,7 +259,7 @@
                     <v-checkbox v-model="sensor.enabled" density="compact" hide-details />
                   </td>
                   <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="removeSensor(idx)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove sensor" @click="removeSensor(idx)" />
                   </td>
                 </tr>
                 <tr v-if="sensors.length === 0">
@@ -301,7 +322,7 @@
                   </td>
                   <td><v-checkbox v-model="disp.enabled" density="compact" hide-details /></td>
                   <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="removeDisplay(idx)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove display" @click="removeDisplay(idx)" />
                   </td>
                 </tr>
                 <tr v-if="displays.length === 0">
@@ -351,7 +372,7 @@ const sensorTypes = ['bme280', 'bmp280', 'dht22', 'ds18b20', 'sht31', 'bh1750', 
 const displayTypes = ['ssd1306', 'sh1106']
 
 function addInput() {
-  inputs.value.push({ id: `btn${inputs.value.length + 1}`, subtype: 'digital', pin: 0, pullup: true, inverted: false })
+  inputs.value.push({ id: `btn${inputs.value.length + 1}`, subtype: 'digital', pin: 0, pullup: true, inverted: false, touch: false })
 }
 
 function removeInput(idx) {
@@ -361,7 +382,7 @@ function removeInput(idx) {
 function addOutput() {
   // led_count/brightness only apply to ws2812 but are always sent so the device
   // persists them when the type is switched to an addressable strip.
-  outputs.value.push({ id: `led${outputs.value.length + 1}`, type: 'led', pin: 0, inverted: false, led_count: 1, brightness: 255, pin_dir: 0 })
+  outputs.value.push({ id: `led${outputs.value.length + 1}`, type: 'led', pin: 0, inverted: false, led_count: 1, brightness: 255, pin_dir: 0, gamma: false })
 }
 
 function removeOutput(idx) {

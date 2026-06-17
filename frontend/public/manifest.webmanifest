@@ -1,0 +1,14 @@
+{
+  "name": "OpenFrame",
+  "short_name": "OpenFrame",
+  "description": "OpenFrame device control & automation",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#121212",
+  "theme_color": "#1e88e5",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -143,7 +143,7 @@
                     />
                   </td>
                   <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click.stop="removeWidget(idx)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove widget" @click.stop="removeWidget(idx)" />
                   </td>
                 </tr>
                 <tr v-if="selectedPage.widgets.length === 0">

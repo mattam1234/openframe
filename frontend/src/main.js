@@ -1,6 +1,7 @@
 import { createApp, h } from 'vue'
 import { createPinia } from 'pinia'
 import { createVuetify } from 'vuetify'
+import { i18n } from './i18n'
 import {
   mdiAccessPoint,
   mdiAccountBoxMultiple,
@@ -224,4 +225,14 @@ createApp(App)
   .use(pinia)
   .use(router)
   .use(vuetify)
+  .use(i18n)
   .mount('#app')
+
+// Register the service worker so the UI is installable as a PWA (#50). The worker
+// is network-passthrough (no asset caching) to avoid serving stale chunks after a
+// firmware/UI re-flash.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* non-fatal */ })
+  })
+}

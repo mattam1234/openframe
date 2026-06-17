@@ -6,20 +6,25 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test:unit": "vitest run",
     "lint": "eslint . --ext .vue,.js,.ts --fix"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",
     "pinia": "^2.1.7",
     "vue": "^3.4.0",
+    "vue-i18n": "^9.14.5",
     "vue-router": "^4.3.0",
     "vuetify": "^3.6.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
+    "@vue/test-utils": "^2.4.11",
     "eslint": "^8.57.0",
     "eslint-plugin-vue": "^9.24.0",
+    "happy-dom": "^20.10.5",
     "vite": "^5.2.0",
-    "vite-plugin-vuetify": "^2.0.0"
+    "vite-plugin-vuetify": "^2.0.0",
+    "vitest": "^4.1.9"
   }
 }

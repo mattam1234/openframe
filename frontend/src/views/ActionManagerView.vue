@@ -78,10 +78,20 @@
                   </td>
                   <td class="text-right">
                     <v-btn
+                      icon="mdi-flask-outline"
+                      size="small"
+                      variant="text"
+                      title="Dry-run (simulate without driving hardware)"
+                      aria-label="Dry-run action"
+                      :loading="simulatingId === action.id"
+                      @click="simulateAction(action.id)"
+                    />
+                    <v-btn
                       icon="mdi-play"
                       size="small"
                       variant="text"
                       color="success"
+                      aria-label="Run action"
                       :loading="triggeringId === action.id"
                       @click="triggerAction(action.id)"
                     />
@@ -89,6 +99,7 @@
                       icon="mdi-pencil"
                       size="small"
                       variant="text"
+                      aria-label="Edit action"
                       @click="editAction(action)"
                     />
                     <v-btn
@@ -96,6 +107,7 @@
                       size="small"
                       variant="text"
                       color="error"
+                      aria-label="Delete action"
                       @click="confirmDelete('action', action)"
                     />
                   </td>
@@ -140,12 +152,14 @@
                       size="small"
                       variant="text"
                       color="success"
+                      aria-label="Run macro"
                       @click="triggerMacro(macro.id)"
                     />
                     <v-btn
                       icon="mdi-pencil"
                       size="small"
                       variant="text"
+                      aria-label="Edit macro"
                       @click="editMacro(macro)"
                     />
                     <v-btn
@@ -153,6 +167,7 @@
                       size="small"
                       variant="text"
                       color="error"
+                      aria-label="Delete macro"
                       @click="confirmDelete('macro', macro)"
                     />
                   </td>
@@ -238,8 +253,8 @@
                     </div>
                   </td>
                   <td class="text-right">
-                    <v-btn icon="mdi-play" size="small" variant="text" color="success" :loading="sceneBusy" @click="restoreScene(scene.name)" />
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" :loading="sceneBusy" @click="deleteScene(scene.name)" />
+                    <v-btn icon="mdi-play" size="small" variant="text" color="success" aria-label="Restore scene" :loading="sceneBusy" @click="restoreScene(scene.name)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Delete scene" :loading="sceneBusy" @click="deleteScene(scene.name)" />
                   </td>
                 </tr>
                 <tr v-if="scenes.length === 0">
@@ -651,6 +666,23 @@
           <v-switch v-model="editingMacro.enabled" label="Enabled" color="primary" />
           <div class="text-subtitle-2 mb-2">Action IDs (one per line)</div>
           <v-textarea v-model="editingMacro.actionsText" label="Action IDs" rows="4" />
+
+          <div class="text-subtitle-2 mt-2 mb-1 d-flex align-center">
+            Parameters
+            <span class="text-caption text-medium-emphasis ml-2">set these variables before the actions run</span>
+          </div>
+          <v-row v-for="(p, idx) in editingMacro.params" :key="'mp' + idx" no-gutters class="ga-2 mb-1" align="center">
+            <v-col>
+              <v-combobox v-model="p.variable_id" :items="variablesList" label="Variable" density="compact" hide-details />
+            </v-col>
+            <v-col>
+              <v-text-field v-model="p.value" label="Value" density="compact" hide-details />
+            </v-col>
+            <v-col cols="auto">
+              <v-btn icon="mdi-close" size="small" variant="text" @click="editingMacro.params.splice(idx, 1)" />
+            </v-col>
+          </v-row>
+          <v-btn size="small" variant="text" prepend-icon="mdi-plus" @click="editingMacro.params.push({ variable_id: '', value: '' })">Add parameter</v-btn>
         </v-card-text>
         <v-divider />
         <v-card-actions>
@@ -675,6 +707,28 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- Dry-run / simulate result (#42) -->
+    <v-dialog v-model="simDialog" max-width="560">
+      <v-card title="Dry run — what would happen">
+        <v-card-text>
+          <v-alert v-if="!simResult.ok && simResult.error" type="error" variant="tonal" density="compact" class="mb-2">
+            {{ simResult.error }}
+          </v-alert>
+          <p class="text-caption text-medium-emphasis mb-2">
+            Simulated steps for <strong>{{ simResult.id }}</strong> — no hardware was driven and no variables changed.
+          </p>
+          <ol v-if="simResult.steps.length" class="pl-4">
+            <li v-for="(step, idx) in simResult.steps" :key="idx" class="mb-1 font-monospace text-body-2">{{ step }}</li>
+          </ol>
+          <p v-else class="text-medium-emphasis">No steps would run (conditions not met, or the action is empty).</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="simDialog = false">Close</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -689,6 +743,9 @@ const saving = ref(false)
 const statusMessage = ref(null)
 const triggeringId = ref(null)
 const togglingId = ref(null)
+const simulatingId = ref(null)
+const simDialog = ref(false)
+const simResult = ref({ id: '', ok: false, steps: [], error: '' })
 
 const actions = ref([])
 const macros = ref([])
@@ -746,7 +803,7 @@ const actionStepTypes = [
 ]
 
 // Digital-input events an action can be bound to (must match firmware names).
-const inputEvents = ['Press', 'Release', 'LongPress', 'DoublePress', 'TriplePress', 'Hold', 'Repeat']
+const inputEvents = ['Press', 'Release', 'LongPress', 'DoublePress', 'TriplePress', 'Hold', 'Repeat', 'RotateCW', 'RotateCCW', 'KeyPress', 'KeyRelease']
 const outputCommands = [
   { value: 'digital', label: 'On / Off' },
   { value: 'rgb', label: 'Colour' },
@@ -813,7 +870,7 @@ const hhmmToSeconds = (hhmm) => {
   return h * 3600 + m * 60
 }
 const editingAction = ref({ id: '', name: '', enabled: true, trigger: newTrigger(), conditions: [], steps: [], _existing: false })
-const editingMacro = ref({ id: '', name: '', enabled: true, actionsText: '', _existing: false })
+const editingMacro = ref({ id: '', name: '', enabled: true, actionsText: '', params: [], _existing: false })
 
 const formatTs = (ms) => ms ? `${(ms / 1000).toFixed(1)}s` : '—'
 
@@ -930,7 +987,7 @@ async function saveAction() {
 }
 
 function openNewMacro() {
-  editingMacro.value = { id: '', name: '', enabled: true, actionsText: '', _existing: false }
+  editingMacro.value = { id: '', name: '', enabled: true, actionsText: '', params: [], _existing: false }
   macroDialog.value = true
 }
 
@@ -938,6 +995,7 @@ function editMacro(macro) {
   editingMacro.value = {
     ...macro,
     actionsText: (macro.action_ids || []).join('\n'),
+    params: (macro.params || []).map(p => ({ ...p })),
     _existing: true,
   }
   macroDialog.value = true
@@ -955,6 +1013,7 @@ async function saveMacro() {
       name: editingMacro.value.name,
       enabled: editingMacro.value.enabled,
       action_ids: actionIds,
+      params: (editingMacro.value.params || []).filter(p => p.variable_id),
     }
     await api.post('/api/macros', { macros: [payload] })
     await refresh()
@@ -988,6 +1047,19 @@ async function toggleEnabled(action) {
     statusMessage.value = { type: 'error', text: err.message || 'Toggle failed' }
   } finally {
     togglingId.value = null
+  }
+}
+
+async function simulateAction(id) {
+  simulatingId.value = id
+  try {
+    const res = await api.post('/api/actions/simulate', { id })
+    simResult.value = { id, ok: res.ok, steps: res.steps || [], error: res.error || '' }
+    simDialog.value = true
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Simulate failed' }
+  } finally {
+    simulatingId.value = null
   }
 }
 

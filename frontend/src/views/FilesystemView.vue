@@ -210,6 +210,7 @@
             {{ editor.error }}
           </v-alert>
           <v-textarea
+            v-if="!editor.showDiff"
             v-model="editor.content"
             :loading="editor.loading"
             variant="outlined"
@@ -219,8 +220,26 @@
             spellcheck="false"
             @update:model-value="editor.dirty = true"
           />
+          <div v-else class="diff-view font-monospace">
+            <div v-if="!diffChanged" class="text-medium-emphasis pa-2">No changes vs. the file on disk.</div>
+            <div
+              v-for="(row, idx) in diffRows"
+              :key="idx"
+              class="diff-row"
+              :class="`diff-${row.type}`"
+            >{{ row.type === 'add' ? '+ ' : row.type === 'del' ? '- ' : '  ' }}{{ row.text }}</div>
+          </div>
         </v-card-text>
         <v-card-actions>
+          <v-btn
+            variant="text"
+            size="small"
+            :prepend-icon="editor.showDiff ? 'mdi-pencil' : 'mdi-file-compare'"
+            :disabled="!editor.dirty"
+            @click="editor.showDiff = !editor.showDiff"
+          >
+            {{ editor.showDiff ? 'Edit' : 'Diff' }}
+          </v-btn>
           <v-btn
             v-if="editor.isJson"
             variant="text"
@@ -355,8 +374,8 @@ const stat = reactive({ total: 0, used: 0, free: 0 })
 const fileInput = ref(null)
 
 const editor = reactive({
-  open: false, path: '', content: '', loading: false, saving: false,
-  dirty: false, error: '', isJson: false,
+  open: false, path: '', content: '', original: '', loading: false, saving: false,
+  dirty: false, error: '', isJson: false, showDiff: false,
 })
 const deleteDialog = reactive({ open: false, path: '', busy: false, isDir: false })
 const nameDialog = reactive({ open: false, mode: 'folder', title: '', value: '', busy: false, error: '', original: '' })
@@ -443,18 +462,49 @@ async function inspect(entry) {
   editor.open = true
   editor.path = entry.path
   editor.content = ''
+  editor.original = ''
   editor.error = ''
   editor.dirty = false
+  editor.showDiff = false
   editor.isJson = entry.path.endsWith('.json')
   editor.loading = true
   try {
     editor.content = await api.fs.read(entry.path)
+    editor.original = editor.content
   } catch (error) {
     editor.error = error.message || 'Failed to read file'
   } finally {
     editor.loading = false
   }
 }
+
+// Minimal LCS-based line diff for the editor's "preview changes" view (#53):
+// returns rows tagged ctx/add/del so the user sees exactly what will change on the
+// device's filesystem before overwriting the on-disk file.
+const diffRows = computed(() => {
+  const a = editor.original.split('\n');
+  const b = editor.content.split('\n');
+  const n = a.length, m = b.length;
+  // LCS length table.
+  const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const rows = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { rows.push({ type: 'ctx', text: a[i] }); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) { rows.push({ type: 'del', text: a[i] }); i++; }
+    else { rows.push({ type: 'add', text: b[j] }); j++; }
+  }
+  while (i < n) rows.push({ type: 'del', text: a[i++] });
+  while (j < m) rows.push({ type: 'add', text: b[j++] });
+  return rows;
+});
+
+const diffChanged = computed(() => diffRows.value.some((r) => r.type !== 'ctx'));
 
 function formatJson() {
   editor.error = ''
@@ -610,4 +660,19 @@ onMounted(refresh)
   font-family: 'Roboto Mono', 'Consolas', monospace;
   font-size: 0.85rem;
 }
+.diff-view {
+  font-size: 0.85rem;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 4px;
+  padding: 4px 0;
+}
+.diff-row {
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0 8px;
+}
+.diff-add { background: rgba(76, 175, 80, 0.18); }
+.diff-del { background: rgba(229, 57, 53, 0.18); }
 </style>

@@ -167,7 +167,6 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import api from '../api/client'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
 

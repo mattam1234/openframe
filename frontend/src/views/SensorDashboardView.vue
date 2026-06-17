@@ -149,7 +149,7 @@
                     <v-checkbox v-model="sensor.enabled" density="compact" hide-details />
                   </td>
                   <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" @click="removeSensorConfig(idx)" />
+                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove sensor" @click="removeSensorConfig(idx)" />
                   </td>
                 </tr>
                 <tr v-if="configSensors.length === 0">

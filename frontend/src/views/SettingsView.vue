@@ -205,6 +205,8 @@
               persistent-hint
               class="mt-2"
             />
+            <v-switch v-model="form.time.rtc_enabled" label="DS3231 RTC present" color="primary" class="mt-2" hide-details />
+            <div class="text-caption text-medium-emphasis">Seeds the clock before/without NTP, and is re-synced from NTP when available.</div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -271,7 +273,7 @@ const form = reactive({
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
   nodelink: { enabled: false, channel: 0, gateway: false, key: '' },
-  time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '' },
+  time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '', rtc_enabled: false, rtc_address: 104 },
 })
 
 // Common POSIX TZ strings (the device applies any valid POSIX TZ; these are just
@@ -347,6 +349,8 @@ function applyConfig(config) {
   form.time.ntp_server = config?.time?.ntp_server || 'pool.ntp.org'
   form.time.ntp_server2 = config?.time?.ntp_server2 || 'time.nist.gov'
   form.time.tz = config?.time?.tz || ''
+  form.time.rtc_enabled = config?.time?.rtc_enabled ?? false
+  form.time.rtc_address = config?.time?.rtc_address ?? 104
 }
 
 function addManualNetwork() {
