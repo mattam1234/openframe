@@ -63,9 +63,21 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Lint
+        working-directory: frontend
+        run: npx eslint . --ext .vue,.js
+
+      - name: Unit tests (Vitest)
+        working-directory: frontend
+        run: npm run test:unit
+
       - name: Build
         working-directory: frontend
         run: npm run build
+
+      # Catch oversized UI assets before they break a LittleFS flash (#94).
+      - name: Check LittleFS size budget
+        run: node firmware/tools/check-fs-size.mjs
 
   audit:
     name: npm audit (${{ matrix.dir }})
@@ -101,6 +113,10 @@ jobs:
       - name: Install
         working-directory: cms
         run: npm ci
+
+      - name: Lint
+        working-directory: cms
+        run: npm run lint
 
       - name: Typecheck
         working-directory: cms

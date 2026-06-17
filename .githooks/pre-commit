@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# OpenFrame pre-commit hook (#92): lint/typecheck the areas with staged changes so
+# style/type regressions are caught before they land. No new dependencies — it
+# reuses the existing `npm run lint` (frontend) and `npm run typecheck` (cms).
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass for one commit:   git commit --no-verify
+set -u
+
+staged() { git diff --cached --name-only --diff-filter=ACM; }
+fail=0
+
+if staged | grep -qE '^frontend/.*\.(vue|js|ts)$'; then
+  if [ -d frontend/node_modules ]; then
+    echo "[pre-commit] linting frontend…"
+    ( cd frontend && npm run -s lint ) || fail=1
+  else
+    echo "[pre-commit] skipping frontend lint (run 'npm ci' in frontend/)"
+  fi
+fi
+
+if staged | grep -qE '^cms/.*\.ts$'; then
+  if [ -d cms/node_modules ]; then
+    echo "[pre-commit] linting + typechecking cms…"
+    ( cd cms && npm run -s lint ) || fail=1
+    ( cd cms && npm run -s typecheck ) || fail=1
+  else
+    echo "[pre-commit] skipping cms lint/typecheck (run 'npm ci' in cms/)"
+  fi
+fi
+
+# clang-format the staged C/C++ if a config and the tool are both present.
+if [ -f .clang-format ] && command -v clang-format >/dev/null 2>&1; then
+  mapfile -t cpp < <(staged | grep -E '^firmware/.*\.(cpp|h|hpp|c)$' || true)
+  if [ "${#cpp[@]}" -gt 0 ]; then
+    echo "[pre-commit] clang-format check…"
+    clang-format --dry-run --Werror "${cpp[@]}" || fail=1
+  fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "[pre-commit] checks failed — fix the issues above, or bypass with: git commit --no-verify"
+  exit 1
+fi
+exit 0

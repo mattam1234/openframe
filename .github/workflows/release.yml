@@ -1,0 +1,68 @@
+name: Release
+
+# On a version tag (v1.2.3), build every firmware target + the UI, then publish a
+# GitHub Release with the per-target firmware.bin and LittleFS image attached. The
+# device's OTA update-check reads these release assets (#95).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, esp32s3dev, esp32s3geek, esp32s3box, esp8266dev]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The UI is flashed into LittleFS, so build it before the FS image.
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check LittleFS size budget
+        run: node firmware/tools/check-fs-size.mjs
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Build LittleFS image
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }} -t buildfs
+
+      # Collect + rename the artifacts per-target so the release assets are unambiguous.
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp "firmware/.pio/build/${{ matrix.env }}/firmware.bin" "dist/openframe-${{ matrix.env }}-firmware.bin"
+          if [ -f "firmware/.pio/build/${{ matrix.env }}/littlefs.bin" ]; then
+            cp "firmware/.pio/build/${{ matrix.env }}/littlefs.bin" "dist/openframe-${{ matrix.env }}-littlefs.bin"
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
