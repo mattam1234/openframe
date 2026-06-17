@@ -21,6 +21,11 @@
 #define OF_VERSION_PATCH 0
 #define OF_VERSION_STRING "0.1.0"
 
+// Persisted config schema version. Bump when the on-disk config layout changes
+// and add a matching step in ConfigManager::migrate(). A missing/0 version means
+// a legacy (pre-versioning) config, which is migrated up on first boot.
+#define OF_CONFIG_SCHEMA_VERSION 1
+
 // Default AP settings
 #define OF_AP_SSID_PREFIX "OpenFrame-"
 #define OF_AP_PASSWORD ""

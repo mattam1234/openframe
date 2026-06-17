@@ -59,6 +59,44 @@ const char* actionTypeToString(ActionType t) {
     }
 }
 
+// Render a variable's current value as a string for template expansion,
+// matching how the API serialises each type.
+String varValueToString(const Variable& var) {
+    switch (var.type) {
+        case VarType::Integer: return String(var.valueInt);
+        case VarType::Float:   return String(var.valueFloat);
+        case VarType::Boolean: return var.valueBool ? "true" : "false";
+        case VarType::String:  return var.valueString;
+    }
+    return String("");
+}
+
+// Expand {{variableId}} tokens in `in` with the live value of each variable.
+// Unknown variables expand to an empty string; an unterminated "{{" is emitted
+// verbatim. Strings without any "{{" are returned untouched (cheap fast path).
+String expandTemplate(const String& in) {
+    if (in.indexOf("{{") < 0) return in;
+
+    String out;
+    out.reserve(in.length());
+    int i = 0;
+    const int n = static_cast<int>(in.length());
+    while (i < n) {
+        const int open = in.indexOf("{{", i);
+        if (open < 0) { out += in.substring(i); break; }
+        out += in.substring(i, open);
+        const int close = in.indexOf("}}", open + 2);
+        if (close < 0) { out += in.substring(open); break; }
+
+        String key = in.substring(open + 2, close);
+        key.trim();
+        const Variable* var = VariableManager::instance().get(key);
+        if (var) out += varValueToString(*var);
+        i = close + 2;
+    }
+    return out;
+}
+
 void deserializeConditions(const JsonArrayConst& arr, std::vector<Condition>& out) {
     out.clear();
     for (JsonObjectConst item : arr) {
@@ -271,6 +309,8 @@ bool ActionEngine::begin() {
 }
 
 void ActionEngine::loop() {
+    evaluateSchedules();
+
     if (_scheduled.empty()) return;
     // Fire scheduled (synchronized) triggers once the cluster clock reaches them.
     // If time is unknown (epoch 0), fire best-effort immediately.
@@ -283,6 +323,44 @@ void ActionEngine::loop() {
             triggerAction(id, error);
         } else {
             ++i;
+        }
+    }
+}
+
+void ActionEngine::evaluateSchedules() {
+    const uint32_t nowMs = millis();
+    const uint32_t epoch = TimeManager::instance().epoch();
+    const bool haveClock = TimeManager::instance().isValid();
+
+    for (auto& a : _actions) {
+        if (!a.enabled || a.trigger.source != "schedule") continue;
+
+        if (a.trigger.scheduleMode == "interval") {
+            const uint32_t intervalMs = a.trigger.intervalSec * 1000UL;
+            if (intervalMs == 0) continue;
+            // Arm on first sight so we don't fire immediately at boot.
+            if (!a.scheduleArmed) {
+                a.scheduleArmed = true;
+                a.lastScheduleMs = nowMs;
+                continue;
+            }
+            if (nowMs - a.lastScheduleMs >= intervalMs) {
+                a.lastScheduleMs = nowMs;
+                triggerAction(a.id);
+            }
+        } else if (a.trigger.scheduleMode == "daily") {
+            if (a.trigger.dailySeconds < 0 || !haveClock) continue;
+            const int32_t  day      = static_cast<int32_t>(epoch / 86400UL);
+            const uint32_t secOfDay = epoch % 86400UL;
+            // Arm so a time that already passed today isn't "caught up" on boot.
+            if (!a.scheduleArmed) {
+                a.scheduleArmed = true;
+                a.lastDailyDay  = (secOfDay >= static_cast<uint32_t>(a.trigger.dailySeconds)) ? day : day - 1;
+            }
+            if (day != a.lastDailyDay && secOfDay >= static_cast<uint32_t>(a.trigger.dailySeconds)) {
+                a.lastDailyDay = day;
+                triggerAction(a.id);
+            }
         }
     }
 }
@@ -348,9 +426,12 @@ bool ActionEngine::saveActions() const {
         obj["name"]    = action.name;
         obj["enabled"] = action.enabled;
         auto trig = obj["trigger"].to<JsonObject>();
-        trig["source"]   = action.trigger.source;
-        trig["input_id"] = action.trigger.inputId;
-        trig["event"]    = action.trigger.event;
+        trig["source"]        = action.trigger.source;
+        trig["input_id"]      = action.trigger.inputId;
+        trig["event"]         = action.trigger.event;
+        trig["schedule_mode"] = action.trigger.scheduleMode;
+        trig["interval_sec"]  = action.trigger.intervalSec;
+        trig["daily_seconds"] = action.trigger.dailySeconds;
         serializeConditions(action.conditions, obj["conditions"].to<JsonArray>());
         serializeSteps(action.steps, obj["steps"].to<JsonArray>());
     }
@@ -372,9 +453,12 @@ bool ActionEngine::loadActions() {
 
         if (item["trigger"].is<JsonObjectConst>()) {
             JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
-            action.trigger.source  = t["source"]   | String("");
-            action.trigger.inputId = t["input_id"] | String("");
-            action.trigger.event   = t["event"]    | String("");
+            action.trigger.source       = t["source"]        | String("");
+            action.trigger.inputId      = t["input_id"]      | String("");
+            action.trigger.event        = t["event"]         | String("");
+            action.trigger.scheduleMode = t["schedule_mode"] | String("");
+            action.trigger.intervalSec  = t["interval_sec"]  | 0;
+            action.trigger.dailySeconds = t["daily_seconds"] | -1;
         }
 
         if (item["conditions"].is<JsonArrayConst>()) {
@@ -402,7 +486,7 @@ void ActionEngine::registerBuiltInExecutors() {
             error = "MQTT topic required";
             return false;
         }
-        MqttManager::instance().publish(step.topic, step.body);
+        MqttManager::instance().publish(expandTemplate(step.topic), expandTemplate(step.body));
         return true;
     });
 
@@ -449,11 +533,12 @@ void ActionEngine::registerBuiltInExecutors() {
             error = "Unknown variable: " + step.variableId;
             return false;
         }
+        const String value = expandTemplate(step.value);
         switch (var->type) {
-            case VarType::Integer: VariableManager::instance().setInt(step.variableId, step.value.toInt()); break;
-            case VarType::Float:   VariableManager::instance().setFloat(step.variableId, step.value.toFloat()); break;
-            case VarType::Boolean: VariableManager::instance().setBool(step.variableId, step.value == "true" || step.value == "1"); break;
-            case VarType::String:  VariableManager::instance().setString(step.variableId, step.value); break;
+            case VarType::Integer: VariableManager::instance().setInt(step.variableId, value.toInt()); break;
+            case VarType::Float:   VariableManager::instance().setFloat(step.variableId, value.toFloat()); break;
+            case VarType::Boolean: VariableManager::instance().setBool(step.variableId, value == "true" || value == "1"); break;
+            case VarType::String:  VariableManager::instance().setString(step.variableId, value); break;
         }
         return true;
     });
@@ -525,7 +610,7 @@ void ActionEngine::registerBuiltInExecutors() {
         doc["entity_id"] = step.haEntityId;
         if (step.body.length()) {
             JsonDocument bodyDoc;
-            deserializeJson(bodyDoc, step.body);
+            deserializeJson(bodyDoc, expandTemplate(step.body));
             doc["service_data"].set(bodyDoc);
         }
         String payload;
@@ -544,7 +629,7 @@ void ActionEngine::registerBuiltInExecutors() {
 
     runner.registerExecutor(ActionType::Notification, [](const ActionStep& step, String&) -> bool {
         JsonDocument doc;
-        doc["message"] = step.message;
+        doc["message"] = expandTemplate(step.message);
         String payload;
         serializeJson(doc, payload);
         EventBus::instance().publish(EventType::NotificationPosted, "action", payload);
@@ -566,17 +651,21 @@ void ActionEngine::registerBuiltInExecutors() {
             error = "URL required";
             return false;
         }
+        // Interpolate {{variable}} tokens so this doubles as a templated webhook —
+        // e.g. POST {"temp": {{sensor_temp}}} to a Slack/IFTTT/custom endpoint.
+        const String url  = expandTemplate(step.url);
+        const String body = expandTemplate(step.body);
         HTTPClient http;
         // Portable form: the URL-only begin() overload is an obsolete hard error
         // on the ESP8266 core. begin(WiFiClient, url) works on both platforms.
         WiFiClient netClient;
-        http.begin(netClient, step.url);
+        http.begin(netClient, url);
         http.addHeader("Content-Type", "application/json");
         int code = 0;
         if (step.method == "POST") {
-            code = http.POST(step.body);
+            code = http.POST(body);
         } else if (step.method == "PUT") {
-            code = http.PUT(step.body);
+            code = http.PUT(body);
         } else {
             code = http.GET();
         }

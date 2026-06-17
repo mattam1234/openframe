@@ -20,6 +20,7 @@
 #include "../managers/OtaManager.h"
 #include "../managers/VariableManager.h"
 #include "../managers/WiFiManager.h"
+#include "../managers/MqttManager.h"
 #include "../managers/ProfileManager.h"
 #include "../managers/TimeManager.h"
 #include "../managers/HealthMonitor.h"
@@ -914,11 +915,19 @@ String ApiServer::buildStatusJson() const {
     doc["psramSize"] = of_psram_size();
     doc["cpuLoadPercent"] = static_cast<int>(HealthMonitor::instance().getCpuLoadPercent());
     doc["rebootReason"] = HealthMonitor::instance().getRebootReason();
+    doc["safeMode"] = HealthMonitor::instance().inSafeMode();
     doc["wifiConnected"] = wifiConnected;
     doc["apMode"] = WiFiManager::instance().isApMode();
     doc["ip"] = WiFiManager::instance().localIP();
+    doc["hostname"] = WiFiManager::instance().hostname();
+    doc["mdnsHost"] = WiFiManager::instance().hostname() + ".local";
     doc["rssi"] = wifiConnected ? WiFi.RSSI() : 0;
     doc["mqttEnabled"] = config.mqtt.enabled;
+    if (config.mqtt.enabled) {
+        doc["mqttConnected"] = MqttManager::instance().isConnected();
+        const String mqttErr = MqttManager::instance().lastError();
+        if (mqttErr.length()) doc["mqttLastError"] = mqttErr;
+    }
     doc["haEnabled"] = config.ha.enabled;
     doc["otaEnabled"] = config.ota.enabled;
     doc["logCount"] = Logger::instance().getEntryCount();
@@ -1646,9 +1655,12 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
 
         if (item["trigger"].is<JsonObjectConst>()) {
             JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
-            action.trigger.source  = t["source"]   | String("");
-            action.trigger.inputId = t["input_id"] | String("");
-            action.trigger.event   = t["event"]    | String("");
+            action.trigger.source       = t["source"]        | String("");
+            action.trigger.inputId      = t["input_id"]      | String("");
+            action.trigger.event        = t["event"]         | String("");
+            action.trigger.scheduleMode = t["schedule_mode"] | String("");
+            action.trigger.intervalSec  = t["interval_sec"]  | 0;
+            action.trigger.dailySeconds = t["daily_seconds"] | -1;
         }
 
         if (item["conditions"].is<JsonArrayConst>()) {

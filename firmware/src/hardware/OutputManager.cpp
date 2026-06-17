@@ -303,6 +303,33 @@ bool OutputManager::applyBuzzer(size_t index, uint16_t frequency, uint16_t durat
     return true;
 }
 
+void OutputManager::identify() {
+    // Remember the on-state of simple digital outputs so we can restore them
+    // after the attention-grabbing blink pattern.
+    std::vector<std::pair<size_t, bool>> savedDigital;
+    for (size_t i = 0; i < _configs.size(); ++i) {
+        const OutputType t = _configs[i].type;
+        if (t == OutputType::Led || t == OutputType::Relay || t == OutputType::Ws2812) {
+            savedDigital.emplace_back(i, _states[i].on);
+        }
+    }
+
+    constexpr int CYCLES = 5;
+    for (int c = 0; c < CYCLES; ++c) {
+        for (const auto& d : savedDigital) applyDigital(d.first, true);
+        for (size_t i = 0; i < _configs.size(); ++i) {
+            if (_configs[i].type == OutputType::Buzzer) applyBuzzer(i, 2200, 90);
+        }
+        delay(120);
+        for (const auto& d : savedDigital) applyDigital(d.first, false);
+        delay(120);
+    }
+
+    // Restore the outputs we toggled.
+    for (const auto& d : savedDigital) applyDigital(d.first, d.second);
+    LOG_I(TAG, "Identify pulse complete");
+}
+
 int OutputManager::findIndexById(const String& id) const {
     for (size_t i = 0; i < _configs.size(); ++i) {
         if (_configs[i].id == id) return static_cast<int>(i);

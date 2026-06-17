@@ -93,6 +93,10 @@ private:
     ConfigManager() = default;
     void applyDefaults();
 
+    // Apply stepwise migrations to bring a config persisted under `fromVersion`
+    // up to OF_CONFIG_SCHEMA_VERSION. Operates on the already-loaded _config.
+    void migrate(int fromVersion);
+
     AppConfig _config;
     static constexpr const char* TAG = "Config";
 };

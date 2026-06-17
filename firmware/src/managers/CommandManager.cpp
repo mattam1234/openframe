@@ -7,6 +7,9 @@
 #include "TelemetryManager.h"
 #include "ProfileManager.h"
 #include "WiFiManager.h"
+#include "HealthMonitor.h"
+#include "../core/EventBus.h"
+#include "../hardware/OutputManager.h"
 
 #if defined(ESP32)
     #include <HTTPUpdate.h>
@@ -84,7 +87,15 @@ void CommandManager::handle(const String& payload) {
     } else if (type == "identify") {
         LOG_I(TAG, "*** IDENTIFY *** I am '" + ConfigManager::instance().config().device.name +
                        "' (" + MqttManager::instance().deviceTopic("") + ")");
+        // Flash the screen + web UI via a notification (works even in safe mode).
+        EventBus::instance().publish(EventType::NotificationPosted, "identify",
+                                     "{\"message\":\"Identify\"}");
+        // Ack before the (blocking) blink so the CMS sees a prompt response.
         ack(id, type, true);
+        // Blink LEDs / beep the buzzer when hardware is running.
+        if (!HealthMonitor::instance().inSafeMode()) {
+            OutputManager::instance().identify();
+        }
     } else if (type == "reboot") {
         ack(id, type, true);
         _rebootPending = true;

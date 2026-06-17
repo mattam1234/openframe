@@ -1,6 +1,25 @@
 #include "MqttManager.h"
 #include "WiFiManager.h"
 
+namespace {
+// Translate a PubSubClient state() code into a human-readable reason.
+const char* mqttStateToString(int state) {
+    switch (state) {
+        case -4: return "Connection timeout";
+        case -3: return "Connection lost";
+        case -2: return "Connect failed (broker unreachable)";
+        case -1: return "Disconnected";
+        case  0: return "Connected";
+        case  1: return "Bad protocol version";
+        case  2: return "Rejected client id";
+        case  3: return "Broker unavailable";
+        case  4: return "Bad username/password";
+        case  5: return "Not authorized";
+        default: return "Unknown error";
+    }
+}
+}  // namespace
+
 MqttManager& MqttManager::instance() {
     static MqttManager inst;
     return inst;
@@ -109,6 +128,7 @@ void MqttManager::connect() {
 
     if (ok) {
         _backoffMs = 2000;
+        _lastError = "";
         LOG_I(TAG, "MQTT connected to " + cfg.host);
         // Retained birth message — clears the will and marks the node present for
         // anyone (CMS, HA) subscribing after we connected.
@@ -116,8 +136,10 @@ void MqttManager::connect() {
         resubscribeAll();
         EventBus::instance().publish(EventType::MqttConnected, "mqtt", "");
     } else {
+        const int state = _client.state();
+        _lastError = String(mqttStateToString(state)) + " (rc=" + String(state) + ")";
         _backoffMs = min(_backoffMs * 2, (uint32_t)MAX_BACKOFF_MS);
-        LOG_W(TAG, "MQTT connect failed (rc=" + String(_client.state()) + ") — retry in " + String(_backoffMs / 1000) + "s");
+        LOG_W(TAG, "MQTT connect failed: " + _lastError + " — retry in " + String(_backoffMs / 1000) + "s");
         EventBus::instance().publish(EventType::MqttDisconnected, "mqtt", "");
     }
 }

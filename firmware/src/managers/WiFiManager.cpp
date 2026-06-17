@@ -50,6 +50,11 @@ void WiFiManager::loop() {
         return;
     }
 
+    // Pump the mDNS responder (no-op on ESP32, required on ESP8266).
+    if (_connected) {
+        of_mdns_update();
+    }
+
     // Check if we lost connection
     if (_connected && WiFi.status() != WL_CONNECTED) {
         LOG_W(TAG, "WiFi connection lost");
@@ -170,7 +175,19 @@ void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
 void WiFiManager::onConnected() {
     _connected = true;
     LOG_I(TAG, "Connected — IP: " + WiFi.localIP().toString());
+    startMdns();
     EventBus::instance().publish(EventType::WifiConnected, "wifi", WiFi.localIP().toString());
+}
+
+void WiFiManager::startMdns() {
+    // (Re)start the responder on every (re)connect — the link may have dropped
+    // and the previous responder is no longer bound to a valid interface.
+    if (of_mdns_begin(hostname().c_str())) {
+        of_mdns_add_http(80);
+        LOG_I(TAG, "mDNS responder started: " + hostname() + ".local");
+    } else {
+        LOG_W(TAG, "mDNS responder failed to start");
+    }
 }
 
 void WiFiManager::onDisconnected() {
@@ -198,6 +215,20 @@ const String& WiFiManager::deviceId() const {
         id = String(buf);
     }
     return id;
+}
+
+const String& WiFiManager::hostname() const {
+    // "openframe-xxxx" — matches the AP SSID suffix (last 2 MAC bytes), lowercased
+    // for mDNS. Cached on first use; the MAC is stable from first boot.
+    static String host;
+    if (host.isEmpty()) {
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        char buf[24];
+        snprintf(buf, sizeof(buf), "openframe-%02x%02x", mac[4], mac[5]);
+        host = String(buf);
+    }
+    return host;
 }
 
 bool WiFiManager::hasConfiguredNetworks() const {

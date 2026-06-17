@@ -86,6 +86,11 @@ public:
     bool setAnimation(const String& id, LedAnimation animation, uint8_t speed);
     bool beep(const String& id, uint16_t frequency, uint16_t durationMs);
 
+    // Physically locate the device: blink every LED/relay output and beep every
+    // buzzer a few times, then restore each output's prior on-state. Blocking
+    // (~1.3 s) — intended for the occasional manual "identify" command.
+    void identify();
+
     // Serialise the live state of every output (id, type, on, colour, animation…)
     // into the given array — used by the control UI to render and stay in sync.
     void fillStateJson(JsonArray& arr) const;

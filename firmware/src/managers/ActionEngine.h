@@ -74,9 +74,16 @@ struct ActionStep {
 
 // Optional trigger that auto-runs an action when a hardware event fires.
 struct ActionTrigger {
-    String source;   // "" / "manual" → run only on demand; "input" → bound to a digital input
+    String source;   // "" / "manual" → on demand; "input" → digital input; "schedule" → time-based
     String inputId;  // for source == "input"
     String event;    // digital-input event: "Press", "Release", "LongPress", "DoublePress"…
+
+    // source == "schedule": "interval" runs every intervalSec (millis-based, needs
+    // no wall clock); "daily" runs once per day at dailySeconds past 00:00 UTC
+    // (needs NTP/cluster time — see TimeManager).
+    String   scheduleMode;
+    uint32_t intervalSec  = 0;
+    int32_t  dailySeconds = -1;
 };
 
 struct ActionConfig {
@@ -86,6 +93,12 @@ struct ActionConfig {
     ActionTrigger           trigger;
     std::vector<Condition>  conditions;
     std::vector<ActionStep> steps;
+
+    // Runtime schedule bookkeeping (not persisted). Reset whenever the action is
+    // (re)registered so an edit re-arms the schedule cleanly.
+    uint32_t lastScheduleMs = 0;
+    int32_t  lastDailyDay   = -1;
+    bool     scheduleArmed  = false;
 };
 
 struct ActionHistoryEntry {
@@ -146,6 +159,8 @@ private:
     void recordHistory(const String& id, const String& name, bool success, const String& error);
     void onEventTriggered(const Event& event);
     void onInputEvent(const String& inputId, const String& payload);
+    // Fire any "schedule"-source actions whose interval/daily time has elapsed.
+    void evaluateSchedules();
 
     // A cross-node action scheduled to fire at a shared cluster-clock epoch.
     struct ScheduledTrigger { uint32_t epoch; String actionId; };

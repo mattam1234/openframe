@@ -5,6 +5,19 @@
       Dashboard
     </h1>
 
+    <v-alert
+      v-if="status.safeMode"
+      type="error"
+      variant="tonal"
+      class="mb-4"
+      icon="mdi-shield-alert"
+      title="Safe Mode"
+    >
+      The device rebooted repeatedly and started in <strong>safe mode</strong>: hardware and
+      automation are disabled so it stays reachable. Fix the configuration (or apply an OTA update),
+      then reboot to resume normal operation.
+    </v-alert>
+
     <v-row>
       <v-col v-for="card in statusCards" :key="card.label" cols="12" sm="6" md="4" lg="3">
         <v-card>
@@ -54,6 +67,10 @@
             <div class="text-body-2">
               <div><strong>Device:</strong> {{ status.name || '—' }}</div>
               <div><strong>IP Address:</strong> {{ status.ip || '—' }}</div>
+              <div v-if="status.mdnsHost && !status.apMode">
+                <strong>Hostname:</strong>
+                <a :href="`http://${status.mdnsHost}`" class="text-decoration-none">{{ status.mdnsHost }}</a>
+              </div>
               <div><strong>Variables:</strong> {{ status.variableCount ?? '—' }}</div>
               <div><strong>Logs:</strong> {{ status.logCount ?? '—' }}</div>
               <div v-if="status.rebootReason"><strong>Last Reboot:</strong> {{ status.rebootReason }}</div>
@@ -79,10 +96,11 @@
             <v-list-item>
               <template #prepend><v-icon color="secondary">mdi-transit-connection-variant</v-icon></template>
               <v-list-item-title>MQTT</v-list-item-title>
+              <v-list-item-subtitle v-if="status.mqttEnabled && !status.mqttConnected && status.mqttLastError">
+                {{ status.mqttLastError }}
+              </v-list-item-subtitle>
               <template #append>
-                <v-chip :color="status.mqttEnabled ? 'success' : 'default'" size="small">
-                  {{ status.mqttEnabled ? 'Enabled' : 'Disabled' }}
-                </v-chip>
+                <v-chip :color="mqttChip.color" size="small">{{ mqttChip.text }}</v-chip>
               </template>
             </v-list-item>
             <v-list-item>
@@ -269,6 +287,13 @@ const status = computed(() => ({
 const sensorFailures = computed(() =>
   Array.isArray(status.value.sensors) ? status.value.sensors : []
 )
+
+const mqttChip = computed(() => {
+  if (!status.value.mqttEnabled) return { color: 'default', text: 'Disabled' }
+  return status.value.mqttConnected
+    ? { color: 'success', text: 'Connected' }
+    : { color: 'warning', text: 'Disconnected' }
+})
 
 const formatHeap = (value) => (
   value === undefined || value === null

@@ -37,6 +37,10 @@ public:
     // used as the node's identity in the fleet MQTT topic space and the CMS.
     const String& deviceId() const;
 
+    // mDNS/DHCP hostname: "openframe-xxxx" (last 2 MAC bytes, lowercase). The
+    // device is reachable at "<hostname>.local" once connected in STA mode.
+    const String& hostname() const;
+
     // Force switch to AP mode (e.g. after repeated STA failures)
     void startAP();
 
@@ -51,6 +55,7 @@ private:
 
     void     onConnected();
     void     onDisconnected();
+    void     startMdns();
     String   buildApSsid() const;
     bool     connectToBestConfiguredNetwork();
     bool     hasConfiguredNetworks() const;

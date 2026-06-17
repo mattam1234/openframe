@@ -48,6 +48,29 @@ String baseName(const String& path) {
     return slash >= 0 ? path.substring(slash + 1) : path;
 }
 
+// Sibling temp path for an atomic write. The ".oft" suffix (not ".json") keeps
+// stray temps out of the NVS-backup set (shouldBackupJson matches ".json").
+String tempPathFor(const String& path) {
+    return path + ".oft";
+}
+
+// Atomically replace `path` with the already-written temp file. LittleFS rename
+// commits the directory entry in a single step, so the target is either the old
+// content or the new content — never a torn write. A few cores reject renaming
+// onto an existing file; fall back to remove-then-rename only if the atomic form
+// fails, which is still far safer than truncating before the write.
+bool commitTemp(const String& tmp, const String& path) {
+    if (LittleFS.rename(tmp, path)) return true;
+
+    if (LittleFS.exists(path) && LittleFS.remove(path) && LittleFS.rename(tmp, path)) {
+        return true;
+    }
+
+    LOG_E("Storage", "Commit (rename) failed: " + tmp + " -> " + path);
+    LittleFS.remove(tmp);
+    return false;
+}
+
 
 #if defined(ESP32)
 constexpr const char* STORAGE_BACKUP_NS = "ofstore";
@@ -372,9 +395,17 @@ bool StorageManager::readJson(const String& path, JsonDocument& doc) {
 
 bool StorageManager::writeJson(const String& path, const JsonDocument& doc) {
     StorageLock lock;
-    File f = LittleFS.open(path, "w");
+
+    // Atomic write: stream into a sibling temp file, fsync, then rename over the
+    // target. LittleFS rename is an atomic metadata commit, so a power loss can
+    // only ever leave the *old* file intact (or a stray .tmp) — never a
+    // half-written, unparseable config. The previous in-place "w" open truncated
+    // the real file before the new bytes were committed, so a crash mid-write
+    // bricked the config until NVS restore or defaults kicked in.
+    const String tmp = tempPathFor(path);
+    File f = LittleFS.open(tmp, "w");
     if (!f) {
-        LOG_E(TAG, "Cannot open for write: " + path);
+        LOG_E(TAG, "Cannot open temp for write: " + tmp);
         return false;
     }
 
@@ -385,13 +416,15 @@ bool StorageManager::writeJson(const String& path, const JsonDocument& doc) {
     f.close();
 
     if (written != expected || writeError) {
-        // A truncated/partial file is worse than no file — callers can fall
-        // back to NVS or defaults if it's absent, but a half-written JSON would
-        // fail to parse forever. Comparing against measureJson() catches
-        // disk-full partial writes that getWriteError() may miss on ESP8266.
+        // Comparing against measureJson() catches disk-full partial writes that
+        // getWriteError() may miss on ESP8266. The real file is untouched.
         LOG_E(TAG, "Write failed (" + String(written) + "/" + String(expected) +
                        " bytes, err=" + String(writeError ? 1 : 0) + "): " + path);
-        LittleFS.remove(path);
+        LittleFS.remove(tmp);
+        return false;
+    }
+
+    if (!commitTemp(tmp, path)) {
         return false;
     }
 
@@ -404,9 +437,13 @@ bool StorageManager::writeJson(const String& path, const JsonDocument& doc) {
 
 bool StorageManager::writeRaw(const String& path, const String& body) {
     StorageLock lock;
-    File f = LittleFS.open(path, "w");
+
+    // Same atomic temp-then-rename strategy as writeJson() — an interrupted
+    // upload leaves the existing file intact rather than truncating it.
+    const String tmp = tempPathFor(path);
+    File f = LittleFS.open(tmp, "w");
     if (!f) {
-        LOG_E(TAG, "Cannot open for write: " + path);
+        LOG_E(TAG, "Cannot open temp for write: " + tmp);
         return false;
     }
     const size_t written = f.print(body);
@@ -416,7 +453,10 @@ bool StorageManager::writeRaw(const String& path, const String& body) {
     if (written != body.length() || writeError) {
         LOG_E(TAG, "Raw write failed (" + String(written) + "/" + String(body.length()) +
                        ", err=" + String(writeError ? 1 : 0) + "): " + path);
-        LittleFS.remove(path);
+        LittleFS.remove(tmp);
+        return false;
+    }
+    if (!commitTemp(tmp, path)) {
         return false;
     }
     LOG_D(TAG, "Wrote raw: " + path + " (" + String(written) + " bytes)");

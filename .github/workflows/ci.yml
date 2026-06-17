@@ -1,0 +1,111 @@
+name: CI
+
+# Build every firmware target, the Vue frontend, and run the CMS test suite on
+# each push and pull request so a broken build is caught before merge.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: firmware (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, esp32s3dev, esp8266dev]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Cache the PlatformIO core, toolchains, and downloaded libraries — the
+      # bulk of a cold firmware build is fetching these.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ matrix.env }}-
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.env }}
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }}
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  audit:
+    name: npm audit (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    # Advisory signal only — a vulnerable transitive dep with no fix yet should
+    # surface, not block unrelated PRs. Dependabot opens the remediation PRs.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [frontend, cms]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Audit
+        working-directory: ${{ matrix.dir }}
+        run: npm audit --audit-level=high
+
+  cms:
+    name: cms typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cms/package-lock.json
+
+      - name: Install
+        working-directory: cms
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: cms
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: cms
+        run: npm test

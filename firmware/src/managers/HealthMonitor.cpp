@@ -15,10 +15,39 @@ void HealthMonitor::begin() {
     // Determine reboot reason once at startup (platform-abstracted)
     _rebootReason = of_reboot_reason();
 
-    LOG_I(TAG, "Initialised — reboot reason: " + _rebootReason);
+    // Crash-loop guard: count this boot up front. The counter is cleared once
+    // the device proves stable (see markLoopStart) or on a real power cycle.
+    _bootCount = of_boot_count_get() + 1;
+    of_boot_count_set(_bootCount);
+
+    _safeMode = _bootCount >= SAFE_MODE_THRESHOLD;
+    if (_safeMode) {
+        LOG_W(TAG, "SAFE MODE — " + String(_bootCount) +
+                       " consecutive unstable boots (reason: " + _rebootReason + ")");
+        // Clear immediately so the next boot retries normally rather than getting
+        // wedged in safe mode forever; if crashes persist it re-enters after
+        // another SAFE_MODE_THRESHOLD boots.
+        of_boot_count_set(0);
+        _bootCount = 0;
+    }
+
+    // Arm the watchdog after the mode decision so even a hang in safe mode reboots.
+    of_watchdog_enable(WDT_TIMEOUT_SEC);
+
+    LOG_I(TAG, "Initialised — reboot reason: " + _rebootReason +
+                   ", safeMode=" + String(_safeMode ? "true" : "false"));
 }
 
 void HealthMonitor::markLoopStart() {
+    // Feed the watchdog every loop and clear the crash counter once we've run
+    // long enough to call this boot stable.
+    of_watchdog_feed();
+    if (!_stableMarked && millis() >= STABLE_UPTIME_MS) {
+        _stableMarked = true;
+        of_boot_count_set(0);
+        LOG_I(TAG, "Boot stable — crash-loop counter cleared");
+    }
+
     _loopStartMs = millis();
 
     // Flush the measurement window every WINDOW_MS

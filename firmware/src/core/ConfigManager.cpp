@@ -73,6 +73,7 @@ bool ConfigManager::begin() {
     }
 
     const bool persistedForcedAp = doc["wifi"].is<JsonObjectConst>() && (doc["wifi"]["ap_mode"] | false);
+    const int  loadedSchema      = doc["schema_version"] | 0;
 
     if (!fromJson(doc)) {
         LOG_W(TAG, "Config parse failed — using defaults");
@@ -80,17 +81,35 @@ bool ConfigManager::begin() {
     }
 
     LOG_I(TAG,
-          "Config loaded: device=" + _config.device.name +
+          "Config loaded: schema=v" + String(loadedSchema) +
+          ", device=" + _config.device.name +
           ", wifiNetworks=" + String(_config.wifi.networks.size()) +
           ", apMode=" + String(_config.wifi.apMode ? "true" : "false") +
           ", mqtt=" + String(_config.mqtt.enabled ? "enabled" : "disabled") +
           ", ha=" + String(_config.ha.enabled ? "enabled" : "disabled"));
 
-    if (persistedForcedAp && !_config.wifi.apMode && !_config.wifi.networks.empty()) {
+    // Upgrade an older on-disk schema, then re-persist so the migration runs once.
+    if (loadedSchema < OF_CONFIG_SCHEMA_VERSION) {
+        migrate(loadedSchema);
+        LOG_I(TAG, "Migrated config schema v" + String(loadedSchema) +
+                       " -> v" + String(OF_CONFIG_SCHEMA_VERSION));
+        save();
+    } else if (persistedForcedAp && !_config.wifi.apMode && !_config.wifi.networks.empty()) {
         LOG_I(TAG, "Persisting normalized WiFi AP mode");
         save();
     }
     return true;
+}
+
+void ConfigManager::migrate(int fromVersion) {
+    // Stepwise migrations: each block transforms _config from version N to N+1.
+    // Append new blocks below as the schema evolves; never reorder existing ones.
+    //
+    // v0 (legacy / unversioned) -> v1: no structural change — the only effect is
+    // adopting the version stamp on the next save(). Field-level migrations go
+    // here, e.g.:
+    //   if (fromVersion < 2) { /* rename or backfill a field */ }
+    (void)fromVersion;
 }
 
 bool ConfigManager::save() {
@@ -138,6 +157,8 @@ void ConfigManager::applyDefaults() {
 }
 
 void ConfigManager::toJson(JsonDocument& doc) const {
+    doc["schema_version"] = OF_CONFIG_SCHEMA_VERSION;
+
     auto device      = doc["device"].to<JsonObject>();
     device["name"]   = _config.device.name;
     device["board"]  = _config.device.boardType;

@@ -206,12 +206,43 @@
             <v-col cols="12" sm="4">
               <v-select
                 v-model="editingAction.trigger.source"
-                :items="[{ value: 'manual', title: 'Manual / triggered by name' }, { value: 'input', title: 'When an input fires' }]"
+                :items="[{ value: 'manual', title: 'Manual / triggered by name' }, { value: 'input', title: 'When an input fires' }, { value: 'schedule', title: 'On a schedule' }]"
                 label="Trigger"
                 density="compact"
                 hide-details
               />
             </v-col>
+            <template v-if="editingAction.trigger.source === 'schedule'">
+              <v-col cols="12" sm="4">
+                <v-select
+                  v-model="editingAction.trigger.schedule_mode"
+                  :items="[{ value: 'interval', title: 'Every N seconds' }, { value: 'daily', title: 'Daily at time' }]"
+                  label="Mode"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="12" sm="4">
+                <v-text-field
+                  v-if="editingAction.trigger.schedule_mode === 'daily'"
+                  v-model="editingAction.trigger.daily_time"
+                  type="time"
+                  label="Time (UTC)"
+                  hint="Needs NTP/cluster time"
+                  persistent-hint
+                  density="compact"
+                />
+                <v-text-field
+                  v-else
+                  v-model.number="editingAction.trigger.interval_sec"
+                  type="number"
+                  :min="1"
+                  label="Interval (seconds)"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </template>
             <template v-if="editingAction.trigger.source === 'input'">
               <v-col cols="12" sm="4">
                 <v-select
@@ -301,7 +332,7 @@
                 <v-text-field v-if="step.type === 'delay'" v-model.number="step.delay_ms" label="Delay (ms)" type="number" density="compact" class="mt-2" />
                 <template v-if="step.type === 'mqtt_publish'">
                   <v-text-field v-model="step.topic" label="Topic" density="compact" class="mt-2" />
-                  <v-text-field v-model="step.body" label="Payload" density="compact" />
+                  <v-text-field v-model="step.body" label="Payload" hint="Supports {{variable}} templating" persistent-hint density="compact" />
                 </template>
 
                 <!-- Output control -->
@@ -377,7 +408,7 @@
                     class="mt-2"
                     :no-data-text="'No variables defined'"
                   />
-                  <v-text-field v-if="step.type === 'variable_set'" v-model="step.value" label="Value" density="compact" class="mt-2" />
+                  <v-text-field v-if="step.type === 'variable_set'" v-model="step.value" label="Value" hint="Supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                   <v-text-field v-if="step.type === 'variable_increment'" v-model.number="step.increment" label="Increment" type="number" density="compact" class="mt-2" />
                 </template>
 
@@ -404,11 +435,11 @@
                     :no-data-text="'No pages for this display'"
                   />
                 </template>
-                <v-text-field v-if="step.type === 'notification'" v-model="step.message" label="Message" density="compact" class="mt-2" />
+                <v-text-field v-if="step.type === 'notification'" v-model="step.message" label="Message" hint="Supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                 <template v-if="step.type === 'http_request'">
-                  <v-text-field v-model="step.url" label="URL" density="compact" class="mt-2" />
+                  <v-text-field v-model="step.url" label="URL" hint="Webhook URL — supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                   <v-select v-model="step.method" :items="['GET','POST','PUT','DELETE']" label="Method" density="compact" />
-                  <v-text-field v-model="step.body" label="Body" density="compact" />
+                  <v-text-field v-model="step.body" label="Body" hint="JSON payload — supports {{variable}} templating" persistent-hint density="compact" />
                 </template>
                 <template v-if="step.type === 'remote_action'">
                   <v-text-field v-model="step.node_id" label="Target node ID" hint="Device ID of the node to trigger" persistent-hint density="compact" class="mt-2" />
@@ -591,7 +622,23 @@ function setStepColor(step, hex) {
   step.r = parseInt(m[1], 16); step.g = parseInt(m[2], 16); step.b = parseInt(m[3], 16)
 }
 
-const newTrigger = () => ({ source: 'manual', input_id: '', event: 'Press' })
+const newTrigger = () => ({
+  source: 'manual', input_id: '', event: 'Press',
+  schedule_mode: 'interval', interval_sec: 60, daily_time: '08:00',
+})
+
+// HH:MM (UTC) <-> seconds-since-midnight helpers for the daily schedule.
+const secondsToHhmm = (secs) => {
+  if (secs === undefined || secs === null || secs < 0) return '08:00'
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+const hhmmToSeconds = (hhmm) => {
+  const [h, m] = String(hhmm || '').split(':').map((n) => parseInt(n, 10))
+  if (Number.isNaN(h) || Number.isNaN(m)) return -1
+  return h * 3600 + m * 60
+}
 const editingAction = ref({ id: '', name: '', enabled: true, trigger: newTrigger(), conditions: [], steps: [], _existing: false })
 const editingMacro = ref({ id: '', name: '', enabled: true, actionsText: '', _existing: false })
 
@@ -635,9 +682,15 @@ function openNewAction() {
 }
 
 function editAction(action) {
+  const trigger = { ...newTrigger(), ...(action.trigger || {}) }
+  // The device stores the daily schedule as seconds-since-midnight; the picker
+  // edits an HH:MM string.
+  if (action.trigger && action.trigger.daily_seconds >= 0) {
+    trigger.daily_time = secondsToHhmm(action.trigger.daily_seconds)
+  }
   editingAction.value = {
     ...action,
-    trigger: { ...newTrigger(), ...(action.trigger || {}) },
+    trigger,
     conditions: action.conditions ? JSON.parse(JSON.stringify(action.conditions)) : [],
     steps: action.steps ? JSON.parse(JSON.stringify(action.steps)) : [],
     _existing: true,
@@ -665,13 +718,24 @@ async function saveAction() {
   saving.value = true
   try {
     const t = editingAction.value.trigger || newTrigger()
+    let trigger
+    if (t.source === 'input') {
+      trigger = { source: 'input', input_id: t.input_id, event: t.event }
+    } else if (t.source === 'schedule') {
+      trigger = {
+        source: 'schedule',
+        schedule_mode: t.schedule_mode || 'interval',
+        interval_sec: Math.max(1, parseInt(t.interval_sec, 10) || 0),
+        daily_seconds: t.schedule_mode === 'daily' ? hhmmToSeconds(t.daily_time) : -1,
+      }
+    } else {
+      trigger = { source: 'manual', input_id: '', event: '' }
+    }
     const payload = {
       id: editingAction.value.id,
       name: editingAction.value.name,
       enabled: editingAction.value.enabled,
-      trigger: t.source === 'input'
-        ? { source: 'input', input_id: t.input_id, event: t.event }
-        : { source: 'manual', input_id: '', event: '' },
+      trigger,
       steps: editingAction.value.steps,
       conditions: (editingAction.value.conditions || []).filter(c => c.variable_id),
     }

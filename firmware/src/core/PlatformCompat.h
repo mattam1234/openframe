@@ -12,6 +12,7 @@
 
     #include <ESP8266WiFi.h>
     #include <ESP8266HTTPClient.h>
+    #include <ESP8266mDNS.h>
 
     // WiFi enum-name compatibility with the ESP32 core.
     #ifndef WIFI_MODE_NULL
@@ -29,6 +30,44 @@
     // ESP8266 uses WiFi.hostname() instead of WiFi.setHostname()
     inline void of_wifi_set_hostname(const char* name) {
         WiFi.hostname(name);
+    }
+
+    // ── mDNS (Bonjour) ─────────────────────────────────────────────────────────
+    // Advertise the device as <host>.local with an HTTP service record, so it can
+    // be reached without knowing its DHCP-assigned IP. ESP8266 needs MDNS.update()
+    // pumped from loop(); ESP32 services it on a background task.
+    inline bool of_mdns_begin(const char* host) {
+        MDNS.end();
+        return MDNS.begin(host);
+    }
+    inline void of_mdns_add_http(uint16_t port) {
+        MDNS.addService("http", "tcp", port);
+    }
+    inline void of_mdns_update() {
+        MDNS.update();
+    }
+
+    // ── Watchdog & crash-loop boot counter ─────────────────────────────────────
+    // The ESP8266 hardware watchdog is enabled by default; feed it from loop().
+    inline void of_watchdog_enable(uint32_t /*timeoutSec*/) { ESP.wdtFeed(); }
+    inline void of_watchdog_feed() { ESP.wdtFeed(); }
+
+    // Boot counter lives in RTC user memory: it survives a soft reset / watchdog
+    // reboot (so rapid crashes accumulate) but clears on a real power cycle (so a
+    // user power-cycling out of a bad state gets a clean slate). 0x0F0FB007 magic
+    // guards against reading uninitialised RTC RAM as a count.
+    struct OfBootData { uint32_t magic; uint32_t count; };
+    inline uint32_t of_boot_count_get() {
+        OfBootData d;
+        if (ESP.rtcUserMemoryRead(0, reinterpret_cast<uint32_t*>(&d), sizeof(d)) &&
+            d.magic == 0x0F0FB007UL) {
+            return d.count;
+        }
+        return 0;
+    }
+    inline void of_boot_count_set(uint32_t n) {
+        OfBootData d{0x0F0FB007UL, n};
+        ESP.rtcUserMemoryWrite(0, reinterpret_cast<uint32_t*>(&d), sizeof(d));
     }
 
     // Reboot reason as a human-readable string
@@ -69,12 +108,50 @@
 
     #include <WiFi.h>
     #include <HTTPClient.h>
+    #include <ESPmDNS.h>
     #include <esp_system.h>
+    #include <esp_task_wdt.h>
+    #include <Preferences.h>
 
     #define OF_WIFI_AUTH_OPEN WIFI_AUTH_OPEN
 
     inline void of_wifi_set_hostname(const char* name) {
         WiFi.setHostname(name);
+    }
+
+    // ── mDNS (Bonjour) ─────────────────────────────────────────────────────────
+    // ESP32's ESPmDNS runs on a background task, so of_mdns_update() is a no-op.
+    inline bool of_mdns_begin(const char* host) {
+        MDNS.end();
+        return MDNS.begin(host);
+    }
+    inline void of_mdns_add_http(uint16_t port) {
+        MDNS.addService("http", "tcp", port);
+    }
+    inline void of_mdns_update() {}
+
+    // ── Watchdog & crash-loop boot counter ─────────────────────────────────────
+    // Watch the loop task with the IDF task watchdog; panic=true reboots the
+    // device (reset reason "Task watchdog") if loop() ever stops feeding it.
+    inline void of_watchdog_enable(uint32_t timeoutSec) {
+        esp_task_wdt_init(timeoutSec, true);
+        esp_task_wdt_add(nullptr);  // current (loop) task
+    }
+    inline void of_watchdog_feed() { esp_task_wdt_reset(); }
+
+    // Boot counter persisted in NVS so rapid crashes accumulate across resets.
+    inline uint32_t of_boot_count_get() {
+        Preferences p;
+        if (!p.begin("ofboot", true)) return 0;
+        const uint32_t n = p.getUInt("n", 0);
+        p.end();
+        return n;
+    }
+    inline void of_boot_count_set(uint32_t n) {
+        Preferences p;
+        if (!p.begin("ofboot", false)) return;
+        p.putUInt("n", n);
+        p.end();
     }
 
     inline String of_reboot_reason() {

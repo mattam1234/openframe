@@ -49,9 +49,15 @@ void setup() {
     ConfigManager::instance().begin();
     VariableManager::instance().begin();
 
+    // Arm the watchdog and decide safe mode before any hardware/automation init —
+    // a crash loop is most likely caused by those, so safe mode skips them and
+    // brings up only networking + API/OTA so the device stays recoverable.
+    HealthMonitor::instance().begin();
+    const bool safeMode = HealthMonitor::instance().inSafeMode();
+
     LOG_I(TAG, "Core subsystems initialised");
 
-    // ── Phase 2: Connectivity ─────────────────────────────────────────────────
+    // ── Phase 2: Connectivity (always on, even in safe mode) ──────────────────
     WiFiManager::instance().begin();
     TimeManager::instance().begin();
     MqttManager::instance().begin();
@@ -61,17 +67,23 @@ void setup() {
     GatewayManager::instance().begin();
     HaManager::instance().begin();
     OtaManager::instance().begin(webServer);
-    InputManager::instance().begin();
-    OutputManager::instance().begin();
-    HidManager::instance().begin();
-    SensorManager::instance().begin();
-    DisplayManager::instance().begin();
-    TouchManager::instance().begin();
-    ModuleManager::instance().begin();
-    ActionEngine::instance().begin();
-    MacroManager::instance().begin();
-    ProfileManager::instance().begin();
-    HealthMonitor::instance().begin();
+
+    // ── Phase 3: Hardware & automation (skipped in safe mode) ─────────────────
+    if (!safeMode) {
+        InputManager::instance().begin();
+        OutputManager::instance().begin();
+        HidManager::instance().begin();
+        SensorManager::instance().begin();
+        DisplayManager::instance().begin();
+        TouchManager::instance().begin();
+        ModuleManager::instance().begin();
+        ActionEngine::instance().begin();
+        MacroManager::instance().begin();
+        ProfileManager::instance().begin();
+    } else {
+        LOG_W(TAG, "Safe mode: hardware & automation subsystems disabled");
+    }
+
     NotificationManager::instance().begin();
     ApiServer::instance().begin(webServer);
 
@@ -92,14 +104,19 @@ void loop() {
     NodeLinkManager::instance().loop();
     GatewayManager::instance().loop();
     OtaManager::instance().loop();
-    InputManager::instance().loop();
-    OutputManager::instance().loop();
-    SensorManager::instance().loop();
-    DisplayManager::instance().loop();
-    TouchManager::instance().loop();
-    ModuleManager::instance().loop();
-    ActionEngine::instance().loop();
-    MacroManager::instance().loop();
+
+    // Hardware & automation were never started in safe mode — skip their loops.
+    if (!HealthMonitor::instance().inSafeMode()) {
+        InputManager::instance().loop();
+        OutputManager::instance().loop();
+        SensorManager::instance().loop();
+        DisplayManager::instance().loop();
+        TouchManager::instance().loop();
+        ModuleManager::instance().loop();
+        ActionEngine::instance().loop();
+        MacroManager::instance().loop();
+    }
+
     ApiServer::instance().loop();
 
     HealthMonitor::instance().markLoopEnd();

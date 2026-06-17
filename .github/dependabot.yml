@@ -1,0 +1,28 @@
+version: 2
+# Weekly dependency + CVE scanning. Dependabot opens PRs for vulnerable or
+# outdated deps in each npm project and for the GitHub Actions used by CI.
+updates:
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Collapse routine version bumps into one PR; security fixes still come
+      # through individually and promptly.
+      frontend-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /cms
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cms-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

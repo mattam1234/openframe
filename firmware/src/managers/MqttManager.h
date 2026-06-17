@@ -45,6 +45,10 @@ public:
 
     bool isConnected();
 
+    // Human-readable last connection error ("" while connected / never failed) —
+    // surfaced in /api/status so the UI can explain why MQTT is down.
+    String lastError() const { return _lastError; }
+
     String baseTopic() const;
 
     // Fleet topic contract: <baseTopic>/<deviceId>/<subtopic>. This namespaces
@@ -75,6 +79,7 @@ private:
     bool     _enabled       = false;
     uint32_t _lastAttempt   = 0;
     uint32_t _backoffMs     = 2000;
+    String   _lastError;
 
     static constexpr uint32_t MAX_BACKOFF_MS = 60000;
     static constexpr const char* TAG         = "MQTT";
