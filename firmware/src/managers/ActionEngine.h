@@ -147,7 +147,13 @@ public:
     static ActionRunner& instance();
 
     void registerExecutor(ActionType type, StepExecutor executor);
-    bool run(const ActionConfig& action, String& error);
+    // When dryRun is true, side-effecting steps are NOT executed; instead a
+    // human-readable description of each step that would run is appended to `log`
+    // (control flow + conditions still evaluate). Variable mutations are also
+    // skipped, so branches that depend on in-action variable changes won't reflect
+    // them — dry-run answers "what hardware/messages would this drive", not state.
+    bool run(const ActionConfig& action, String& error, bool dryRun = false,
+             std::vector<String>* log = nullptr);
 
     // Public so step executors (e.g. WaitUntil) can evaluate a single condition.
     bool testCondition(const Condition& cond) const { return evaluateCondition(cond); }
@@ -172,6 +178,9 @@ public:
     bool removeAction(const String& actionId);
     bool triggerAction(const String& actionId, String& error);
     bool triggerAction(const String& actionId);
+    // Dry-run an action by id: fills `log` with what each step would do. Returns
+    // false (with `error`) only on a structural failure, not on skipped steps.
+    bool simulateAction(const String& actionId, std::vector<String>& log, String& error);
 
     // Schedule an action to run at a shared cluster-clock epoch (synchronized effects).
     void scheduleAction(uint32_t epoch, const String& actionId);

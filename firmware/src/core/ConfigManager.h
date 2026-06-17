@@ -62,6 +62,10 @@ struct TimeConfig {
     // DST. Empty = UTC. e.g. "CET-1CEST,M3.5.0,M10.5.0/3" (Central Europe),
     // "EST5EDT,M3.2.0,M11.1.0" (US Eastern).
     String tz;
+    // Optional DS3231 RTC (#12): seeds the clock at boot when there's no NTP, and
+    // is re-synced from NTP once available — accurate time with no WiFi.
+    bool    rtcEnabled = false;
+    uint8_t rtcAddress = 0x68;
 };
 
 struct DeviceConfig {

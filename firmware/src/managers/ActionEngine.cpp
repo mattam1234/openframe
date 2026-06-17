@@ -233,8 +233,42 @@ void ActionRunner::registerExecutor(ActionType type, StepExecutor executor) {
     _executors[type] = std::move(executor);
 }
 
-bool ActionRunner::run(const ActionConfig& action, String& error) {
+// One-line, human-readable summary of a step for dry-run output.
+static String describeStep(const ActionStep& s) {
+    switch (s.type) {
+        case ActionType::Delay:        return "delay " + String(s.delayMs) + "ms";
+        case ActionType::HttpRequest:  return "HTTP " + s.method + " " + s.url;
+        case ActionType::MqttPublish:  return "MQTT publish → " + s.topic;
+        case ActionType::VariableSet:  return "set " + s.variableId + " = " + s.value;
+        case ActionType::VariableIncrement: return "increment " + s.variableId + " by " + String(s.increment);
+        case ActionType::VariableToggle:    return "toggle " + s.variableId;
+        case ActionType::OutputControl: {
+            String d = "output " + s.outputId + " → " + s.command;
+            if (s.command == "digital") d += s.on ? " on" : " off";
+            else if (s.command == "brightness") d += " " + String(s.brightnessVal);
+            else if (s.command == "angle") d += " " + String(s.angle) + "°";
+            else if (s.command == "move") d += " " + String(s.position);
+            else if (s.command == "rgb") d += " (" + String(s.red) + "," + String(s.green) + "," + String(s.blue) + ")";
+            else if (s.command == "animation") d += " " + s.animation;
+            return d;
+        }
+        case ActionType::WaitUntil:    return "wait until " + s.variableId + " " + s.op + " " + s.value + " (timeout " + String(s.delayMs ? s.delayMs : 30000) + "ms)";
+        case ActionType::SceneRestore: return "restore scene '" + s.value + "'";
+        case ActionType::HaServiceCall: return "HA call " + s.haService + " → " + s.haEntityId;
+        case ActionType::PageChange:   return "display " + s.displayId + " → page " + s.pageId;
+        case ActionType::Notification: return "notify: " + s.message;
+        case ActionType::KeyboardShortcut: return "keyboard " + s.keysCombo;
+        case ActionType::MediaControl: return "media " + s.mediaCommand;
+        case ActionType::RemoteAction: return "remote action " + s.value + " → node " + s.nodeId;
+        case ActionType::SyncAction:   return "sync action " + s.value;
+        default:                       return String(actionTypeToString(s.type));
+    }
+}
+
+bool ActionRunner::run(const ActionConfig& action, String& error, bool dryRun,
+                       std::vector<String>* log) {
     if (!evaluateConditions(action.conditions)) {
+        if (dryRun && log) log->push_back("(skipped — action conditions not met)");
         return true;
     }
 
@@ -314,6 +348,10 @@ bool ActionRunner::run(const ActionConfig& action, String& error) {
                 }
                 break;
             default: {
+                if (dryRun) {
+                    if (log) log->push_back(describeStep(s));
+                    break;  // simulate: record, don't execute
+                }
                 auto it = _executors.find(s.type);
                 if (it == _executors.end()) { error = "No executor for action type"; return false; }
                 if (!it->second(s, error)) return false;
@@ -526,6 +564,16 @@ bool ActionEngine::triggerAction(const String& actionId, String& error) {
 bool ActionEngine::triggerAction(const String& actionId) {
     String error;
     return triggerAction(actionId, error);
+}
+
+bool ActionEngine::simulateAction(const String& actionId, std::vector<String>& log, String& error) {
+    for (const auto& action : _actions) {
+        if (action.id == actionId) {
+            return ActionRunner::instance().run(action, error, /*dryRun=*/true, &log);
+        }
+    }
+    error = "Action not found: " + actionId;
+    return false;
 }
 
 bool ActionEngine::saveActions() const {

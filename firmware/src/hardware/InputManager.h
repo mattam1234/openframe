@@ -14,6 +14,11 @@ struct DigitalInputConfig {
     bool     inverted           = false;
     bool     pullup             = true;
     bool     pulldown           = false;
+    // ESP32 native capacitive touch (#16): when set, the pin is read via
+    // touchRead() and counts as "pressed" below touchThreshold. Reuses all the
+    // press/hold/multi-press logic. No effect on ESP8266 (no touch peripheral).
+    bool     touch              = false;
+    uint16_t touchThreshold     = 40;
     uint32_t debounceMs         = 30;
     uint32_t holdMs             = 500;
     uint32_t longPressMs        = 1200;
@@ -34,6 +39,27 @@ struct AnalogInputConfig {
     uint16_t rangeMin           = 0;
     uint16_t rangeMax           = 4095;
     uint32_t pollIntervalMs     = 30;
+};
+
+// Rotary encoder with optional push-button (#15). Quadrature A/B are polled and
+// decoded to RotateCW/RotateCCW events; the button emits Press/Release.
+struct EncoderInputConfig {
+    String  id;
+    uint8_t pinA       = 0;
+    uint8_t pinB       = 0;
+    uint8_t pinButton  = 0;   // 0 = no button
+    bool    pullup     = true;
+    uint32_t debounceMs = 30; // button debounce
+};
+
+// Matrix keypad (#21): rows driven low one at a time, columns read with pull-ups.
+// `keys` is row-major (rows×cols) labels; a press emits KeyPress with the label.
+struct KeypadInputConfig {
+    String               id;
+    std::vector<uint8_t> rows;
+    std::vector<uint8_t> cols;
+    std::vector<String>  keys;       // size rows*cols, row-major
+    uint32_t             debounceMs = 30;
 };
 
 class InputManager {
@@ -64,6 +90,19 @@ private:
         uint32_t lastPollMs     = 0;
     };
 
+    struct EncoderInputState {
+        uint8_t  lastAB         = 0;
+        int8_t   accum          = 0;     // accumulates quarter-steps to one detent
+        bool     buttonPressed  = false;
+        bool     buttonRaw      = false;
+        uint32_t buttonChangeMs = 0;
+    };
+
+    struct KeypadInputState {
+        std::vector<bool>     pressed;     // per-key stable state (rows*cols)
+        std::vector<uint32_t> lastChange;  // per-key debounce timer
+    };
+
     InputManager() = default;
 
     bool loadConfig();
@@ -79,10 +118,22 @@ private:
     uint16_t readAnalogValue(const AnalogInputConfig& cfg) const;
     void emitAnalogEvent(const AnalogInputConfig& cfg, const char* eventName, uint16_t value, const char* state = nullptr);
 
+    void configureEncoderPins();
+    void updateEncoders(uint32_t nowMs);
+    void emitEncoderEvent(const EncoderInputConfig& cfg, const char* eventName);
+
+    void configureKeypadPins();
+    void updateKeypads(uint32_t nowMs);
+    void emitKeypadEvent(const KeypadInputConfig& cfg, const String& key, const char* eventName);
+
     std::vector<DigitalInputConfig> _digitalConfigs;
     std::vector<DigitalInputState>  _digitalStates;
     std::vector<AnalogInputConfig>  _analogConfigs;
     std::vector<AnalogInputState>   _analogStates;
+    std::vector<EncoderInputConfig> _encoderConfigs;
+    std::vector<EncoderInputState>  _encoderStates;
+    std::vector<KeypadInputConfig>  _keypadConfigs;
+    std::vector<KeypadInputState>   _keypadStates;
 
     static constexpr const char* TAG = "InputMgr";
 };

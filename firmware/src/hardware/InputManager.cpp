@@ -13,6 +13,8 @@ bool InputManager::begin() {
     }
 
     configureDigitalPins();
+    configureEncoderPins();
+    configureKeypadPins();
     _digitalStates.resize(_digitalConfigs.size());
     _analogStates.resize(_analogConfigs.size());
 
@@ -24,11 +26,15 @@ void InputManager::loop() {
     const uint32_t nowMs = millis();
     updateDigitalInputs(nowMs);
     updateAnalogInputs(nowMs);
+    updateEncoders(nowMs);
+    updateKeypads(nowMs);
 }
 
 bool InputManager::loadConfig() {
     _digitalConfigs.clear();
     _analogConfigs.clear();
+    _encoderConfigs.clear();
+    _keypadConfigs.clear();
     std::map<String, uint16_t> idUsage;
 
     auto ensureUniqueId = [&](const String& requested, const String& fallbackPrefix, uint8_t pin) {
@@ -63,6 +69,8 @@ bool InputManager::loadConfig() {
             cfg.inverted          = item["inverted"] | false;
             cfg.pullup            = item["pullup"] | true;
             cfg.pulldown          = item["pulldown"] | false;
+            cfg.touch             = item["touch"] | false;
+            cfg.touchThreshold    = item["touch_threshold"] | 40;
             cfg.debounceMs        = item["debounce_ms"] | 30;
             cfg.holdMs            = item["hold_ms"] | 500;
             cfg.longPressMs       = item["long_press_ms"] | 1200;
@@ -93,11 +101,47 @@ bool InputManager::loadConfig() {
         }
     }
 
+    if (doc["encoders"].is<JsonArray>()) {
+        for (auto item : doc["encoders"].as<JsonArray>()) {
+            EncoderInputConfig cfg;
+            cfg.pinA       = item["pin_a"] | 0;
+            cfg.pinB       = item["pin_b"] | 0;
+            cfg.pinButton  = item["pin_button"] | 0;
+            cfg.pullup     = item["pullup"] | true;
+            cfg.debounceMs = item["debounce_ms"] | 30;
+            cfg.id = ensureUniqueId(item["id"] | String(""), "enc", cfg.pinA);
+            _encoderConfigs.push_back(cfg);
+        }
+    }
+    _encoderStates.assign(_encoderConfigs.size(), EncoderInputState{});
+
+    if (doc["keypads"].is<JsonArray>()) {
+        for (auto item : doc["keypads"].as<JsonArray>()) {
+            KeypadInputConfig cfg;
+            for (JsonVariantConst v : item["rows"].as<JsonArrayConst>()) cfg.rows.push_back(v | 0);
+            for (JsonVariantConst v : item["cols"].as<JsonArrayConst>()) cfg.cols.push_back(v | 0);
+            for (JsonVariantConst v : item["keys"].as<JsonArrayConst>()) cfg.keys.push_back(v | String(""));
+            cfg.debounceMs = item["debounce_ms"] | 30;
+            cfg.id = ensureUniqueId(item["id"] | String(""), "keypad", 0);
+            if (!cfg.rows.empty() && !cfg.cols.empty()) _keypadConfigs.push_back(cfg);
+        }
+    }
+    _keypadStates.clear();
+    for (const auto& cfg : _keypadConfigs) {
+        KeypadInputState st;
+        st.pressed.assign(cfg.rows.size() * cfg.cols.size(), false);
+        st.lastChange.assign(cfg.rows.size() * cfg.cols.size(), 0);
+        _keypadStates.push_back(st);
+    }
+
     return true;
 }
 
 void InputManager::configureDigitalPins() {
     for (const auto& cfg : _digitalConfigs) {
+        if (cfg.touch) {
+            continue;  // touch pins need no pinMode — touchRead() drives the pad
+        }
         if (cfg.pullup) {
             pinMode(cfg.pin, INPUT_PULLUP);
         } else if (cfg.pulldown) {
@@ -174,6 +218,13 @@ void InputManager::updateDigitalInput(size_t index, uint32_t nowMs) {
 }
 
 bool InputManager::readDigitalPressed(const DigitalInputConfig& cfg) const {
+#if defined(ESP32) && !defined(ESP8266_BOARD)
+    if (cfg.touch) {
+        // touchRead() falls as the pad is touched; below threshold = pressed.
+        bool pressed = touchRead(cfg.pin) < cfg.touchThreshold;
+        return cfg.inverted ? !pressed : pressed;
+    }
+#endif
     const int raw = digitalRead(cfg.pin);
     bool pressed = (raw == HIGH);
     if (cfg.pullup && !cfg.pulldown) {
@@ -200,6 +251,99 @@ void InputManager::emitDigitalEvent(const DigitalInputConfig& cfg, const char* e
     String payload;
     serializeJson(doc, payload);
     EventBus::instance().publish(EventType::InputDigitalChanged, cfg.id, payload);
+}
+
+void InputManager::configureEncoderPins() {
+    for (const auto& cfg : _encoderConfigs) {
+        const int mode = cfg.pullup ? INPUT_PULLUP : INPUT;
+        pinMode(cfg.pinA, mode);
+        pinMode(cfg.pinB, mode);
+        if (cfg.pinButton) pinMode(cfg.pinButton, mode);
+    }
+}
+
+void InputManager::emitEncoderEvent(const EncoderInputConfig& cfg, const char* eventName) {
+    JsonDocument doc;
+    doc["event"] = eventName;
+    doc["id"]    = cfg.id;
+    String payload;
+    serializeJson(doc, payload);
+    EventBus::instance().publish(EventType::InputDigitalChanged, cfg.id, payload);
+}
+
+void InputManager::updateEncoders(uint32_t nowMs) {
+    // Standard quadrature transition table: index by (prevAB<<2 | curAB) → -1/0/+1.
+    static const int8_t kTransitions[16] = {
+        0, -1,  1,  0,
+        1,  0,  0, -1,
+       -1,  0,  0,  1,
+        0,  1, -1,  0,
+    };
+    for (size_t i = 0; i < _encoderConfigs.size(); ++i) {
+        const auto& cfg = _encoderConfigs[i];
+        auto& st = _encoderStates[i];
+
+        const uint8_t ab = (digitalRead(cfg.pinA) ? 2 : 0) | (digitalRead(cfg.pinB) ? 1 : 0);
+        const uint8_t idx = (st.lastAB << 2) | ab;
+        st.accum += kTransitions[idx & 0x0F];
+        st.lastAB = ab;
+        // Four quarter-steps make one detent on common encoders; emit per detent.
+        if (st.accum >= 4)       { emitEncoderEvent(cfg, "RotateCW");  st.accum = 0; }
+        else if (st.accum <= -4) { emitEncoderEvent(cfg, "RotateCCW"); st.accum = 0; }
+
+        // Button: active-low when pulled up. Debounced press/release.
+        if (cfg.pinButton) {
+            const bool raw = cfg.pullup ? (digitalRead(cfg.pinButton) == LOW)
+                                        : (digitalRead(cfg.pinButton) == HIGH);
+            if (raw != st.buttonRaw) { st.buttonRaw = raw; st.buttonChangeMs = nowMs; }
+            if (raw != st.buttonPressed && (nowMs - st.buttonChangeMs) >= cfg.debounceMs) {
+                st.buttonPressed = raw;
+                emitEncoderEvent(cfg, raw ? "Press" : "Release");
+            }
+        }
+    }
+}
+
+void InputManager::configureKeypadPins() {
+    for (const auto& cfg : _keypadConfigs) {
+        for (uint8_t r : cfg.rows) { pinMode(r, OUTPUT); digitalWrite(r, HIGH); }
+        for (uint8_t c : cfg.cols) { pinMode(c, INPUT_PULLUP); }
+    }
+}
+
+void InputManager::emitKeypadEvent(const KeypadInputConfig& cfg, const String& key, const char* eventName) {
+    JsonDocument doc;
+    doc["event"] = eventName;
+    doc["id"]    = cfg.id;
+    doc["key"]   = key;
+    String payload;
+    serializeJson(doc, payload);
+    EventBus::instance().publish(EventType::InputDigitalChanged, cfg.id, payload);
+}
+
+void InputManager::updateKeypads(uint32_t nowMs) {
+    for (size_t k = 0; k < _keypadConfigs.size(); ++k) {
+        const auto& cfg = _keypadConfigs[k];
+        auto& st = _keypadStates[k];
+        const size_t cols = cfg.cols.size();
+
+        for (size_t ri = 0; ri < cfg.rows.size(); ++ri) {
+            digitalWrite(cfg.rows[ri], LOW);        // activate this row
+            delayMicroseconds(5);                   // let the column lines settle
+            for (size_t ci = 0; ci < cols; ++ci) {
+                const bool down = digitalRead(cfg.cols[ci]) == LOW;  // pulled-up → LOW = pressed
+                const size_t idx = ri * cols + ci;
+                if (down != st.pressed[idx] && (nowMs - st.lastChange[idx]) >= cfg.debounceMs) {
+                    st.pressed[idx] = down;
+                    st.lastChange[idx] = nowMs;
+                    const String key = idx < cfg.keys.size() ? cfg.keys[idx]
+                                                             : String(ri) + "," + String(ci);
+                    emitKeypadEvent(cfg, key, down ? "KeyPress" : "KeyRelease");
+                }
+            }
+            digitalWrite(cfg.rows[ri], HIGH);       // deactivate the row
+        }
+    }
 }
 
 void InputManager::updateAnalogInputs(uint32_t nowMs) {

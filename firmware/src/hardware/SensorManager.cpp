@@ -10,6 +10,10 @@
 #include <Adafruit_INA219.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_SHT31.h>
+#include <Adafruit_SGP30.h>
+#include <Adafruit_VL53L0X.h>
+#include <max6675.h>
+#include <SensirionI2CScd4x.h>
 #include <math.h>
 
 namespace {
@@ -323,7 +327,228 @@ void SensorManager::registerSensor(const String& type, SensorFactory factory) {
     _registry[type] = std::move(factory);
 }
 
+// Generic I2C sensor (#22): reads a JSON-defined register map over raw Wire, so
+// new chips can be added by editing sensors.json — no new driver/library/reflash.
+class GenericI2cDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _config = config;
+        if (_config.registers.empty()) {
+            error = "i2c_generic needs a non-empty 'registers' map";
+            return false;
+        }
+        Wire.begin();
+        Wire.beginTransmission(_config.address);
+        if (Wire.endTransmission() != 0) {
+            error = "No I2C device at 0x" + String(_config.address, HEX);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override {
+        std::vector<String> keys;
+        for (const auto& r : _config.registers) keys.push_back(r.metric);
+        return keys;
+    }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+        for (const auto& r : _config.registers) {
+            const uint8_t n = (r.bytes == 1) ? 1 : 2;
+            Wire.beginTransmission(_config.address);
+            Wire.write(r.reg);
+            if (Wire.endTransmission(false) != 0) {  // repeated start
+                error = "I2C write failed for register 0x" + String(r.reg, HEX);
+                return false;
+            }
+            if (Wire.requestFrom(static_cast<int>(_config.address), static_cast<int>(n)) != n) {
+                error = "I2C read short for register 0x" + String(r.reg, HEX);
+                return false;
+            }
+            uint8_t b0 = Wire.read();
+            uint8_t b1 = (n == 2) ? Wire.read() : 0;
+
+            int32_t raw;
+            if (n == 1) {
+                raw = r.isSigned ? static_cast<int32_t>(static_cast<int8_t>(b0)) : b0;
+            } else {
+                uint16_t u = r.bigEndian ? ((b0 << 8) | b1) : ((b1 << 8) | b0);
+                raw = r.isSigned ? static_cast<int32_t>(static_cast<int16_t>(u)) : u;
+            }
+            values.push_back(SensorMetricValue{ r.metric, raw * r.scale + r.offset });
+        }
+        return true;
+    }
+
+private:
+    SensorConfig _config;
+};
+
+// HX711 24-bit load-cell ADC (#18): a simple 2-wire bit-bang protocol, no library.
+// `pin` = DT (data), `clock_pin` = SCK. Reports raw counts and a scaled weight
+// ((raw - tare_offset) / scale).
+class Hx711SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _config = config;
+        if (!_config.clockPin) { error = "HX711 needs 'clock_pin' (SCK)"; return false; }
+        pinMode(_config.pin, INPUT);
+        pinMode(_config.clockPin, OUTPUT);
+        digitalWrite(_config.clockPin, LOW);
+        return true;
+    }
+
+    std::vector<String> metricKeys() const override { return { "raw", "weight" }; }
+
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        values.clear();
+        // Data low = conversion ready. Bail rather than block forever if it's not.
+        uint32_t start = millis();
+        while (digitalRead(_config.pin) == HIGH) {
+            if (millis() - start > 200) { error = "HX711 not ready (check wiring/power)"; return false; }
+            delay(1);
+        }
+        int32_t raw = 0;
+        noInterrupts();
+        for (uint8_t i = 0; i < 24; ++i) {
+            digitalWrite(_config.clockPin, HIGH);
+            delayMicroseconds(1);
+            raw = (raw << 1) | (digitalRead(_config.pin) ? 1 : 0);
+            digitalWrite(_config.clockPin, LOW);
+            delayMicroseconds(1);
+        }
+        // 25th pulse selects channel A, gain 128 for the next reading.
+        digitalWrite(_config.clockPin, HIGH);
+        delayMicroseconds(1);
+        digitalWrite(_config.clockPin, LOW);
+        interrupts();
+
+        if (raw & 0x800000) raw |= ~0xFFFFFF;  // sign-extend 24-bit two's complement
+        const float scale = _config.scale != 0.0f ? _config.scale : 1.0f;
+        values.push_back(SensorMetricValue{ "raw", static_cast<float>(raw) });
+        values.push_back(SensorMetricValue{ "weight", (raw - _config.tareOffset) / scale });
+        return true;
+    }
+
+private:
+    SensorConfig _config;
+};
+
+// SGP30 air-quality (#17): eCO2 + TVOC over I²C.
+class Sgp30SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig&, String& error) override {
+        if (!_sensor.begin()) { error = "SGP30 not found"; return false; }
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "eco2_ppm", "tvoc_ppb" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        if (!_sensor.IAQmeasure()) { error = "SGP30 measure failed"; return false; }
+        values.clear();
+        values.push_back({ "eco2_ppm", static_cast<float>(_sensor.eCO2) });
+        values.push_back({ "tvoc_ppb", static_cast<float>(_sensor.TVOC) });
+        return true;
+    }
+private:
+    Adafruit_SGP30 _sensor;
+};
+
+// VL53L0X time-of-flight distance (#17).
+class Vl53l0xSensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!_sensor.begin(config.address ? config.address : 0x29)) {
+            error = "VL53L0X not found";
+            return false;
+        }
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "distance_mm" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        VL53L0X_RangingMeasurementData_t m;
+        _sensor.rangingTest(&m, false);
+        if (m.RangeStatus == 4) { error = "VL53L0X out of range"; return false; }
+        values.clear();
+        values.push_back({ "distance_mm", static_cast<float>(m.RangeMilliMeter) });
+        return true;
+    }
+private:
+    Adafruit_VL53L0X _sensor;
+};
+
+// MAX6675 K-type thermocouple (#17): SPI-ish — SCK=clock_pin, CS=cs_pin, SO=pin.
+class Max6675SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!config.clockPin || !config.csPin || !config.pin) {
+            error = "MAX6675 needs clock_pin (SCK), cs_pin (CS) and pin (SO)";
+            return false;
+        }
+        _sensor.reset(new MAX6675(config.clockPin, config.csPin, config.pin));
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "temperature_c" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        const float c = _sensor->readCelsius();
+        if (isnan(c)) { error = "MAX6675 read failed (open thermocouple?)"; return false; }
+        values.clear();
+        values.push_back({ "temperature_c", c });
+        return true;
+    }
+private:
+    std::unique_ptr<MAX6675> _sensor;
+};
+
+// Sensirion SCD40/41 CO₂ (#17): CO₂ + temperature + humidity over I²C.
+class Scd4xSensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig&, String& error) override {
+        _sensor.begin(Wire);
+        _sensor.stopPeriodicMeasurement();              // ensure idle before (re)start
+        if (_sensor.startPeriodicMeasurement()) { error = "SCD4x start failed"; return false; }
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "co2_ppm", "temperature_c", "humidity_pct" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        uint16_t co2 = 0; float temp = 0, hum = 0;
+        bool ready = false;
+        if (_sensor.getDataReadyFlag(ready) || !ready) { error = "SCD4x not ready"; return false; }
+        if (_sensor.readMeasurement(co2, temp, hum) || co2 == 0) { error = "SCD4x read failed"; return false; }
+        values.clear();
+        values.push_back({ "co2_ppm", static_cast<float>(co2) });
+        values.push_back({ "temperature_c", temp });
+        values.push_back({ "humidity_pct", hum });
+        return true;
+    }
+private:
+    SensirionI2CScd4x _sensor;
+};
+
 void SensorManager::registerBuiltInSensors() {
+    if (!_registry.count("sgp30")) {
+        registerSensor("sgp30", []() { return std::unique_ptr<SensorDriver>(new Sgp30SensorDriver()); });
+    }
+    if (!_registry.count("vl53l0x")) {
+        registerSensor("vl53l0x", []() { return std::unique_ptr<SensorDriver>(new Vl53l0xSensorDriver()); });
+    }
+    if (!_registry.count("max6675")) {
+        registerSensor("max6675", []() { return std::unique_ptr<SensorDriver>(new Max6675SensorDriver()); });
+    }
+    if (!_registry.count("scd4x")) {
+        registerSensor("scd4x", []() { return std::unique_ptr<SensorDriver>(new Scd4xSensorDriver()); });
+    }
+
+    if (!_registry.count("hx711")) {
+        registerSensor("hx711", []() { return std::unique_ptr<SensorDriver>(new Hx711SensorDriver()); });
+    }
+
+    if (!_registry.count("i2c_generic")) {
+        registerSensor("i2c_generic", []() {
+            return std::unique_ptr<SensorDriver>(new GenericI2cDriver());
+        });
+    }
+
     if (!_registry.count("bme280")) {
         registerSensor("bme280", []() {
             return std::unique_ptr<SensorDriver>(new Bme280SensorDriver());
@@ -401,6 +626,23 @@ bool SensorManager::loadConfig() {
         cfg.temperatureOffsetC  = item["temperature_offset_c"] | 0.0f;
         cfg.seaLevelPressureHpa = item["sea_level_pressure_hpa"] | 1013.25f;
         cfg.pin                 = item["pin"] | 0;
+        cfg.clockPin            = item["clock_pin"] | 0;
+        cfg.csPin               = item["cs_pin"] | 0;
+        cfg.scale               = item["scale"] | 1.0f;
+        cfg.tareOffset          = item["tare_offset"] | 0;
+        if (item["registers"].is<JsonArrayConst>()) {
+            for (JsonObjectConst r : item["registers"].as<JsonArrayConst>()) {
+                RegisterSpec spec;
+                spec.metric    = r["metric"] | String("");
+                spec.reg       = r["reg"] | 0;
+                spec.bytes     = r["bytes"] | 2;
+                spec.bigEndian = r["big_endian"] | true;
+                spec.isSigned  = r["signed"] | false;
+                spec.scale     = r["scale"] | 1.0f;
+                spec.offset    = r["offset"] | 0.0f;
+                if (spec.metric.length()) cfg.registers.push_back(spec);
+            }
+        }
         cfg.id = ensureUniqueId(cfg.id, cfg.type);
         _configs.push_back(cfg);
     }

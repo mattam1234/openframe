@@ -41,6 +41,8 @@ private:
     void sendMacros(AsyncWebServerRequest* request) const;
     void sendScenes(AsyncWebServerRequest* request) const;
     void sendMetrics(AsyncWebServerRequest* request) const;
+    void sendSelfTest(AsyncWebServerRequest* request) const;
+    void sendNetDiag(AsyncWebServerRequest* request) const;
     void sendModules(AsyncWebServerRequest* request) const;
     void sendHardware(AsyncWebServerRequest* request) const;
     void sendProfiles(AsyncWebServerRequest* request) const;
@@ -77,6 +79,7 @@ private:
     void handleActionDelete(AsyncWebServerRequest* request, const String& actionId);
     void handleMacrosUpdate(AsyncWebServerRequest* request, const String& body);
     void handleMacroDelete(AsyncWebServerRequest* request, const String& macroId);
+    void handleActionSimulate(AsyncWebServerRequest* request, const String& body);
     void handleSceneCapture(AsyncWebServerRequest* request, const String& body);
     void handleSceneRestore(AsyncWebServerRequest* request, const String& body);
     void handleSceneDelete(AsyncWebServerRequest* request, const String& name);

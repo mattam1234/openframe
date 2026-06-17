@@ -11,6 +11,18 @@
 #include "../managers/VariableManager.h"
 #include "../OpenFrameConfig.h"
 
+// One field of a generic I2C sensor's register map (#22): read `bytes` from
+// `reg`, assemble per endianness/sign, then value = raw * scale + offset.
+struct RegisterSpec {
+    String   metric;            // metric key (e.g. "temp")
+    uint8_t  reg       = 0;     // starting register address
+    uint8_t  bytes     = 2;     // 1 or 2
+    bool     bigEndian = true;  // byte order for 2-byte reads
+    bool     isSigned  = false; // interpret as two's-complement
+    float    scale     = 1.0f;
+    float    offset    = 0.0f;
+};
+
 struct SensorConfig {
     String   id;
     String   type;
@@ -20,7 +32,13 @@ struct SensorConfig {
     uint8_t  address              = 0x76;
     float    temperatureOffsetC   = 0.0f;
     float    seaLevelPressureHpa  = 1013.25f;
-    uint8_t  pin                  = 0;        // for pin-based sensors (DHT22, DS18B20)
+    uint8_t  pin                  = 0;        // for pin-based sensors (DHT22, DS18B20, HX711 data)
+    uint8_t  clockPin             = 0;        // second pin for two-wire bit-bang sensors (HX711 SCK, MAX6675 SCK)
+    uint8_t  csPin                = 0;        // chip-select (MAX6675 CS)
+    float    scale                = 1.0f;     // raw→unit scale (HX711 counts per unit)
+    int32_t  tareOffset           = 0;        // raw zero offset (HX711 tare)
+    // type == "i2c_generic": JSON-defined register map — add new chips without reflashing.
+    std::vector<RegisterSpec> registers;
 };
 
 struct SensorMetricValue {

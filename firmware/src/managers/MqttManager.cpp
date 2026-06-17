@@ -1,7 +1,9 @@
 #include "MqttManager.h"
 #include "WiFiManager.h"
 #include "../core/StorageManager.h"
+#include "../core/Logger.h"
 #include "../OpenFrameConfig.h"
+#include <ArduinoJson.h>
 
 namespace {
 // Translate a PubSubClient state() code into a human-readable reason.
@@ -47,6 +49,26 @@ void MqttManager::begin() {
     _client.setBufferSize(2048);
     _client.setCallback([this](const char* topic, uint8_t* payload, unsigned int length) {
         onMessage(topic, payload, length);
+    });
+
+    // Structured remote logging (#83): mirror Warning+ logs to
+    // <baseTopic>/<deviceId>/log so a CMS or syslog bridge can ingest them. The
+    // re-entrancy guard stops a publish that itself logs from recursing.
+    Logger::instance().addListener([this](const LogEntry& e) {
+        static const char* kLvl[] = { "trace", "debug", "info", "warning", "error", "fatal" };
+        if (e.level < LogLevel::Warning) return;
+        static bool inLog = false;
+        if (inLog || !_client.connected()) return;
+        inLog = true;
+        JsonDocument doc;
+        doc["ts"]    = e.timestamp;
+        doc["level"] = kLvl[static_cast<uint8_t>(e.level) <= 5 ? static_cast<uint8_t>(e.level) : 2];
+        doc["tag"]   = e.tag;
+        doc["msg"]   = e.message;
+        String payload;
+        serializeJson(doc, payload);
+        publishDevice("log", payload);
+        inLog = false;
     });
 
     LOG_I(TAG, "MQTT configured — broker: " + cfg.host + ":" + String(cfg.port));

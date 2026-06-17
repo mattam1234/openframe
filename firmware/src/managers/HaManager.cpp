@@ -65,13 +65,45 @@ void HaManager::registerEntity(const HaEntity& entity) {
                        t == HaEntityType::Switch  ||
                        t == HaEntityType::Select  ||
                        t == HaEntityType::Number  ||
-                       t == HaEntityType::Text);
+                       t == HaEntityType::Text    ||
+                       t == HaEntityType::Light);
     if (hasCommand) {
         String cmdTopic = commandTopic(entity.id);
         _cmdTopicToEntityId[cmdTopic] = entity.id;
         MqttManager::instance().subscribeRaw(cmdTopic, [this](const String& topic, const String& payload) {
             handleCommand(topic, payload);
         });
+    }
+
+    // Lights carry extra command sub-topics for brightness/RGB. Drive the output
+    // directly and echo the new state back so HA stays in sync.
+    if (t == HaEntityType::Light) {
+        const String id = entity.id;
+        if (entity.brightness) {
+            MqttManager::instance().subscribeRaw(commandTopic(id) + "/brightness",
+                [this, id](const String&, const String& payload) {
+                    int v = payload.toInt();
+                    if (v < 0) v = 0; else if (v > 255) v = 255;
+                    OutputManager::instance().setBrightness(id, static_cast<uint8_t>(v));
+                    publishState(id, v > 0 ? "ON" : "OFF");
+                    MqttManager::instance().publishRaw(stateTopic(id) + "/brightness", String(v), false);
+                });
+        }
+        if (entity.rgb) {
+            MqttManager::instance().subscribeRaw(commandTopic(id) + "/rgb",
+                [this, id](const String&, const String& payload) {
+                    // HA sends "r,g,b".
+                    int c1 = payload.indexOf(','), c2 = payload.indexOf(',', c1 + 1);
+                    if (c1 < 0 || c2 < 0) return;
+                    uint8_t r = payload.substring(0, c1).toInt();
+                    uint8_t g = payload.substring(c1 + 1, c2).toInt();
+                    uint8_t b = payload.substring(c2 + 1).toInt();
+                    OutputManager::instance().setRgb(id, r, g, b);
+                    publishState(id, (r || g || b) ? "ON" : "OFF");
+                    MqttManager::instance().publishRaw(stateTopic(id) + "/rgb",
+                        String(r) + "," + String(g) + "," + String(b), false);
+                });
+        }
     }
 
     LOG_D(TAG, "Registered entity: " + entity.id + " (" + entityTypeStr(entity.type) + ")");
@@ -136,6 +168,7 @@ String HaManager::entityTypeStr(HaEntityType type) const {
         case HaEntityType::Select:       return "select";
         case HaEntityType::Number:       return "number";
         case HaEntityType::Text:         return "text";
+        case HaEntityType::Light:        return "light";
         default:                          return "sensor";
     }
 }
@@ -199,6 +232,24 @@ void HaManager::buildDiscoveryPayload(const HaEntity& e, JsonDocument& doc) cons
             doc["command_topic"]   = commandTopic(e.id);
             break;
 
+        case HaEntityType::Light: {
+            // HA "default schema" MQTT light: on/off on the command topic, plus
+            // optional brightness and RGB on dedicated sub-topics.
+            doc["command_topic"]   = commandTopic(e.id);
+            doc["payload_on"]      = "ON";
+            doc["payload_off"]     = "OFF";
+            if (e.brightness) {
+                doc["brightness_state_topic"]   = stateTopic(e.id) + "/brightness";
+                doc["brightness_command_topic"] = commandTopic(e.id) + "/brightness";
+                doc["brightness_scale"]         = 255;
+            }
+            if (e.rgb) {
+                doc["rgb_state_topic"]   = stateTopic(e.id) + "/rgb";
+                doc["rgb_command_topic"] = commandTopic(e.id) + "/rgb";
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -257,10 +308,23 @@ void HaManager::buildEntities() {
         for (JsonObjectConst o : arr) {
             const String oid = o["id"] | String("");
             if (!oid.length()) continue;
+            const String otype = o["type"] | String("");
+
             HaEntity e;
-            e.type = HaEntityType::Switch;
             e.id   = oid;
             e.name = oid;
+            // Colour/dimmable outputs become richer HA "light" entities; everything
+            // else stays an on/off switch.
+            if (otype == "rgb" || otype == "ws2812") {
+                e.type = HaEntityType::Light;
+                e.brightness = true;
+                e.rgb = true;
+            } else if (otype == "led" && (o["pwm"] | false)) {
+                e.type = HaEntityType::Light;
+                e.brightness = true;
+            } else {
+                e.type = HaEntityType::Switch;
+            }
             registerEntity(e);
             onCommand(oid, [](const String& entityId, const String& payload) {
                 OutputManager::instance().setDigital(entityId, payload == "ON");
@@ -295,7 +359,9 @@ void HaManager::publishAllStates() {
     OutputManager::instance().fillStateJson(arr);
     for (JsonObjectConst o : arr) {
         const String oid = o["id"] | String("");
-        if (oid.length()) publishState(oid, (o["on"] | false) ? "ON" : "OFF");
+        if (!oid.length()) continue;
+        publishState(oid, (o["on"] | false) ? "ON" : "OFF");
+        publishLightAttributes(oid, o);
     }
 
     // Binary sensors: default to OFF until the first press/release arrives so they
@@ -323,7 +389,23 @@ void HaManager::onOutputEvent(const String& payload) {
     JsonDocument doc;
     if (deserializeJson(doc, payload)) return;
     const String id = doc["id"] | String("");
-    if (id.length()) publishState(id, (doc["on"] | false) ? "ON" : "OFF");
+    if (!id.length()) return;
+    publishState(id, (doc["on"] | false) ? "ON" : "OFF");
+    publishLightAttributes(id, doc.as<JsonObjectConst>());
+}
+
+// Echo brightness/RGB sub-state for a Light entity (no-op for other entity types).
+void HaManager::publishLightAttributes(const String& id, JsonObjectConst o) {
+    auto it = _entities.find(id);
+    if (it == _entities.end() || it->second.type != HaEntityType::Light) return;
+    if (it->second.brightness && o["brightness"].is<int>()) {
+        MqttManager::instance().publishRaw(stateTopic(id) + "/brightness",
+            String(o["brightness"].as<int>()), false);
+    }
+    if (it->second.rgb) {
+        MqttManager::instance().publishRaw(stateTopic(id) + "/rgb",
+            String(o["r"] | 0) + "," + String(o["g"] | 0) + "," + String(o["b"] | 0), false);
+    }
 }
 
 void HaManager::onInputEvent(const String& sourceId, const String& payload) {

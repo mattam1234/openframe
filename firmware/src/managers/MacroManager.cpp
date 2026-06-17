@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include "ActionEngine.h"
+#include "VariableManager.h"
 
 MacroManager& MacroManager::instance() {
     static MacroManager inst;
@@ -61,6 +62,19 @@ bool MacroManager::triggerMacro(const String& macroId, String& error) {
 
         EventBus::instance().publish(EventType::MacroTriggered, macroId, "{\"id\":\"" + macroId + "\"}");
 
+        // Apply parameters (#43) before the actions run, converting the string
+        // value to each variable's declared type. Unknown variables are skipped.
+        for (const auto& p : macro.params) {
+            const Variable* v = VariableManager::instance().get(p.variableId);
+            if (!v) continue;
+            switch (v->type) {
+                case VarType::Integer: VariableManager::instance().setInt(p.variableId, p.value.toInt()); break;
+                case VarType::Float:   VariableManager::instance().setFloat(p.variableId, p.value.toFloat()); break;
+                case VarType::Boolean: VariableManager::instance().setBool(p.variableId, p.value == "true" || p.value == "1"); break;
+                case VarType::String:  VariableManager::instance().setString(p.variableId, p.value); break;
+            }
+        }
+
         for (const auto& actionId : macro.actionIds) {
             String actionError;
             if (!ActionEngine::instance().triggerAction(actionId, actionError)) {
@@ -90,6 +104,12 @@ bool MacroManager::saveMacros() const {
         for (const auto& id : macro.actionIds) {
             acts.add(id);
         }
+        auto params = obj["params"].to<JsonArray>();
+        for (const auto& p : macro.params) {
+            auto po = params.add<JsonObject>();
+            po["variable_id"] = p.variableId;
+            po["value"]       = p.value;
+        }
     }
     return StorageManager::instance().writeJson(OF_MACROS_PATH, doc);
 }
@@ -111,6 +131,14 @@ bool MacroManager::loadMacros() {
             for (JsonVariantConst v : item["action_ids"].as<JsonArrayConst>()) {
                 const String id = v | String("");
                 if (id.length()) macro.actionIds.push_back(id);
+            }
+        }
+        if (item["params"].is<JsonArrayConst>()) {
+            for (JsonObjectConst p : item["params"].as<JsonArrayConst>()) {
+                MacroParam mp;
+                mp.variableId = p["variable_id"] | String("");
+                mp.value      = p["value"] | String("");
+                if (mp.variableId.length()) macro.params.push_back(mp);
             }
         }
         _macros.push_back(macro);

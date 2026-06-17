@@ -20,7 +20,8 @@ enum class HaEntityType : uint8_t {
     Switch,
     Select,
     Number,
-    Text
+    Text,
+    Light
 };
 
 // ── HaEntity — describes a single HA entity ──────────────────────────────────
@@ -35,6 +36,9 @@ struct HaEntity {
     float        max  = 100;  // for number entities
     float        step = 1;    // for number entities
     std::vector<String> options; // for select entities
+    // Light entities: extra capabilities (brightness slider / RGB colour).
+    bool         brightness = false;
+    bool         rgb        = false;
 };
 
 // ── HaManager ─────────────────────────────────────────────────────────────────
@@ -76,6 +80,7 @@ private:
     String entityTypeStr(HaEntityType type) const;
 
     void buildDiscoveryPayload(const HaEntity& e, JsonDocument& doc) const;
+    void publishLightAttributes(const String& id, JsonObjectConst o);
     void handleCommand(const String& topic, const String& payload);
 
     // Auto-build HA entities from the device's configured sensors, outputs and

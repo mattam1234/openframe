@@ -8,11 +8,19 @@
 #include "../core/StorageManager.h"
 #include "../OpenFrameConfig.h"
 
+// A macro parameter (#43): a variable set to a value just before the macro's
+// actions run, so one macro drives many outcomes via {{variable}} templating.
+struct MacroParam {
+    String variableId;
+    String value;
+};
+
 struct MacroConfig {
-    String              id;
-    String              name;
-    bool                enabled = true;
-    std::vector<String> actionIds;
+    String                  id;
+    String                  name;
+    bool                    enabled = true;
+    std::vector<String>     actionIds;
+    std::vector<MacroParam> params;
 };
 
 class MacroManager {

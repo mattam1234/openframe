@@ -223,6 +223,8 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     timeObj["ntp_server"]      = _config.time.ntpServer;
     timeObj["ntp_server2"]     = _config.time.ntpServer2;
     timeObj["tz"]              = _config.time.tz;
+    timeObj["rtc_enabled"]     = _config.time.rtcEnabled;
+    timeObj["rtc_address"]     = _config.time.rtcAddress;
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
@@ -316,6 +318,8 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.time.ntpServer  = doc["time"]["ntp_server"]  | String("pool.ntp.org");
         _config.time.ntpServer2 = doc["time"]["ntp_server2"] | String("time.nist.gov");
         _config.time.tz         = doc["time"]["tz"]          | String("");
+        _config.time.rtcEnabled = doc["time"]["rtc_enabled"] | false;
+        _config.time.rtcAddress = doc["time"]["rtc_address"] | 0x68;
     }
     return true;
 }

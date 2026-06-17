@@ -1,6 +1,20 @@
 #include "OutputManager.h"
 #include <map>
+#include <math.h>
 #include "../core/PlatformCompat.h"
+
+namespace {
+// Map an 8-bit level (0–255) to a PWM duty in [0, maxDuty]. With gamma on, applies
+// γ≈2.8 so perceived brightness ramps linearly (the eye is very non-linear). The
+// 0 and 255 endpoints are exact either way. Inversion is left to the caller.
+uint32_t pwmDuty(uint8_t value, uint32_t maxDuty, bool gamma) {
+    if (gamma && value > 0 && value < 255) {
+        const float norm = powf(static_cast<float>(value) / 255.0f, 2.8f);
+        return static_cast<uint32_t>(norm * maxDuty + 0.5f);
+    }
+    return (static_cast<uint32_t>(value) * maxDuty) / 255u;
+}
+}  // namespace
 
 const char* ledAnimationToString(LedAnimation a) {
     switch (a) {
@@ -180,6 +194,7 @@ bool OutputManager::loadConfig() {
         cfg.pwmChannel    = item["pwm_channel"] | 0;
         cfg.pwmFrequency  = item["pwm_frequency"] | 5000;
         cfg.pwmResolution = item["pwm_resolution"] | 8;
+        cfg.gamma         = item["gamma"] | false;
 
         if (cfg.type == OutputType::Servo) {
             // Servos are driven at 50 Hz; 16-bit duty gives smooth positioning on
@@ -308,7 +323,7 @@ bool OutputManager::applyBrightness(size_t index, uint8_t brightness) {
     if (cfg.type != OutputType::Led || !cfg.pwm) return false;
 
     const uint32_t maxDuty = (1u << cfg.pwmResolution) - 1u;
-    uint32_t duty = (static_cast<uint32_t>(brightness) * maxDuty) / 255u;
+    uint32_t duty = pwmDuty(brightness, maxDuty, cfg.gamma);
     if (cfg.inverted) duty = maxDuty - duty;
     of_pwm_write(cfg.pin, cfg.pwmChannel, duty);
 
@@ -331,7 +346,7 @@ bool OutputManager::applyRgb(size_t index, uint8_t r, uint8_t g, uint8_t b) {
     if (cfg.type == OutputType::Rgb) {
         const uint32_t maxDuty = (1u << cfg.pwmResolution) - 1u;
         auto toDuty = [&](uint8_t v) -> uint32_t {
-            uint32_t duty = (static_cast<uint32_t>(v) * maxDuty) / 255u;
+            uint32_t duty = pwmDuty(v, maxDuty, cfg.gamma);
             return cfg.inverted ? (maxDuty - duty) : duty;
         };
         of_pwm_write(cfg.pinR, cfg.channelR, toDuty(r));
@@ -598,6 +613,8 @@ void OutputManager::fillStateJson(JsonArray& arr) const {
         obj["r"] = state.red;
         obj["g"] = state.green;
         obj["b"] = state.blue;
+        if (cfg.type == OutputType::Led || cfg.type == OutputType::Rgb) obj["gamma"] = cfg.gamma;
+        if (cfg.type == OutputType::Led) obj["pwm"] = cfg.pwm;
         if (cfg.type == OutputType::Ws2812) {
             obj["led_count"]  = cfg.ledCount;
             obj["animation"]  = ledAnimationToString(state.animation);

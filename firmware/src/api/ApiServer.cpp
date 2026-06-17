@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <Wire.h>
 #include <functional>
 #include <algorithm>
 #include <vector>
@@ -360,6 +361,16 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().sendMetrics(request);
     });
 
+    // Boot/system self-test (#9): RAM, flash, filesystem, I2C bus scan.
+    server.on("/api/selftest", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendSelfTest(request);
+    });
+
+    // Network diagnostics (#86): WiFi, DNS resolve timing, broker reachability, NTP.
+    server.on("/api/netdiag", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendNetDiag(request);
+    });
+
     // Config backup/restore — sub-routes registered BEFORE "/api/config" so the
     // parent GET handler doesn't swallow them (see canHandle subpath note above).
     server.on("/api/config/backups", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -480,6 +491,10 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
 
     server.on("/api/actions", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendActions(request);
+    });
+    // Sub-route before the "/api/actions" parent (see the canHandle subpath note).
+    registerJsonPost(server, "/api/actions/simulate", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleActionSimulate(request, body);
     });
     registerJsonPost(server, "/api/actions", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleActionsUpdate(request, body);
@@ -726,12 +741,131 @@ void ApiServer::sendMetrics(AsyncWebServerRequest* request) const {
     request->send(200, "text/plain; version=0.0.4", m);
 }
 
+void ApiServer::sendSelfTest(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+
+    // RAM
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    const bool ramOk = freeHeap > 20000;
+    auto ram = doc["ram"].to<JsonObject>();
+    ram["free_heap"]     = freeHeap;
+    ram["min_free_heap"] = of_min_free_heap();
+    ram["largest_block"] = of_largest_free_block();
+    ram["ok"]            = ramOk;
+
+    // Flash / sketch space
+    const uint32_t freeSketch = ESP.getFreeSketchSpace();
+    const bool flashOk = freeSketch > 0;
+    auto flash = doc["flash"].to<JsonObject>();
+    flash["sketch_size"] = ESP.getSketchSize();
+    flash["free_space"]  = freeSketch;
+    flash["ok"]          = flashOk;
+
+    // Filesystem
+    StorageInfo si = StorageManager::instance().info();
+    const bool fsOk = si.total > 0;
+    auto fs = doc["fs"].to<JsonObject>();
+    fs["total"] = si.total;
+    fs["used"]  = si.used;
+    fs["free"]  = si.free;
+    fs["ok"]    = fsOk;
+
+    // I2C bus scan (default pins). Wire.begin() is idempotent if already started.
+    Wire.begin();
+    auto i2c = doc["i2c"].to<JsonObject>();
+    auto found = i2c["devices"].to<JsonArray>();
+    for (uint8_t addr = 1; addr < 127; ++addr) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            char buf[6];
+            snprintf(buf, sizeof(buf), "0x%02X", addr);
+            found.add(buf);
+        }
+    }
+    i2c["ok"] = true;  // an empty bus is valid; the scan completing is the pass
+
+    doc["ok"] = ramOk && flashOk && fsOk;
+    sendJson(request, doc);
+}
+
+void ApiServer::sendNetDiag(AsyncWebServerRequest* request) const {
+    const auto& cfg = ConfigManager::instance().config();
+    const bool up = WiFiManager::instance().isConnected();
+    JsonDocument doc;
+
+    auto wifi = doc["wifi"].to<JsonObject>();
+    wifi["connected"] = up;
+    if (up) {
+        wifi["ssid"]    = WiFi.SSID();
+        wifi["rssi"]    = WiFi.RSSI();
+        wifi["ip"]      = WiFi.localIP().toString();
+        wifi["gateway"] = WiFi.gatewayIP().toString();
+        wifi["subnet"]  = WiFi.subnetMask().toString();
+        wifi["dns"]     = WiFi.dnsIP().toString();
+    }
+
+    // DNS resolution — also a basic "is the internet reachable" probe.
+    auto dns = doc["dns"].to<JsonObject>();
+    const String host = cfg.time.ntpServer.length() ? cfg.time.ntpServer : String("pool.ntp.org");
+    dns["host"] = host;
+    if (up) {
+        IPAddress addr;
+        const uint32_t t0 = millis();
+        const bool ok = WiFi.hostByName(host.c_str(), addr) == 1;
+        dns["resolved"] = ok;
+        dns["ms"]       = millis() - t0;
+        if (ok) dns["ip"] = addr.toString();
+    } else {
+        dns["resolved"] = false;
+    }
+
+    // Broker reachability + TCP-connect latency (if MQTT is configured).
+    auto mqtt = doc["mqtt"].to<JsonObject>();
+    mqtt["enabled"]   = cfg.mqtt.enabled;
+    mqtt["connected"] = MqttManager::instance().isConnected();
+    if (cfg.mqtt.enabled && cfg.mqtt.host.length()) {
+        mqtt["host"] = cfg.mqtt.host;
+        mqtt["port"] = cfg.mqtt.port;
+        if (up) {
+            WiFiClient client;
+            const uint32_t t0 = millis();
+            const bool ok = client.connect(cfg.mqtt.host.c_str(), cfg.mqtt.port);
+            mqtt["reachable"] = ok;
+            mqtt["ms"]        = millis() - t0;
+            client.stop();
+        }
+    }
+
+    auto ntp = doc["ntp"].to<JsonObject>();
+    ntp["source"] = TimeManager::instance().source();
+    ntp["valid"]  = TimeManager::instance().isValid();
+    ntp["epoch"]  = TimeManager::instance().epoch();
+
+    sendJson(request, doc);
+}
+
 void ApiServer::sendConfig(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     ConfigManager::instance().toJson(doc);
     // Read-only runtime identity, surfaced alongside config for the Settings UI.
     doc["device"]["id"] = WiFiManager::instance().deviceId();
-    sendJson(request, doc);
+
+    // ETag so a polling client can revalidate cheaply (#33). FNV-1a over the body.
+    const String body = toJsonString(doc);
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < body.length(); ++i) { h ^= static_cast<uint8_t>(body[i]); h *= 16777619u; }
+    const String etag = "\"" + String(h, 16) + "\"";
+
+    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == etag) {
+        AsyncWebServerResponse* res = request->beginResponse(304);
+        res->addHeader("ETag", etag);
+        request->send(res);
+        return;
+    }
+    AsyncWebServerResponse* res = request->beginResponse(200, "application/json", body);
+    res->addHeader("ETag", etag);
+    res->addHeader("Cache-Control", "no-cache");  // cache, but always revalidate
+    request->send(res);
 }
 
 void ApiServer::sendWifiScan(AsyncWebServerRequest* request) const {
@@ -1117,6 +1251,20 @@ static bool tokenEquals(const String& a, const String& b) {
 }
 
 bool ApiServer::requireAuth(AsyncWebServerRequest* request) const {
+    // CSRF defence (#77): reject a cross-origin browser request before any auth/
+    // side effect. A missing Origin (curl, Home Assistant, same-origin navigations)
+    // is allowed — CSRF is a browser-only attack. Enforced even when no token is
+    // set, so the open-LAN default isn't drivable from a malicious web page.
+    if (request->hasHeader("Origin")) {
+        const String origin = request->header("Origin");
+        const int schemeEnd = origin.indexOf("://");
+        const String originHost = schemeEnd >= 0 ? origin.substring(schemeEnd + 3) : origin;
+        if (originHost != request->host()) {
+            request->send(403, "application/json", "{\"error\":\"cross-origin request blocked\"}");
+            return false;
+        }
+    }
+
     const String& token = ConfigManager::instance().config().device.apiToken;
     if (token.isEmpty()) return true;  // LAN-trusted default — auth disabled
 
@@ -1481,6 +1629,8 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
     JsonDocument toSave;
     auto digital = toSave["digital"].to<JsonArray>();
     auto analog = toSave["analog"].to<JsonArray>();
+    auto encoders = toSave["encoders"].to<JsonArray>();
+    auto keypads = toSave["keypads"].to<JsonArray>();
 
     if (source["digital"].is<JsonArrayConst>()) {
         for (JsonObjectConst item : source["digital"].as<JsonArrayConst>()) {
@@ -1490,6 +1640,8 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
             out["pullup"] = item["pullup"] | true;
             out["inverted"] = item["inverted"] | false;
             if (item["pulldown"].is<bool>()) out["pulldown"] = item["pulldown"].as<bool>();
+            if (item["touch"].is<bool>()) out["touch"] = item["touch"].as<bool>();
+            if (item["touch_threshold"].is<int>()) out["touch_threshold"] = item["touch_threshold"].as<int>();
             if (item["debounce_ms"].is<int>()) out["debounce_ms"] = item["debounce_ms"].as<int>();
             if (item["hold_ms"].is<int>()) out["hold_ms"] = item["hold_ms"].as<int>();
             if (item["long_press_ms"].is<int>()) out["long_press_ms"] = item["long_press_ms"].as<int>();
@@ -1513,6 +1665,29 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
             if (item["range_min"].is<int>()) out["range_min"] = item["range_min"].as<int>();
             if (item["range_max"].is<int>()) out["range_max"] = item["range_max"].as<int>();
             if (item["poll_interval_ms"].is<int>()) out["poll_interval_ms"] = item["poll_interval_ms"].as<int>();
+        }
+    }
+
+    if (source["encoders"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : source["encoders"].as<JsonArrayConst>()) {
+            auto out = encoders.add<JsonObject>();
+            out["id"]         = item["id"] | String("");
+            out["pin_a"]      = item["pin_a"] | 0;
+            out["pin_b"]      = item["pin_b"] | 0;
+            out["pin_button"] = item["pin_button"] | 0;
+            out["pullup"]     = item["pullup"] | true;
+            if (item["debounce_ms"].is<int>()) out["debounce_ms"] = item["debounce_ms"].as<int>();
+        }
+    }
+
+    if (source["keypads"].is<JsonArrayConst>()) {
+        for (JsonObjectConst item : source["keypads"].as<JsonArrayConst>()) {
+            auto out = keypads.add<JsonObject>();
+            out["id"] = item["id"] | String("");
+            if (item["rows"].is<JsonArrayConst>()) out["rows"] = item["rows"];
+            if (item["cols"].is<JsonArrayConst>()) out["cols"] = item["cols"];
+            if (item["keys"].is<JsonArrayConst>()) out["keys"] = item["keys"];
+            if (item["debounce_ms"].is<int>()) out["debounce_ms"] = item["debounce_ms"].as<int>();
         }
     }
 
@@ -1559,6 +1734,7 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
             if (item["pwm_channel"].is<int>()) out["pwm_channel"] = item["pwm_channel"].as<int>();
             if (item["pwm_frequency"].is<int>()) out["pwm_frequency"] = item["pwm_frequency"].as<int>();
             if (item["pwm_resolution"].is<int>()) out["pwm_resolution"] = item["pwm_resolution"].as<int>();
+            if (item["gamma"].is<bool>()) out["gamma"] = item["gamma"].as<bool>();
 
             if (item["pin_r"].is<int>()) out["pin_r"] = item["pin_r"].as<int>();
             if (item["pin_g"].is<int>()) out["pin_g"] = item["pin_g"].as<int>();
@@ -1621,6 +1797,16 @@ void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String
 
             if (item["temperature_offset_c"].is<float>()) out["temperature_offset_c"] = item["temperature_offset_c"].as<float>();
             if (item["sea_level_pressure_hpa"].is<float>()) out["sea_level_pressure_hpa"] = item["sea_level_pressure_hpa"].as<float>();
+            if (item["clock_pin"].is<int>()) out["clock_pin"] = item["clock_pin"].as<int>();
+            if (item["cs_pin"].is<int>()) out["cs_pin"] = item["cs_pin"].as<int>();
+            if (item["scale"].is<float>()) out["scale"] = item["scale"].as<float>();
+            if (item["tare_offset"].is<int>()) out["tare_offset"] = item["tare_offset"].as<int>();
+
+            // Generic I2C register map (#22): copy it through verbatim so a custom
+            // chip definition round-trips through save/load.
+            if (item["registers"].is<JsonArrayConst>()) {
+                out["registers"] = item["registers"];
+            }
         }
     }
 
@@ -1896,6 +2082,12 @@ void ApiServer::sendMacros(AsyncWebServerRequest* request) const {
         obj["enabled"] = macro.enabled;
         auto acts = obj["action_ids"].to<JsonArray>();
         for (const auto& id : macro.actionIds) acts.add(id);
+        auto params = obj["params"].to<JsonArray>();
+        for (const auto& p : macro.params) {
+            auto po = params.add<JsonObject>();
+            po["variable_id"] = p.variableId;
+            po["value"]       = p.value;
+        }
     }
     doc["count"] = MacroManager::instance().macros().size();
     sendJson(request, doc);
@@ -2050,6 +2242,14 @@ void ApiServer::handleMacrosUpdate(AsyncWebServerRequest* request, const String&
                 if (id.length()) macro.actionIds.push_back(id);
             }
         }
+        if (item["params"].is<JsonArrayConst>()) {
+            for (JsonObjectConst p : item["params"].as<JsonArrayConst>()) {
+                MacroParam mp;
+                mp.variableId = p["variable_id"] | String("");
+                mp.value      = p["value"] | String("");
+                if (mp.variableId.length()) macro.params.push_back(mp);
+            }
+        }
     };
 
     bool updated = false;
@@ -2109,6 +2309,25 @@ void ApiServer::handleMacroDelete(AsyncWebServerRequest* request, const String& 
         return;
     }
     sendMacros(request);
+}
+
+void ApiServer::handleActionSimulate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) { sendError(request, 400, "Invalid JSON"); return; }
+    const String id = doc["id"] | String("");
+    if (!id.length()) { sendError(request, 400, "Missing action id"); return; }
+
+    std::vector<String> log;
+    String error;
+    const bool ok = ActionEngine::instance().simulateAction(id, log, error);
+
+    JsonDocument out;
+    out["id"] = id;
+    out["ok"] = ok;
+    if (!ok && error.length()) out["error"] = error;
+    auto steps = out["steps"].to<JsonArray>();
+    for (const auto& line : log) steps.add(line);
+    sendJson(request, out);
 }
 
 // ── Scene handlers (#39) ──────────────────────────────────────────────────────

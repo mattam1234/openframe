@@ -45,6 +45,9 @@ struct OutputConfig {
     uint8_t    pwmChannel      = 0;
     uint16_t   pwmFrequency    = 5000;
     uint8_t    pwmResolution   = 8;
+    // Opt-in gamma correction (γ≈2.8) for LED/RGB PWM so brightness/colour ramps
+    // look perceptually linear instead of bunching up at the bright end.
+    bool       gamma           = false;
 
     // RGB
     uint8_t    pinR            = 0;
