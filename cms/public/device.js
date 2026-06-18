@@ -134,6 +134,86 @@ async function loadProfiles() {
   } catch (e) { msg.textContent = `error: ${e.message}`; }
 }
 document.getElementById('load-profiles').onclick = loadProfiles;
+
+// ── Live screen preview (#57) ────────────────────────────────────────────────
+// Reconstruct each display on a canvas from its active page + current widget
+// text. The device has no framebuffer to capture, so we redraw the widgets the
+// same way the firmware does: Adafruit-GFX default font is 6px wide × 8px tall
+// per char at text size 1, top-left anchored.
+const SCREEN_SCALE = 3;
+const GFX_CHAR_W = 6, GFX_CHAR_H = 8;
+let screensTimer = null;
+
+function drawScreen(screen) {
+  const wrap = document.createElement('div');
+  wrap.className = 'screen';
+  const w = Math.max(1, Number(screen.width) || 128);
+  const h = Math.max(1, Number(screen.height) || 64);
+  const label = `${escapeHtml(screen.id || '?')} · ${escapeHtml(screen.type || '?')} · ${w}×${h}`
+    + (screen.title ? ` · ${escapeHtml(screen.title)}` : '');
+  wrap.innerHTML = `<div class="hint">${label}${screen.truncated ? ' · <span class="warn-text">truncated</span>' : ''}</div>`;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w * SCREEN_SCALE;
+  canvas.height = h * SCREEN_SCALE;
+  canvas.className = 'screen-canvas';
+  wrap.appendChild(canvas);
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0b0f14';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#cfe8ff';
+  ctx.textBaseline = 'top';
+
+  const drawText = (text, x, y, size) => {
+    const s = Math.max(1, Number(size) || 1);
+    ctx.font = `${GFX_CHAR_H * s * SCREEN_SCALE}px ui-monospace, Menlo, Consolas, monospace`;
+    // Advance per character on the 6px GFX grid so columns line up like the glass.
+    let cx = (Number(x) || 0) * SCREEN_SCALE;
+    const cy = (Number(y) || 0) * SCREEN_SCALE;
+    for (const ch of String(text)) {
+      ctx.fillText(ch, cx, cy);
+      cx += GFX_CHAR_W * s * SCREEN_SCALE;
+    }
+  };
+
+  for (const widget of screen.widgets || []) {
+    if (widget.text) drawText(widget.text, widget.x, widget.y, widget.size);
+  }
+  // Notification overlay mirrors the firmware: bottom row, text size 1.
+  if (screen.notification) drawText(screen.notification, 0, Math.max(0, h - GFX_CHAR_H), 1);
+
+  return wrap;
+}
+
+async function loadScreens() {
+  const msg = document.getElementById('screens-msg');
+  const list = document.getElementById('screens-list');
+  msg.textContent = 'loading…';
+  try {
+    const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/screens`);
+    const body = await res.json();
+    if (!res.ok || !body.ok) { msg.textContent = `error: ${body.error || res.status}`; return; }
+    const screens = body.screens || [];
+    list.innerHTML = '';
+    if (!screens.length) { msg.textContent = 'no displays configured on this device'; return; }
+    msg.textContent = '';
+    for (const screen of screens) list.appendChild(drawScreen(screen));
+  } catch (e) { msg.textContent = `error: ${e.message}`; }
+}
+document.getElementById('load-screens').onclick = loadScreens;
+document.getElementById('screens-live').onchange = (e) => {
+  clearInterval(screensTimer);
+  screensTimer = null;
+  if (e.target.checked) { loadScreens(); screensTimer = setInterval(loadScreens, 3000); }
+};
+// Don't keep polling a device while the tab is hidden.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearInterval(screensTimer); screensTimer = null; }
+  else if (document.getElementById('screens-live').checked && !screensTimer) {
+    loadScreens(); screensTimer = setInterval(loadScreens, 3000);
+  }
+});
 // Config diff-before-apply (#62). We diff the JSON about to be pushed against the
 // last config pushed to THIS device from this browser (kept in localStorage), so
 // the operator sees exactly which keys change before it reboots the device.

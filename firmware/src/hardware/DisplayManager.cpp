@@ -800,3 +800,42 @@ int DisplayManager::findDisplayIndexById(const String& id) const {
     }
     return -1;
 }
+
+void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
+    const bool notifActive = _notifMessage.length() && (int32_t)(millis() - _notifExpireMs) < 0;
+    size_t widgetBudget = maxWidgets;
+
+    for (const auto& display : _displays) {
+        JsonObject screen = arr.add<JsonObject>();
+        screen["id"]     = display.config.id;
+        screen["type"]   = display.config.type;
+        screen["width"]  = display.config.width;
+        screen["height"] = display.config.height;
+
+        const DisplayPage* page = findPageForDisplay(display.config, display.currentPageId);
+        if (!page) page = firstPageForDisplay(display.config);
+
+        JsonArray widgets = screen["widgets"].to<JsonArray>();
+        if (page) {
+            screen["page"]  = page->id;
+            screen["title"] = page->title;
+            for (const auto& widget : page->widgets) {
+                if (widgetBudget == 0) { screen["truncated"] = true; break; }
+                String text = resolveWidgetText(widget);
+                if (widget.maxChars > 0 && text.length() > widget.maxChars) {
+                    text = text.substring(0, widget.maxChars);
+                }
+                JsonObject w = widgets.add<JsonObject>();
+                w["x"]    = widget.x;
+                w["y"]    = widget.y;
+                w["size"] = widget.textSize;
+                w["text"] = text;
+                --widgetBudget;
+            }
+        }
+
+        // Surface the transient notification overlay so the preview matches the
+        // glass (it renders bottom-left at text size 1 — see renderDisplay).
+        if (notifActive) screen["notification"] = _notifMessage;
+    }
+}

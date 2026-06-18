@@ -66,6 +66,13 @@ header h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .profiles { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
 .profiles .row { justify-content: space-between; font-size: 13px; }
 
+.screens { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; }
+.screen { display: flex; flex-direction: column; gap: 4px; }
+.screen-canvas {
+  display: block; max-width: 100%; image-rendering: pixelated;
+  border: 1px solid var(--line); border-radius: 4px; background: #0b0f14;
+}
+
 .topo { font-size: 14px; line-height: 1.9; }
 .topo-root { font-weight: 600; margin-bottom: 4px; }
 .topo-node { margin-left: 18px; }

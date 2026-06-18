@@ -73,6 +73,12 @@ describe('CMS integration', () => {
       lastCmd = JSON.parse(p.toString());
       const reply: any = { id: lastCmd.id, type: lastCmd.type, ok: true };
       if (lastCmd.type === 'get_profiles') { reply.active = 'home'; reply.profiles = [{ id: 'home', name: 'Home' }]; }
+      if (lastCmd.type === 'get_screens') {
+        reply.screens = [{
+          id: 'oled', type: 'ssd1306', width: 128, height: 64, page: 'main', title: 'Main',
+          widgets: [{ x: 0, y: 0, size: 2, text: 'Lobby' }, { x: 0, y: 20, size: 1, text: '21.4°C' }],
+        }];
+      }
       dev.publish(`${base}/cmd/result`, JSON.stringify(reply), { qos: 1 });
     });
     dev.publish(`${base}/online`, 'online', { retain: true, qos: 1 });
@@ -109,6 +115,15 @@ describe('CMS integration', () => {
     const body = await res.json() as any;
     assert.equal(body.active, 'home');
     assert.equal(body.profiles[0].id, 'home');
+  });
+
+  it('get_screens relays the device live screen state', async () => {
+    const body = await getJson(`/api/devices/${DEV}/screens`);
+    assert.equal(body.ok, true);
+    assert.equal(body.screens.length, 1);
+    assert.equal(body.screens[0].id, 'oled');
+    assert.equal(body.screens[0].width, 128);
+    assert.equal(body.screens[0].widgets[0].text, 'Lobby');
   });
 
   it('bulk command targets the whole fleet', async () => {

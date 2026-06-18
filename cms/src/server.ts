@@ -195,6 +195,18 @@ export function createServer(
     res.json({ deviceId: req.params.id, samples: history.get(req.params.id) });
   });
 
+  // Live screen preview (#57): ask the device what its displays are currently
+  // showing and relay the ack. A GET (read-only) so the viewer role can use it;
+  // it drives no hardware, just snapshots the rendered widget state.
+  app.get('/api/devices/:id/screens', async (req, res) => {
+    try {
+      const result = await bridge.sendCommand(req.params.id, { type: 'get_screens' });
+      res.json(result);
+    } catch (err) {
+      res.status(504).json({ error: err instanceof Error ? err.message : 'command failed' });
+    }
+  });
+
   // Set a device's tags (operator-assigned, for grouping/bulk targeting).
   app.put('/api/devices/:id/tags', (req, res) => {
     const tags = (req.body ?? {}).tags;

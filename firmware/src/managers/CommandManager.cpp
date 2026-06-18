@@ -10,6 +10,7 @@
 #include "HealthMonitor.h"
 #include "../core/EventBus.h"
 #include "../hardware/OutputManager.h"
+#include "../hardware/DisplayManager.h"
 
 #if defined(ESP32)
     #include <HTTPUpdate.h>
@@ -81,6 +82,18 @@ void CommandManager::handle(const String& payload) {
             o["id"]   = p.id;
             o["name"] = p.name;
         }
+        String payload;
+        serializeJson(out, payload);
+        MqttManager::instance().publishDevice("cmd/result", payload, false);
+    } else if (type == "get_screens") {
+        // Report what each display is currently showing so the CMS can render a
+        // live preview. Widget count is bounded by fillScreensJson to keep the
+        // payload inside the MQTT publish buffer (2048B, 1024B over TLS).
+        JsonDocument out;
+        out["id"]   = id;
+        out["type"] = type;
+        out["ok"]   = true;
+        DisplayManager::instance().fillScreensJson(out["screens"].to<JsonArray>());
         String payload;
         serializeJson(out, payload);
         MqttManager::instance().publishDevice("cmd/result", payload, false);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <functional>
 #include <map>
 #include <memory>
@@ -55,6 +56,14 @@ public:
     void showNotification(const String& message, uint32_t durationMs = 3000);
 
     const std::vector<DisplayConfig>& displayConfigs() const { return _configs; }
+
+    // Report what each active display is currently showing — geometry, the
+    // active page, and every widget's resolved text — so the CMS can
+    // reconstruct a live preview without a framebuffer. Bounded so the JSON
+    // stays inside the MQTT publish buffer (see CommandManager get_screens):
+    // at most `maxWidgets` widgets are emitted across all displays, after which
+    // `truncated` is set on the affected screen.
+    void fillScreensJson(JsonArray arr, size_t maxWidgets = 24) const;
 
 private:
     struct DisplayInstance {
