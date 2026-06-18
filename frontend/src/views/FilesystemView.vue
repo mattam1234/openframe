@@ -53,6 +53,7 @@
           ref="fileInput"
           type="file"
           class="d-none"
+          aria-label="Choose a file to upload"
           @change="onFilePicked"
         >
       </v-col>
@@ -123,7 +124,14 @@
               <tbody>
                 <tr v-if="currentPath !== '/'">
                   <td colspan="4">
-                    <a style="cursor: pointer" @click="navigate(parentPath)">
+                    <a
+                      role="button"
+                      tabindex="0"
+                      style="cursor: pointer"
+                      aria-label="Go to parent folder"
+                      @click="navigate(parentPath)"
+                      @keyup.enter="navigate(parentPath)"
+                    >
                       <v-icon size="small" class="mr-1">mdi-arrow-up-left</v-icon>..
                     </a>
                   </td>
@@ -135,8 +143,12 @@
                     </v-icon>
                     <a
                       v-if="entry.type === 'dir'"
+                      role="button"
+                      tabindex="0"
                       style="cursor: pointer"
+                      :aria-label="`Open folder ${entry.name}`"
                       @click="navigate(entry.path)"
+                      @keyup.enter="navigate(entry.path)"
                     >{{ entry.name }}</a>
                     <span v-else>{{ entry.name }}</span>
                   </td>

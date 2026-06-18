@@ -21,6 +21,7 @@
           :active="i === cursor"
           @click="run(cmd)"
           @mouseenter="cursor = i"
+          @focusin="cursor = i"
         >
           <template #prepend><v-icon :icon="cmd.icon" /></template>
           <v-list-item-title>{{ cmd.label }}</v-list-item-title>

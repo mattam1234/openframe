@@ -479,7 +479,7 @@
                   />
                   <div v-if="step.command === 'rgb' || step.command === 'animation'" class="d-flex align-center ga-2 mt-2">
                     <span class="text-caption text-medium-emphasis">Colour</span>
-                    <input type="color" :value="stepHex(step)" @input="setStepColor(step, $event.target.value)">
+                    <input type="color" aria-label="Step colour" :value="stepHex(step)" @input="setStepColor(step, $event.target.value)">
                   </div>
                   <v-slider
                     v-if="step.command === 'brightness'"

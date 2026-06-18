@@ -11,6 +11,7 @@ module.exports = {
   extends: [
     'eslint:recommended',
     'plugin:vue/vue3-essential',
+    'plugin:vuejs-accessibility/recommended',
   ],
   parserOptions: {
     ecmaVersion: 'latest',
@@ -21,6 +22,10 @@ module.exports = {
     // Vuetify uses dotted dynamic slot names (e.g. #item.foo) on data tables/steppers.
     'vue/valid-v-slot': ['error', { allowModifiers: true }],
     'no-unused-vars': ['warn', { argsIgnorePattern: '^_', ignoreRestSiblings: true }],
+    // `autofocus` is only ever used to move focus INTO a dialog / the command
+    // palette when it opens — that's an accessibility benefit, not the page-load
+    // autofocus this rule guards against.
+    'vuejs-accessibility/no-autofocus': 'off',
   },
   // Built output and static service-worker assets aren't linted as source.
   ignorePatterns: ['dist', 'public'],

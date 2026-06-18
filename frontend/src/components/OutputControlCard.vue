@@ -24,11 +24,13 @@
       <!-- Colour (rgb + ws2812) -->
       <template v-if="hasColor">
         <div class="d-flex ga-2 mb-2">
-          <div
+          <button
             v-for="preset in presets"
             :key="preset"
+            type="button"
             class="preset-swatch"
             :style="{ background: preset }"
+            :aria-label="`Use colour ${preset}`"
             @click="applyHex(preset)"
           />
         </div>
@@ -228,8 +230,14 @@ const jog = (delta) => { const t = (model.position ?? 0) + delta; stepTarget.val
 .preset-swatch {
   width: 22px;
   height: 22px;
+  padding: 0;
+  box-sizing: border-box;
   border-radius: 4px;
   cursor: pointer;
   border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.preset-swatch:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 2px;
 }
 </style>

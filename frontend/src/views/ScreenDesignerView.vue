@@ -97,6 +97,9 @@
         </div>
 
         <div class="sd-bezel">
+          <!-- The panel is a drag-and-drop canvas (a drop target), not a control;
+               keyboard users add via the library tiles and nudge with arrow keys. -->
+          <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
           <div
             ref="canvasEl"
             class="sd-panel"
