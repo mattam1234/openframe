@@ -99,7 +99,7 @@ Legend: `- [ ]` not started · `- [~]` partial · `- [x]` done · **P1** high va
 - [ ] 69. **P3** Per-link RSSI/quality in topology map **(roadmap)** — *spot weak mesh links.*
 - [ ] 70. **P3** Remote display mirroring / live preview of a leaf **(roadmap)** — *monitor headless leaves.*
 - [x] 71. **P1** NodeLink ack + retry + sequence dedup — *reliable mesh messaging.* (reliable unicast: per-msg Ack, retransmit up to 3× @300ms, per-source seq dedup with reboot-safe exact-match; broadcasts unaffected)
-- [ ] 72. **P2** Mesh-wide variable namespace browser in the UI — *discover what data exists.*
+- [x] 72. **P2** Mesh-wide variable namespace browser in the UI — *discover what data exists.* (new device-frontend **Variables** view (`/variables`, nav + command palette): lists this node's variables and, grouped per source node, the mesh-mirrored `node/<srcId>/<name>` values (already mirrored into VariableManager by [[#71]] NodeLink), with live values/types/units and a name/value filter; seeds from `/api/variables` and stays live via the WS. Fixed a latent store bug found along the way — `variable_snapshot` arrives as an *array* but the store keyed it by index, so views that look variables up by id (Sensors, HA) saw nothing until the first per-variable change; now keyed by id. Mock device gains sample `node/*` vars. 28 unit + 9 e2e pass.)
 - [ ] 73. **P2** Auto-channel negotiation gateway↔leaves — *resolves the open WiFi/ESP-NOW channel question.*
 - [ ] 74. **P3** Over-mesh OTA for infra-less leaves (relayed) — *update nodes with no WiFi.*
 

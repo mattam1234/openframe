@@ -5,6 +5,7 @@ const routes = [
   { path: '/layout',    component: () => import('../views/LayoutDesignerView.vue'),  name: 'layout'     },
   { path: '/screens',   component: () => import('../views/ScreenDesignerView.vue'),  name: 'screens'    },
   { path: '/sensors',   component: () => import('../views/SensorDashboardView.vue'), name: 'sensors'    },
+  { path: '/variables', component: () => import('../views/VariablesView.vue'),       name: 'variables'  },
   { path: '/outputs',   component: () => import('../views/OutputsView.vue'),         name: 'outputs'    },
   { path: '/actions',   component: () => import('../views/ActionManagerView.vue'),   name: 'actions'    },
   { path: '/modules',   component: () => import('../views/ModuleManagerView.vue'),   name: 'modules'    },

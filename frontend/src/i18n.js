@@ -14,6 +14,7 @@ const en = {
     layout: 'Layout Designer',
     screens: 'Screen Designer',
     sensors: 'Sensors',
+    variables: 'Variables',
     outputs: 'Outputs',
     actions: 'Actions',
     modules: 'Modules',

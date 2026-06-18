@@ -47,6 +47,7 @@ const meta = {
   layout: { label: 'Layout Designer', icon: 'mdi-pencil-ruler' },
   screens: { label: 'Screen Designer', icon: 'mdi-monitor' },
   sensors: { label: 'Sensors', icon: 'mdi-thermometer' },
+  variables: { label: 'Variables', icon: 'mdi-variable' },
   outputs: { label: 'Outputs', icon: 'mdi-power-plug' },
   actions: { label: 'Action Manager', icon: 'mdi-cog-transfer' },
   modules: { label: 'Modules', icon: 'mdi-puzzle' },

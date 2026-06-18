@@ -42,6 +42,10 @@ const variables = [
   { id: 'temp', type: 'Float', value: temp, unit: '°C' },
   { id: 'humidity', type: 'Integer', value: humidity, unit: '%' },
   { id: 'lights', type: 'Boolean', value: true },
+  // Mesh-mirrored peer variables (node/<srcId>/<name>) — see NodeLink.
+  { id: 'node/leaf-7/temp', type: 'Float', value: 19.8, unit: '°C' },
+  { id: 'node/leaf-7/door', type: 'Boolean', value: false },
+  { id: 'node/leaf-12/soil', type: 'Integer', value: 42, unit: '%' },
 ]
 
 // GET fixtures, keyed by pathname.

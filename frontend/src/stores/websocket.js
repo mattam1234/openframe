@@ -66,10 +66,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
       case 'sensor_update':
         Object.assign(sensors, payload)
         break
-      case 'variable_snapshot':
+      case 'variable_snapshot': {
+        // The device sends the snapshot as an array of variable objects; key it
+        // by id so the store is consistently { id: variable } (matching the
+        // variable_change frames and how views look variables up by id).
         Object.keys(variables).forEach((key) => delete variables[key])
-        Object.assign(variables, payload || {})
+        const list = Array.isArray(payload) ? payload : Object.values(payload || {})
+        for (const v of list) if (v && v.id) variables[v.id] = v
         break
+      }
       case 'variable_change':
         Object.assign(variables, payload)
         break

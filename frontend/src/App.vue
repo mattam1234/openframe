@@ -112,6 +112,7 @@ const navItems = [
   { key: 'nav.layout',    icon: 'mdi-developer-board',        to: '/layout' },
   { key: 'nav.screens',   icon: 'mdi-monitor-edit',           to: '/screens' },
   { key: 'nav.sensors',   icon: 'mdi-thermometer',            to: '/sensors' },
+  { key: 'nav.variables', icon: 'mdi-variable',               to: '/variables' },
   { key: 'nav.outputs',   icon: 'mdi-led-strip-variant',      to: '/outputs' },
   { key: 'nav.actions',   icon: 'mdi-lightning-bolt',         to: '/actions' },
   { key: 'nav.modules',   icon: 'mdi-expansion-card',         to: '/modules' },
