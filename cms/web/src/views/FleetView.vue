@@ -62,7 +62,9 @@
         <span class="status-dot" :class="item.online ? 'online' : 'offline'" :title="item.online ? 'online' : 'offline'" />
       </template>
       <template #[`item.name`]="{ item }">
-        <a :href="`/device.html?id=${encodeURIComponent(item.deviceId)}`" class="devlink">{{ item.name || '—' }}</a>
+        <router-link :to="{ name: 'device', params: { id: item.deviceId } }" class="devlink">
+          {{ item.name || '—' }}
+        </router-link>
       </template>
       <template #[`item.rssi`]="{ item }">{{ rssiLabel(item.rssi) }}</template>
       <template #[`item.freeHeap`]="{ item }">{{ fmtHeap(item.freeHeap) }}</template>
@@ -85,13 +87,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Sparkline } from '@shared'
 import api from '../api'
+import { useFleet } from '../store'
+import { fmtUptime, fmtHeap, fmtAgo, rssiLabel } from '../format'
 
-const emit = defineEmits(['update:connected'])
+const { devices, heapHistory } = useFleet()
 
-const devices = ref([])
 const selectedIds = ref([])
 const templates = ref([])
 const templateId = ref(null)
@@ -100,7 +103,6 @@ const tagFilter = ref('')
 const search = ref('')
 const bulkResult = ref('')
 const busy = ref('')
-const heapHistory = reactive({})
 
 const headers = [
   { title: '', key: 'online', sortable: false, width: 36 },
@@ -126,11 +128,8 @@ const templateItems = computed(() =>
 const wantedTags = computed(() => tagFilter.value.split(',').map((t) => t.trim()).filter(Boolean))
 
 const filteredDevices = computed(() => {
-  let list = devices.value
-  if (wantedTags.value.length) {
-    list = list.filter((d) => (d.tags || []).some((t) => wantedTags.value.includes(t)))
-  }
-  return list
+  if (!wantedTags.value.length) return devices.value
+  return devices.value.filter((d) => (d.tags || []).some((t) => wantedTags.value.includes(t)))
 })
 
 const summary = computed(() => {
@@ -144,37 +143,6 @@ const selectionLabel = computed(() => {
   if (wantedTags.value.length) return `tagged: ${wantedTags.value.join(', ')}`
   return `all devices (${devices.value.filter((d) => d.online).length} online)`
 })
-
-// ── formatting (ported from the vanilla fleet view) ──────────────────────────
-const asNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null }
-function fmtUptime(ms) {
-  const n = asNum(ms); if (n == null) return '—'
-  const s = Math.floor(n / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60)
-  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`
-}
-const fmtHeap = (b) => { const n = asNum(b); return n == null ? '—' : `${(n / 1024).toFixed(0)} KB` }
-function fmtAgo(ts) {
-  const n = asNum(ts); if (!n) return 'never'
-  const s = Math.floor((Date.now() - n) / 1000)
-  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`
-}
-const rssiLabel = (r) => { const n = asNum(r); return n == null || n === 0 ? '—' : `${n} dBm` }
-
-// ── data + live updates ──────────────────────────────────────────────────────
-function recordHeap(d) {
-  const n = asNum(d.freeHeap)
-  if (n == null) return
-  const buf = heapHistory[d.deviceId] || (heapHistory[d.deviceId] = [])
-  buf.push(n)
-  if (buf.length > 20) buf.shift()
-}
-
-function upsert(device) {
-  const i = devices.value.findIndex((d) => d.deviceId === device.deviceId)
-  if (i >= 0) devices.value[i] = device
-  else devices.value.push(device)
-  recordHeap(device)
-}
 
 // Target spec: explicit selection → tag filter → whole fleet (online-only applies
 // to the latter two), mirroring the vanilla UI.
@@ -211,38 +179,8 @@ async function cmd(deviceId, type) {
   try { await api.post(`/api/devices/${encodeURIComponent(deviceId)}/cmd`, { type }) } catch { /* surfaced elsewhere */ }
 }
 
-let socket = null
-let reconnectTimer = null
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  socket = new WebSocket(`${proto}://${location.host}/ws`)
-  socket.onopen = () => emit('update:connected', true)
-  socket.onclose = () => {
-    emit('update:connected', false)
-    clearTimeout(reconnectTimer)
-    reconnectTimer = setTimeout(connect, 2000)
-  }
-  socket.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data)
-    if (msg.type === 'snapshot') {
-      devices.value = msg.devices || []
-      for (const d of devices.value) recordHeap(d)
-    } else if (msg.type === 'device') {
-      upsert(msg.device)
-    }
-  }
-}
-
 onMounted(async () => {
-  try { devices.value = (await api.get('/api/devices')).devices || [] } catch { /* WS will fill in */ }
-  for (const d of devices.value) recordHeap(d)
   try { templates.value = (await api.get('/api/templates')).templates || [] } catch { /* optional */ }
-  connect()
-})
-
-onUnmounted(() => {
-  clearTimeout(reconnectTimer)
-  if (socket) { socket.onclose = null; socket.close() }
 })
 </script>
 

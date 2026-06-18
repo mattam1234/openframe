@@ -17,4 +17,5 @@ async function request(method, path, body) {
 export default {
   get: (p) => request('GET', p),
   post: (p, body) => request('POST', p, body),
+  put: (p, body) => request('PUT', p, body),
 }

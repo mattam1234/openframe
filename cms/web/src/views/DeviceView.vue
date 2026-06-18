@@ -1,0 +1,239 @@
+<template>
+  <div>
+    <div class="d-flex align-center mb-4 ga-2">
+      <v-btn icon="mdi-arrow-left" variant="text" :to="{ name: 'fleet' }" aria-label="Back to fleet" />
+      <h2 class="text-h6 mb-0">{{ device?.name || routeId }}</h2>
+      <v-chip v-if="device" :color="device.online ? 'success' : 'grey'" size="small" variant="flat" class="ml-1">
+        {{ device.online ? 'online' : 'offline' }}
+      </v-chip>
+    </div>
+
+    <v-alert v-if="notFound" type="warning" variant="tonal">Unknown device.</v-alert>
+
+    <v-row v-else>
+      <!-- Status + history -->
+      <v-col cols="12" md="6">
+        <v-card border flat>
+          <v-card-title class="text-subtitle-1">Status</v-card-title>
+          <v-table density="compact">
+            <tbody>
+              <tr v-for="f in fields" :key="f.label">
+                <th class="text-left text-medium-emphasis">{{ f.label }}</th>
+                <td>{{ f.value }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+          <v-divider />
+          <v-card-text>
+            <div class="text-caption text-medium-emphasis mb-1">Free heap</div>
+            <Sparkline :values="heapSeries" :width="320" :height="40" color="#60a5fa" />
+            <div class="text-caption text-medium-emphasis mt-3 mb-1">RSSI</div>
+            <Sparkline :values="rssiSeries" :width="320" :height="40" color="#22c55e" />
+            <p v-if="heapSeries.length < 2" class="text-caption text-medium-emphasis mt-2 mb-0">
+              No telemetry history yet.
+            </p>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
+        <!-- Tags -->
+        <v-card border flat class="mb-4">
+          <v-card-title class="text-subtitle-1">Tags</v-card-title>
+          <v-card-text>
+            <div class="mb-2">
+              <v-chip
+                v-for="t in device?.tags || []"
+                :key="t"
+                size="small"
+                class="mr-1 mb-1"
+                closable
+                @click:close="saveTags((device.tags || []).filter((x) => x !== t))"
+              >{{ t }}</v-chip>
+              <span v-if="!(device?.tags || []).length" class="text-medium-emphasis">no tags</span>
+            </div>
+            <div class="d-flex ga-2">
+              <v-text-field
+                v-model="newTag"
+                placeholder="add tag"
+                density="compact"
+                variant="outlined"
+                hide-details
+                @keyup.enter="addTag"
+              />
+              <v-btn variant="tonal" @click="addTag">Add</v-btn>
+            </div>
+          </v-card-text>
+        </v-card>
+
+        <!-- Notes -->
+        <v-card border flat class="mb-4">
+          <v-card-title class="text-subtitle-1">Notes</v-card-title>
+          <v-card-text>
+            <v-textarea
+              v-model="notes"
+              rows="3"
+              density="compact"
+              variant="outlined"
+              hide-details
+              placeholder="Operational notes — location, quirks, maintenance history…"
+            />
+            <div class="d-flex align-center ga-2 mt-2">
+              <v-btn variant="tonal" :loading="savingNotes" @click="saveNotes">Save notes</v-btn>
+              <span class="text-caption text-medium-emphasis">{{ notesMsg }}</span>
+            </div>
+          </v-card-text>
+        </v-card>
+
+        <!-- Actions + profiles -->
+        <v-card border flat>
+          <v-card-title class="text-subtitle-1">Actions</v-card-title>
+          <v-card-text>
+            <div class="d-flex ga-2 mb-3">
+              <v-btn variant="tonal" @click="cmd('identify')">Identify</v-btn>
+              <v-btn variant="tonal" @click="cmd('get_status')">Refresh status</v-btn>
+              <v-btn variant="tonal" color="warning" @click="cmd('reboot')">Reboot</v-btn>
+            </div>
+
+            <div class="text-subtitle-2 mb-1">Profiles</div>
+            <div class="d-flex align-center ga-2 mb-2">
+              <v-btn size="small" variant="tonal" :loading="loadingProfiles" @click="loadProfiles">Load profiles</v-btn>
+              <span class="text-caption text-medium-emphasis">{{ profilesMsg }}</span>
+            </div>
+            <div v-for="p in profiles" :key="p.id" class="d-flex align-center justify-space-between py-1">
+              <span :class="{ 'text-warning': p.id === activeProfile }">
+                {{ p.name || p.id }}<span v-if="p.id === activeProfile"> (active)</span>
+              </span>
+              <v-btn size="x-small" variant="tonal" :disabled="p.id === activeProfile" @click="activateProfile(p.id)">
+                Activate
+              </v-btn>
+            </div>
+
+            <v-divider class="my-3" />
+            <pre class="result text-caption">{{ result }}</pre>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, ref, watch } from 'vue'
+import { Sparkline } from '@shared'
+import api from '../api'
+import { useFleet } from '../store'
+import { fmtUptime, fmtHeap, fmtAgo, rssiLabel, asNum } from '../format'
+
+const props = defineProps({ id: { type: String, required: true } })
+const routeId = computed(() => props.id)
+
+const { devices } = useFleet()
+const device = computed(() => devices.value.find((d) => d.deviceId === props.id) || loadedDevice.value)
+const loadedDevice = ref(null)
+const notFound = ref(false)
+
+const history = ref([])
+const heapSeries = computed(() => history.value.map((s) => asNum(s.freeHeap)).filter((v) => v != null))
+const rssiSeries = computed(() => history.value.map((s) => asNum(s.rssi)).filter((v) => v != null))
+
+const fields = computed(() => {
+  const d = device.value || {}
+  return [
+    { label: 'ID', value: d.deviceId || props.id },
+    { label: 'Board', value: d.board || '—' },
+    { label: 'Firmware', value: d.version || '—' },
+    { label: 'IP', value: d.ip || '—' },
+    { label: 'RSSI', value: rssiLabel(d.rssi) },
+    { label: 'Free heap', value: fmtHeap(d.freeHeap) },
+    { label: 'CPU load', value: asNum(d.cpuLoadPercent) == null ? '—' : `${d.cpuLoadPercent}%` },
+    { label: 'Uptime', value: fmtUptime(d.uptimeMs) },
+    { label: 'Profile', value: d.activeProfileId || '—' },
+    { label: 'Last seen', value: fmtAgo(d.lastSeen) },
+  ]
+})
+
+const newTag = ref('')
+const notes = ref('')
+const notesMsg = ref('')
+const savingNotes = ref(false)
+const result = ref('—')
+const profiles = ref([])
+const activeProfile = ref('')
+const profilesMsg = ref('')
+const loadingProfiles = ref(false)
+
+async function saveTags(tags) {
+  try {
+    const updated = await api.put(`/api/devices/${encodeURIComponent(props.id)}/tags`, { tags })
+    if (device.value) device.value.tags = updated.tags || tags
+  } catch (e) { result.value = `error: ${e.message}` }
+}
+function addTag() {
+  const t = newTag.value.trim()
+  const tags = device.value?.tags || []
+  if (t && !tags.includes(t)) saveTags([...tags, t])
+  newTag.value = ''
+}
+
+async function saveNotes() {
+  savingNotes.value = true
+  notesMsg.value = 'Saving…'
+  try {
+    await api.put(`/api/devices/${encodeURIComponent(props.id)}/notes`, { notes: notes.value })
+    notesMsg.value = 'Saved.'
+  } catch (e) { notesMsg.value = `Failed: ${e.message}` }
+  finally { savingNotes.value = false }
+}
+
+async function cmd(type, payload) {
+  result.value = `sending ${type}…`
+  try {
+    result.value = JSON.stringify(await api.post(`/api/devices/${encodeURIComponent(props.id)}/cmd`, { type, payload }), null, 2)
+  } catch (e) { result.value = `error: ${e.message}` }
+}
+
+async function loadProfiles() {
+  loadingProfiles.value = true
+  profilesMsg.value = 'loading…'
+  try {
+    const body = await api.post(`/api/devices/${encodeURIComponent(props.id)}/cmd`, { type: 'get_profiles' })
+    profiles.value = body.profiles || []
+    activeProfile.value = body.active || ''
+    profilesMsg.value = profiles.value.length ? '' : 'no profiles'
+  } catch (e) { profilesMsg.value = `error: ${e.message}` }
+  finally { loadingProfiles.value = false }
+}
+async function activateProfile(id) {
+  await cmd('activate_profile', { id })
+  loadProfiles()
+}
+
+async function load() {
+  // Seed fields from REST if the device isn't already in the live store.
+  if (!devices.value.find((d) => d.deviceId === props.id)) {
+    try { loadedDevice.value = await api.get(`/api/devices/${encodeURIComponent(props.id)}`) }
+    catch { notFound.value = true }
+  }
+  try { history.value = (await api.get(`/api/devices/${encodeURIComponent(props.id)}/history`)).samples || [] }
+  catch { /* history is optional */ }
+}
+
+// Don't clobber the notes textarea while typing; seed it once the device resolves.
+watch(device, (d) => { if (d && !notes.value) notes.value = d.notes || '' }, { immediate: true })
+
+onMounted(load)
+</script>
+
+<style scoped>
+.result {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 0;
+}
+</style>
