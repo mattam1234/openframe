@@ -92,6 +92,7 @@ import { Sparkline } from '@shared'
 import api from '../api'
 import { useFleet } from '../store'
 import { fmtUptime, fmtHeap, fmtAgo, rssiLabel } from '../format'
+import { resolveTargetSpec } from '../lib/fleet'
 
 const { devicesInSite, heapHistory } = useFleet()
 
@@ -147,9 +148,7 @@ const selectionLabel = computed(() => {
 // Target spec: explicit selection → tag filter → whole fleet (online-only applies
 // to the latter two), mirroring the vanilla UI.
 function targetSpec() {
-  if (selectedIds.value.length) return { deviceIds: [...selectedIds.value] }
-  if (wantedTags.value.length) return { tags: wantedTags.value, onlineOnly: onlineOnly.value }
-  return { onlineOnly: onlineOnly.value }
+  return resolveTargetSpec({ selectedIds: selectedIds.value, tags: wantedTags.value, onlineOnly: onlineOnly.value })
 }
 
 async function bulk(type) {

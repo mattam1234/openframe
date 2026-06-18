@@ -43,31 +43,13 @@
 <script setup>
 import { computed } from 'vue'
 import { useFleet } from '../store'
+import { buildTopology } from '../lib/fleet'
 
 const { devicesInSite: devices } = useFleet()
 
 const meta = (d) => [d.board, d.ip].filter(Boolean).join(', ')
 
-// Group devices into broker → {direct nodes, gateways→leaves}, plus leaves whose
-// gateway isn't a known device. (Ported from the vanilla topology view.)
-const topology = computed(() => {
-  const list = devices.value
-  const byGateway = new Map()
-  const direct = []
-  for (const d of list) {
-    if (d.via) {
-      if (!byGateway.has(d.via)) byGateway.set(d.via, [])
-      byGateway.get(d.via).push(d)
-    } else { direct.push(d) }
-  }
-  const known = new Set(list.map((d) => d.deviceId))
-  const byId = (a, b) => a.deviceId.localeCompare(b.deviceId)
-  const nodes = direct.sort(byId).map((d) => ({ device: d, leaves: (byGateway.get(d.deviceId) || []).sort(byId) }))
-  const orphans = [...byGateway.entries()]
-    .filter(([gw]) => !known.has(gw))
-    .map(([via, leaves]) => ({ via, leaves: leaves.sort(byId) }))
-  return { nodes, orphans }
-})
+const topology = computed(() => buildTopology(devices.value))
 </script>
 
 <style scoped>

@@ -3,6 +3,7 @@
 // reactive singleton — the CMS UI is small enough not to need Pinia.
 import { computed, reactive, ref, watch } from 'vue'
 import api from './api'
+import { filterBySite, sitesOf } from './lib/fleet'
 
 const devices = ref([])
 const connected = ref(false)
@@ -14,10 +15,8 @@ let savedSite = ''
 try { savedSite = localStorage.getItem('of-cms-site') || '' } catch { /* private mode */ }
 const selectedSite = ref(savedSite)
 watch(selectedSite, (s) => { try { localStorage.setItem('of-cms-site', s || '') } catch { /* ignore */ } })
-const sites = computed(() => [...new Set(devices.value.map((d) => d.site).filter(Boolean))].sort())
-const devicesInSite = computed(() =>
-  selectedSite.value ? devices.value.filter((d) => d.site === selectedSite.value) : devices.value,
-)
+const sites = computed(() => sitesOf(devices.value))
+const devicesInSite = computed(() => filterBySite(devices.value, selectedSite.value))
 // Per-device freeHeap ring buffers, fed from live updates → shared Sparkline.
 const heapHistory = reactive({})
 
