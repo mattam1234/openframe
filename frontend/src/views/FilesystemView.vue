@@ -209,6 +209,9 @@
           <v-alert v-if="editor.error" type="error" variant="tonal" density="compact" class="mb-2">
             {{ editor.error }}
           </v-alert>
+          <v-alert v-if="editor.warning" type="warning" variant="tonal" density="compact" class="mb-2">
+            {{ editor.warning }}
+          </v-alert>
           <v-textarea
             v-if="!editor.showDiff"
             v-model="editor.content"
@@ -218,7 +221,7 @@
             rows="16"
             class="font-monospace"
             spellcheck="false"
-            @update:model-value="editor.dirty = true"
+            @update:model-value="onEditorInput"
           />
           <div v-else class="diff-view font-monospace">
             <div v-if="!diffChanged" class="text-medium-emphasis pa-2">No changes vs. the file on disk.</div>
@@ -250,7 +253,7 @@
             Format
           </v-btn>
           <span v-if="editor.isJson" class="text-caption text-medium-emphasis ml-2">
-            validated before saving
+            {{ editorValidationLabel }}
           </span>
           <v-spacer />
           <v-btn variant="text" @click="editor.open = false">Close</v-btn>
@@ -363,6 +366,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import api from '../api/client'
+import { validateConfigFile, hasSchema } from '../lib/configSchemas'
 
 const loading = ref(false)
 const uploadBusy = ref(false)
@@ -375,7 +379,7 @@ const fileInput = ref(null)
 
 const editor = reactive({
   open: false, path: '', content: '', original: '', loading: false, saving: false,
-  dirty: false, error: '', isJson: false, showDiff: false,
+  dirty: false, error: '', warning: '', warnAck: false, isJson: false, showDiff: false,
 })
 const deleteDialog = reactive({ open: false, path: '', busy: false, isDir: false })
 const nameDialog = reactive({ open: false, mode: 'folder', title: '', value: '', busy: false, error: '', original: '' })
@@ -464,6 +468,8 @@ async function inspect(entry) {
   editor.content = ''
   editor.original = ''
   editor.error = ''
+  editor.warning = ''
+  editor.warnAck = false
   editor.dirty = false
   editor.showDiff = false
   editor.isJson = entry.path.endsWith('.json')
@@ -506,11 +512,26 @@ const diffRows = computed(() => {
 
 const diffChanged = computed(() => diffRows.value.some((r) => r.type !== 'ctx'));
 
+// Tell the user how thoroughly this file is checked: known config files get a
+// structural shape check on top of JSON syntax; everything else, syntax only.
+const editorValidationLabel = computed(() =>
+  hasSchema(editor.path) ? 'structure checked before saving' : 'JSON validated before saving'
+);
+
+// Any edit invalidates a prior "save anyway" acknowledgement and clears stale
+// validation messages so the next save re-checks the current buffer.
+function onEditorInput() {
+  editor.dirty = true
+  editor.warnAck = false
+  editor.warning = ''
+  editor.error = ''
+}
+
 function formatJson() {
   editor.error = ''
   try {
     editor.content = JSON.stringify(JSON.parse(editor.content), null, 2)
-    editor.dirty = true
+    onEditorInput()
   } catch (e) {
     editor.error = `Invalid JSON: ${e.message}`
   }
@@ -519,10 +540,24 @@ function formatJson() {
 async function saveEditor() {
   editor.error = ''
   if (editor.isJson) {
+    let parsed
     try {
-      JSON.parse(editor.content)
+      parsed = JSON.parse(editor.content)
     } catch (e) {
       editor.error = `Invalid JSON: ${e.message}`
+      return
+    }
+    // Structural validation (#53): block definitively-broken shapes the firmware
+    // would reject/ignore; warn (but allow "save anyway") on likely mistakes.
+    const { errors, warnings } = validateConfigFile(editor.path, parsed)
+    if (errors.length) {
+      editor.warning = ''
+      editor.error = errors.join('  ')
+      return
+    }
+    if (warnings.length && !editor.warnAck) {
+      editor.warning = `${warnings.join('  ')} — click Save again to write it anyway.`
+      editor.warnAck = true
       return
     }
   }
