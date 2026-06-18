@@ -7,6 +7,11 @@ export default defineConfig({
     vue(),
     vuetify({ autoImport: true }),
   ],
+  // Vitest: unit/component specs live under src/. The Playwright E2E specs in
+  // e2e/ (which import @playwright/test) run separately via `npm run test:e2e`.
+  test: {
+    include: ['src/**/*.{test,spec}.js'],
+  },
   server: {
     proxy: {
       '/api': {

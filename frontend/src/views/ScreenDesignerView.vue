@@ -60,8 +60,13 @@
           v-for="item in LIBRARY"
           :key="item.type"
           class="sd-lib-item"
+          role="button"
+          tabindex="0"
+          :aria-label="`Add ${item.label} widget`"
           draggable="true"
           @dragstart="onLibraryDragStart($event, item.type)"
+          @keydown.enter.prevent="addFromLibrary(item.type)"
+          @keydown.space.prevent="addFromLibrary(item.type)"
         >
           <v-icon class="mr-2" :color="item.color">{{ item.icon }}</v-icon>
           <div class="sd-lib-text">
@@ -97,6 +102,8 @@
             class="sd-panel"
             :class="{ 'sd-grid': gridStep > 1 }"
             :style="panelStyle"
+            role="group"
+            :aria-label="`Device screen, ${activeDisplay.width} by ${activeDisplay.height} pixels`"
             @dragover.prevent
             @drop="onCanvasDrop"
             @pointerdown="onCanvasPointerDown"
@@ -104,16 +111,22 @@
             <div
               v-for="(widget, idx) in selectedPage.widgets"
               :key="idx"
+              ref="widgetEls"
               class="sd-widget"
               :class="{ 'sd-widget--selected': selectedWidgetIdx === idx }"
               :style="widgetStyle(widget)"
+              tabindex="0"
+              role="button"
+              :aria-label="widgetAriaLabel(widget)"
               @pointerdown.stop="onWidgetPointerDown($event, idx)"
+              @focus="selectedWidgetIdx = idx"
+              @keydown="onWidgetKeydown($event, idx)"
             >{{ widgetPreviewText(widget) }}</div>
           </div>
         </div>
-
         <p class="sd-hint text-caption text-medium-emphasis">
-          Saving restarts the device to apply the new layout.
+          Drag widgets, or focus one and nudge with the arrow keys (Delete removes it).
+          Saving restarts the device to apply the layout.
         </p>
       </section>
 
@@ -232,7 +245,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import api from '../api/client'
 import {
   GFX_CHAR_W, GFX_CHAR_H, fitScale, pointerToDevicePx, clampWidgetPos,
@@ -255,6 +268,7 @@ const variableIds = ref([])
 const gridStep = ref(1)
 const scale = ref(4)
 const canvasEl = ref(null)
+const widgetEls = ref([])
 
 const activeDisplay = computed(() =>
   displayList.value.find((d) => d.id === selectedPage.value?.displayId) || { width: 128, height: 64 },
@@ -314,6 +328,40 @@ function onCanvasDrop(event) {
   const { x, y } = pointerToDevicePx(event.clientX, event.clientY, rect, scale.value, activeDisplay.value, gridStep.value)
   selectedPage.value.widgets.push(newWidget(type, x, y))
   selectedWidgetIdx.value = selectedPage.value.widgets.length - 1
+}
+
+// Keyboard alternative to dragging from the library: add at the origin, select
+// it, and move focus to it so the arrow keys can position it.
+function addFromLibrary(type) {
+  selectedPage.value.widgets.push(newWidget(type, 0, 0))
+  const idx = selectedPage.value.widgets.length - 1
+  selectedWidgetIdx.value = idx
+  nextTick(() => widgetEls.value[idx]?.focus())
+}
+
+function widgetAriaLabel(widget) {
+  const what = widget.type === 'text' ? `text "${widget.text}"` : `value ${widget.variableId || ''}`.trim()
+  return `${what} at ${widget.x}, ${widget.y}. Arrow keys move, Delete removes.`
+}
+
+// Arrow keys nudge the focused widget by the snap step; Delete/Backspace removes.
+function onWidgetKeydown(event, idx) {
+  const widget = selectedPage.value.widgets[idx]
+  if (!widget) return
+  const step = gridStep.value
+  const moves = {
+    ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
+  }
+  if (moves[event.key]) {
+    event.preventDefault()
+    const [dx, dy] = moves[event.key]
+    const { x, y } = clampWidgetPos((widget.x || 0) + dx, (widget.y || 0) + dy, activeDisplay.value)
+    widget.x = x
+    widget.y = y
+  } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault()
+    removeWidget(idx)
+  }
 }
 
 // ── Reposition an existing widget by dragging it ─────────────────────────────
@@ -553,6 +601,11 @@ onUnmounted(() => {
 .sd-widget:active { cursor: grabbing; }
 .sd-widget--selected {
   outline: 1px dashed rgba(96, 165, 250, 0.9);
+  outline-offset: 2px;
+}
+.sd-widget:focus-visible,
+.sd-lib-item:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
   outline-offset: 2px;
 }
 .sd-hint { margin-top: 0.75rem; }

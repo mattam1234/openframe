@@ -22,6 +22,21 @@ test.describe('Screen Designer', () => {
     await expect(page.locator('.sd-widget')).toHaveCount(4)
   })
 
+  test('keyboard: add from the library and nudge with arrow keys (a11y)', async ({ page }) => {
+    await expect(page.locator('.sd-widget')).toHaveCount(3)
+    // Enter on a focused library tile adds a widget (drag-free alternative).
+    await page.locator('.sd-lib-item', { hasText: 'Static text' }).focus()
+    await page.keyboard.press('Enter')
+    await expect(page.locator('.sd-widget')).toHaveCount(4)
+    // The new widget is focused at the origin; arrow keys move it (1px snap).
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowDown')
+    await expect(page.locator('.sd-widget--selected')).toHaveAttribute('aria-label', /at 1, 1/)
+    // Delete removes the focused widget.
+    await page.keyboard.press('Delete')
+    await expect(page.locator('.sd-widget')).toHaveCount(3)
+  })
+
   test('selecting a widget reveals its inspector', async ({ page }) => {
     // No widget selected → only the Page block shows.
     await expect(page.locator('.sd-inspector')).not.toContainText('Widget')
