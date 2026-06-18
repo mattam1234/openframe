@@ -113,17 +113,74 @@
             <pre class="result text-caption">{{ result }}</pre>
           </v-card-text>
         </v-card>
+
+        <!-- Screen preview (#57) -->
+        <v-card border flat class="mt-4">
+          <v-card-title class="text-subtitle-1">Screen preview</v-card-title>
+          <v-card-text>
+            <p class="text-caption text-medium-emphasis mb-2">
+              What each display is currently showing, reconstructed from its widgets.
+            </p>
+            <div class="d-flex align-center ga-2 mb-2">
+              <v-btn size="small" variant="tonal" :loading="loadingScreens" @click="loadScreens">Load screens</v-btn>
+              <v-checkbox v-model="screensLive" label="auto-refresh" density="compact" hide-details />
+              <span class="text-caption text-medium-emphasis">{{ screensMsg }}</span>
+            </div>
+            <ScreenCanvas v-for="s in screens" :key="s.id" :screen="s" />
+          </v-card-text>
+        </v-card>
+
+        <!-- Push config (#62) -->
+        <v-card border flat class="mt-4">
+          <v-card-title class="text-subtitle-1">Push config</v-card-title>
+          <v-card-text>
+            <p class="text-caption text-medium-emphasis mb-2">
+              Partial config JSON (same shape as <code>POST /api/config</code>). The device merges, saves, and reboots.
+            </p>
+            <v-textarea
+              v-model="configJson"
+              rows="6"
+              density="compact"
+              variant="outlined"
+              hide-details
+              class="mono mb-2"
+              placeholder='{ "device": { "name": "Lobby Frame" } }'
+            />
+            <v-btn variant="tonal" @click="previewConfig">Preview changes</v-btn>
+
+            <div v-if="configDiff" class="mt-3">
+              <p v-if="!configDiff.length" class="text-caption text-medium-emphasis">No differences from the last pushed config.</p>
+              <v-table v-else density="compact">
+                <tbody>
+                  <tr v-for="d in configDiff" :key="d.path">
+                    <th class="text-left mono">{{ d.path }}</th>
+                    <td>
+                      <span :class="`diff-${d.type}`">{{ d.type }}</span>
+                      {{ fmtVal(d.before) }} → {{ fmtVal(d.after) }}
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
+
+            <div v-if="pendingConfig && configDiff && configDiff.length" class="d-flex ga-2 mt-3">
+              <v-btn color="error" @click="pushConfig">Confirm push &amp; reboot</v-btn>
+              <v-btn variant="text" @click="cancelConfig">Cancel</v-btn>
+            </div>
+          </v-card-text>
+        </v-card>
       </v-col>
     </v-row>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Sparkline } from '@shared'
 import api from '../api'
 import { useFleet } from '../store'
 import { fmtUptime, fmtHeap, fmtAgo, rssiLabel, asNum } from '../format'
+import ScreenCanvas from '../components/ScreenCanvas.vue'
 
 const props = defineProps({ id: { type: String, required: true } })
 const routeId = computed(() => props.id)
@@ -209,6 +266,69 @@ async function activateProfile(id) {
   loadProfiles()
 }
 
+// ── Screen preview (#57) ─────────────────────────────────────────────────────
+const screens = ref([])
+const loadingScreens = ref(false)
+const screensMsg = ref('')
+const screensLive = ref(false)
+let screensTimer = null
+
+async function loadScreens() {
+  loadingScreens.value = true
+  screensMsg.value = 'loading…'
+  try {
+    const body = await api.post(`/api/devices/${encodeURIComponent(props.id)}/cmd`, { type: 'get_screens' })
+    if (!body.ok) { screensMsg.value = `error: ${body.error || 'failed'}`; return }
+    screens.value = body.screens || []
+    screensMsg.value = screens.value.length ? '' : 'no displays configured'
+  } catch (e) { screensMsg.value = `error: ${e.message}` }
+  finally { loadingScreens.value = false }
+}
+watch(screensLive, (on) => {
+  clearInterval(screensTimer)
+  screensTimer = null
+  if (on) { loadScreens(); screensTimer = setInterval(loadScreens, 3000) }
+})
+
+// ── Config diff + push (#62) ─────────────────────────────────────────────────
+const configJson = ref('')
+const configDiff = ref(null)
+const pendingConfig = ref(null)
+const baselineKey = computed(() => `of-cms-lastconfig-${props.id}`)
+
+function loadBaseline() {
+  try { const r = localStorage.getItem(baselineKey.value); return r ? JSON.parse(r) : null } catch { return null }
+}
+
+// Leaf-level diff of two JSON values → {path, type, before, after}.
+function diffJson(base, next, path = '', out = []) {
+  const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v)
+  if (isObj(base) && isObj(next)) {
+    for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
+      diffJson(base[key], next[key], path ? `${path}.${key}` : key, out)
+    }
+  } else if (JSON.stringify(base) !== JSON.stringify(next)) {
+    out.push({ path, type: base === undefined ? 'added' : next === undefined ? 'removed' : 'changed', before: base, after: next })
+  }
+  return out
+}
+const fmtVal = (v) => (v === undefined ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+
+function previewConfig() {
+  const raw = configJson.value.trim()
+  if (!raw) { result.value = 'enter config JSON'; return }
+  try { pendingConfig.value = JSON.parse(raw) }
+  catch (e) { result.value = `invalid JSON: ${e.message}`; return }
+  configDiff.value = diffJson(loadBaseline() ?? {}, pendingConfig.value)
+}
+function cancelConfig() { pendingConfig.value = null; configDiff.value = null }
+async function pushConfig() {
+  if (!pendingConfig.value) return
+  try { localStorage.setItem(baselineKey.value, JSON.stringify(pendingConfig.value)) } catch { /* ignore */ }
+  await cmd('apply_config', pendingConfig.value)
+  cancelConfig()
+}
+
 async function load() {
   // Seed fields from REST if the device isn't already in the live store.
   if (!devices.value.find((d) => d.deviceId === props.id)) {
@@ -223,6 +343,7 @@ async function load() {
 watch(device, (d) => { if (d && !notes.value) notes.value = d.notes || '' }, { immediate: true })
 
 onMounted(load)
+onUnmounted(() => clearInterval(screensTimer))
 </script>
 
 <style scoped>
@@ -236,4 +357,9 @@ onMounted(load)
   padding: 8px;
   margin: 0;
 }
+.mono :deep(textarea) { font-family: 'Roboto Mono', monospace; font-size: 0.85rem; }
+.mono { font-family: 'Roboto Mono', monospace; }
+.diff-added { color: #22c55e; font-weight: 600; }
+.diff-removed { color: #ef4444; font-weight: 600; }
+.diff-changed { color: #f59e0b; font-weight: 600; }
 </style>
