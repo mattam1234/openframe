@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
+    "mock-device": "node tools/mock-device.mjs",
     "lint": "eslint . --ext .vue,.js,.ts --fix"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "happy-dom": "^20.10.5",
     "vite": "^5.2.0",
     "vite-plugin-vuetify": "^2.0.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "ws": "^8.21.0"
   }
 }

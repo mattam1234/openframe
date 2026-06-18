@@ -155,6 +155,16 @@ npm run build
 
 The frontend build outputs to `firmware/data/www`, which is served by the firmware from LittleFS. The dev server proxies `/api` and `/ws` to the device IP configured in `frontend/.env`.
 
+No hardware? Run the bundled mock device (REST + live WebSocket) and point the dev server at it:
+
+```bash
+cd frontend
+npm run mock-device                                   # serves http://localhost:8787
+VITE_DEVICE_IP=http://localhost:8787 npm run dev      # in a second terminal
+```
+
+End-to-end UI tests run against a stubbed device with `npm run test:e2e` (Playwright).
+
 ### First Boot
 
 On first boot the device creates an `OpenFrame-XXXX` access point. Connect to it and open `http://192.168.4.1` to configure WiFi and device settings.
