@@ -47,6 +47,25 @@ telemetry contract.
 - **Provisioning QR** — the **Provision** page (`POST /api/provision`) makes an
   onboarding QR; scan it on a phone joined to a new device's AP and the captive
   portal opens pre-filled with the WiFi + MQTT settings to review and save.
+- **Multi-site grouping** — assign each device a `site`
+  (`PUT /api/devices/:id/site`, editable on the drill-in); the app-bar **site
+  selector** then scopes the whole console (fleet grid + topology) to one site.
+
+### Web UI
+
+The dashboard is a **Vue 3 + Vuetify** app (`cms/web/`) that shares its component
+set with the device firmware UI via the `@shared` library (`shared/ui/`), so the
+two render from one codebase. It's served at **`/app`**; once built, `/` redirects
+there. The Docker image builds it automatically; for local use run it explicitly:
+
+```bash
+npm run build:web    # builds cms/web into cms/web/dist, served at /app
+# or, for hot-reload UI dev against a running CMS (on :4000):
+cd web && npm run dev
+```
+
+If `cms/web/dist` isn't present, the server falls back to the legacy plain-HTML
+pages (kept as a fallback).
 
 ## Quick start (Docker — bundled broker)
 
@@ -56,7 +75,8 @@ docker compose up --build
 ```
 
 Then point each device's MQTT host (Settings → MQTT) at this machine's IP,
-port `1883`, and open the dashboard at <http://localhost:4000>.
+port `1883`, and open the dashboard at <http://localhost:4000> (the Vue UI at
+`/app`; the image builds it for you).
 
 ## Quick start (local dev)
 
@@ -65,10 +85,11 @@ Requires a reachable MQTT broker (e.g. `docker run -p 1883:1883 eclipse-mosquitt
 ```bash
 cd cms
 npm install
+npm run build:web    # build the Vue UI once (served at /app); skip to use the legacy pages
 npm run dev          # tsx watch, or: npm run build && npm start
 ```
 
-Open <http://localhost:4000>.
+Open <http://localhost:4000> (redirects to `/app` when the Vue UI is built).
 
 ## Tests
 
@@ -76,11 +97,18 @@ Open <http://localhost:4000>.
 npm test
 ```
 
-A `node:test` suite covers the registry (presence/sweep edge cases, tags),
+A `node:test` suite covers the registry (presence/sweep edge cases, tags, site),
 alerts (raise/resolve), templates, history, firmware-store (incl. path-traversal
 safety), and an end-to-end integration test (in-process MQTT broker + simulated
-device) for ingest, command round-trip, `get_profiles`, bulk/tag targeting,
-template + firmware deploy, and the OTA Host-header security guard.
+device) for ingest, command round-trip, `get_profiles`/`get_screens`, bulk/tag
+targeting, template + firmware deploy, and the OTA Host-header security guard.
+
+The Vue UI (`cms/web/`) has its own tests:
+
+```bash
+npm --prefix web run test:unit    # Vitest — fleet/format logic
+npm --prefix web run test:e2e     # Playwright — fleet grid, drill-in, site scoping, login
+```
 
 ## Configuration
 
@@ -119,6 +147,11 @@ Environment variables (see `.env.example`):
   filters the latter two).
 - `PUT /api/devices/:id/tags` `{ tags: [...] }` → set a device's tags (deduped);
   returns the updated device, `404` if unknown.
+- `PUT /api/devices/:id/notes` `{ notes }` · `PUT /api/devices/:id/site` `{ site }`
+  → set a device's free-text notes / site label (empty `site` clears it).
+- `GET /api/devices/:id/screens` → relays a `get_screens` command and returns the
+  device's live display state (geometry + per-widget text) for the drill-in's
+  screen preview.
 - `GET /api/templates` · `POST /api/templates` · `PUT /api/templates/:id` ·
   `DELETE /api/templates/:id` — template CRUD. A template is
   `{ name, description?, command: { type, payload? } }`.
@@ -163,7 +196,5 @@ firmware does not yet verify image signatures — a known follow-up).
 
 ## Not yet
 
-- Richer drill-in: the profile picker is done (`get_profiles` + remote activate);
-  screen listing/preview is still open.
-- Port the dashboard to the Vue stack to reuse the device UI components.
-- SQLite + historical telemetry (Phase D).
+- SQLite + historical telemetry (Phase D) — history is currently a rolling
+  in-memory/JSON window.
