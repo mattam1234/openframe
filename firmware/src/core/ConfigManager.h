@@ -96,6 +96,19 @@ struct NodeLinkConfig {
     String  key;
 };
 
+// Opt-in power management for battery nodes (#7). Default off → no behaviour
+// change. In "deep"/"light" mode the node runs for `awakeSeconds` after boot,
+// then sleeps for `sleepSeconds` (timer wake): deep sleep reboots on wake, light
+// sleep resumes the loop. On ESP32 an optional RTC-capable `wakePin` also wakes
+// the node. ESP8266 supports deep sleep only (and needs GPIO16 wired to RST).
+struct PowerConfig {
+    String   mode         = "off";   // off | light | deep
+    uint32_t awakeSeconds = 30;
+    uint32_t sleepSeconds = 300;
+    int8_t   wakePin      = -1;       // ESP32 ext0 RTC GPIO; -1 = none
+    uint8_t  wakeLevel    = 1;        // wake when wakePin reaches this level (0/1)
+};
+
 struct AppConfig {
     DeviceConfig   device;
     WifiConfig     wifi;
@@ -104,6 +117,7 @@ struct AppConfig {
     OtaConfig      ota;
     NodeLinkConfig nodelink;
     TimeConfig     time;
+    PowerConfig    power;
 };
 
 // ── ConfigManager ─────────────────────────────────────────────────────────────

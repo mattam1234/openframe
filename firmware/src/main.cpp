@@ -27,6 +27,7 @@
 #include "managers/ProfileManager.h"
 #include "managers/HealthMonitor.h"
 #include "managers/NotificationManager.h"
+#include "managers/PowerManager.h"
 #include "api/ApiServer.h"
 
 static constexpr const char* TAG = "Main";
@@ -114,6 +115,9 @@ void setup() {
     webServer.begin();
     LOG_I(TAG, "Web server started on port 80");
 
+    // Power management last: it starts the awake-window clock from here (#7).
+    PowerManager::instance().begin();
+
     LOG_I(TAG, "Connectivity subsystems initialised");
 }
 
@@ -129,6 +133,7 @@ void loop() {
     NodeLinkManager::instance().loop();
     GatewayManager::instance().loop();
     OtaManager::instance().loop();
+    PowerManager::instance().loop();
 
     // Hardware & automation were never started in safe mode — skip their loops.
     if (!HealthMonitor::instance().inSafeMode()) {

@@ -225,6 +225,13 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     timeObj["tz"]              = _config.time.tz;
     timeObj["rtc_enabled"]     = _config.time.rtcEnabled;
     timeObj["rtc_address"]     = _config.time.rtcAddress;
+
+    auto power                 = doc["power"].to<JsonObject>();
+    power["mode"]              = _config.power.mode;
+    power["awake_seconds"]     = _config.power.awakeSeconds;
+    power["sleep_seconds"]     = _config.power.sleepSeconds;
+    power["wake_pin"]          = _config.power.wakePin;
+    power["wake_level"]        = _config.power.wakeLevel;
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
@@ -320,6 +327,13 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.time.tz         = doc["time"]["tz"]          | String("");
         _config.time.rtcEnabled = doc["time"]["rtc_enabled"] | false;
         _config.time.rtcAddress = doc["time"]["rtc_address"] | 0x68;
+    }
+    if (doc["power"].is<JsonObjectConst>()) {
+        _config.power.mode         = doc["power"]["mode"]          | String("off");
+        _config.power.awakeSeconds = doc["power"]["awake_seconds"] | 30u;
+        _config.power.sleepSeconds = doc["power"]["sleep_seconds"] | 300u;
+        _config.power.wakePin      = static_cast<int8_t>(doc["power"]["wake_pin"] | -1);
+        _config.power.wakeLevel    = static_cast<uint8_t>(doc["power"]["wake_level"] | 1);
     }
     return true;
 }
