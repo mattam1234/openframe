@@ -1,344 +1,210 @@
 <template>
-  <div>
-    <v-row>
-      <v-col>
-        <h1 class="text-h5 mb-4">
-          <v-icon class="mr-2">mdi-developer-board</v-icon>
-          Layout Designer
-        </h1>
-      </v-col>
-      <v-col cols="auto" class="d-flex align-center ga-2">
-        <v-btn color="primary" prepend-icon="mdi-plus" @click="addInput">Input</v-btn>
-        <v-btn color="secondary" prepend-icon="mdi-plus" @click="addOutput">Output</v-btn>
-        <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="text" @click="refresh" />
-      </v-col>
-    </v-row>
+  <div class="layout-designer">
+    <!-- Toolbar -->
+    <div class="ld-toolbar mb-4">
+      <div class="ld-title">
+        <v-icon size="28" class="mr-2">mdi-developer-board</v-icon>
+        <div>
+          <h1 class="text-h5 mb-0">Layout Designer</h1>
+          <div class="text-caption text-medium-emphasis">
+            Map the device's pins to inputs, outputs, sensors, and displays
+          </div>
+        </div>
+      </div>
+      <div class="ld-actions">
+        <span v-if="boardLabel" class="ld-board">
+          <v-icon size="16" class="mr-1">mdi-memory</v-icon>{{ boardLabel }}
+        </span>
+        <v-btn icon="mdi-refresh" variant="text" :loading="loading" aria-label="Reload" @click="refresh" />
+      </div>
+    </div>
 
-    <v-row v-if="statusMessage">
-      <v-col>
-        <v-alert :type="statusMessage.type" variant="tonal" closable @click:close="statusMessage = null">
-          {{ statusMessage.text }}
-        </v-alert>
-      </v-col>
-    </v-row>
+    <v-alert
+      v-if="statusMessage"
+      :type="statusMessage.type"
+      variant="tonal"
+      class="mb-4"
+      closable
+      @click:close="statusMessage = null"
+    >
+      {{ statusMessage.text }}
+    </v-alert>
 
-    <v-row>
-      <!-- Inputs Panel -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title class="d-flex align-center justify-space-between">
-            <span>
-              <v-icon class="mr-1" color="primary">mdi-gesture-tap</v-icon>
-              Inputs
-            </span>
-            <v-chip size="small">{{ inputs.length }}</v-chip>
-          </v-card-title>
-          <v-card-text class="pa-0">
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Type</th>
-                  <th>Pin</th>
-                  <th title="ESP32 capacitive touch (digital inputs)">Touch</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(inp, idx) in inputs" :key="idx">
-                  <td>
-                    <v-text-field
-                      v-model="inp.id"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                    />
-                  </td>
-                  <td>
-                    <v-select
-                      v-model="inp.subtype"
-                      :items="['digital', 'analog']"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:90px"
-                    />
-                  </td>
-                  <td>
-                    <v-select
-                      v-model="inp.pin"
-                      :items="inp.subtype === 'analog' ? adcPins : ioPins"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:110px"
-                    />
-                  </td>
-                  <td>
-                    <!-- ESP32 native capacitive touch — only meaningful for digital inputs. -->
-                    <v-checkbox
-                      v-if="inp.subtype !== 'analog'"
-                      v-model="inp.touch"
-                      density="compact"
-                      hide-details
-                      title="Read this pin as a capacitive touch pad (ESP32)"
-                    />
-                    <span v-else class="text-medium-emphasis">—</span>
-                  </td>
-                  <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove input" @click="removeInput(idx)" />
-                  </td>
-                </tr>
-                <tr v-if="inputs.length === 0">
-                  <td colspan="5" class="text-medium-emphasis text-center py-4">
-                    No inputs configured.
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-card-text>
-          <v-card-actions>
-            <v-btn color="primary" :loading="savingInputs" :disabled="!loaded.inputs" @click="saveInputs">Save Inputs</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-col>
+    <v-tabs v-model="activeTab" class="ld-tabs mb-4" density="comfortable">
+      <v-tab v-for="t in tabs" :key="t.key" :value="t.key" :prepend-icon="t.icon">
+        {{ t.label }}
+        <v-chip size="x-small" class="ml-2" :color="t.color" variant="flat">{{ t.count }}</v-chip>
+      </v-tab>
+    </v-tabs>
 
-      <!-- Outputs Panel -->
-      <v-col cols="12" md="6">
-        <v-card>
-          <v-card-title class="d-flex align-center justify-space-between">
-            <span>
-              <v-icon class="mr-1" color="secondary">mdi-led-on</v-icon>
-              Outputs
-            </span>
-            <v-chip size="small">{{ outputs.length }}</v-chip>
-          </v-card-title>
-          <v-card-text class="pa-0">
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Type</th>
-                  <th>Pin</th>
-                  <th>LEDs / DIR</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(out, idx) in outputs" :key="idx">
-                  <td>
-                    <v-text-field
-                      v-model="out.id"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                    />
-                  </td>
-                  <td>
-                    <v-select
-                      v-model="out.type"
-                      :items="['led', 'rgb', 'ws2812', 'relay', 'buzzer', 'servo', 'stepper']"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:90px"
-                    />
-                  </td>
-                  <td>
-                    <v-select
-                      v-model="out.pin"
-                      :items="ioPins"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:110px"
-                    />
-                  </td>
-                  <td>
-                    <!-- WS2812 strips only: number of addressable LEDs (applied on restart). -->
-                    <v-text-field
-                      v-if="out.type === 'ws2812'"
-                      v-model.number="out.led_count"
-                      type="number"
-                      min="1"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="max-width:80px"
-                      placeholder="count"
-                    />
-                    <!-- Steppers: the DIR pin (STEP uses the main Pin column). -->
-                    <v-select
-                      v-else-if="out.type === 'stepper'"
-                      v-model="out.pin_dir"
-                      :items="ioPins"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:110px"
-                      placeholder="DIR pin"
-                    />
-                    <!-- LED/RGB: opt-in gamma correction for perceptually-linear dimming. -->
-                    <v-checkbox
-                      v-else-if="['led', 'rgb'].includes(out.type)"
-                      v-model="out.gamma"
-                      label="γ"
-                      density="compact"
-                      hide-details
-                      title="Gamma correction (perceptually-linear dimming)"
-                    />
-                    <span v-else class="text-medium-emphasis">—</span>
-                  </td>
-                  <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove output" @click="removeOutput(idx)" />
-                  </td>
-                </tr>
-                <tr v-if="outputs.length === 0">
-                  <td colspan="5" class="text-medium-emphasis text-center py-4">
-                    No outputs configured.
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-card-text>
-          <v-card-actions>
-            <v-btn color="secondary" :loading="savingOutputs" :disabled="!loaded.outputs" @click="saveOutputs">Save Outputs</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- Sensors Panel -->
-    <v-row class="mt-2">
-      <v-col>
-        <v-card>
-          <v-card-title class="d-flex align-center justify-space-between">
-            <span>
-              <v-icon class="mr-1" color="warning">mdi-chip</v-icon>
-              Sensors
-            </span>
-            <div class="d-flex ga-2">
-              <v-chip size="small">{{ sensors.length }}</v-chip>
-              <v-btn prepend-icon="mdi-plus" size="small" variant="tonal" @click="addSensor">Add</v-btn>
+    <v-window v-model="activeTab">
+      <!-- Inputs -->
+      <v-window-item value="inputs">
+        <div class="ld-grid">
+          <v-card v-for="(inp, idx) in inputs" :key="idx" class="ld-item ld-item--input" variant="flat">
+            <div class="ld-item-head">
+              <v-icon color="primary">mdi-gesture-tap</v-icon>
+              <v-text-field v-model="inp.id" density="compact" variant="plain" hide-details class="ld-id" placeholder="id" />
+              <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Remove input" @click="removeInput(idx)" />
             </div>
-          </v-card-title>
-          <v-card-text class="pa-0">
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Type</th>
-                  <th>Address / Pin</th>
-                  <th>Poll (ms)</th>
-                  <th>Enabled</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(sensor, idx) in sensors" :key="idx">
-                  <td>
-                    <v-text-field v-model="sensor.id" density="compact" hide-details variant="plain" />
-                  </td>
-                  <td>
-                    <v-select
-                      v-model="sensor.type"
-                      :items="sensorTypes"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:110px"
-                    />
-                  </td>
-                  <td>
-                    <v-text-field v-model="sensor.address" density="compact" hide-details variant="plain" style="max-width:80px" />
-                  </td>
-                  <td>
-                    <v-text-field v-model.number="sensor.poll_interval_ms" type="number" density="compact" hide-details variant="plain" style="max-width:80px" />
-                  </td>
-                  <td>
-                    <v-checkbox v-model="sensor.enabled" density="compact" hide-details />
-                  </td>
-                  <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove sensor" @click="removeSensor(idx)" />
-                  </td>
-                </tr>
-                <tr v-if="sensors.length === 0">
-                  <td colspan="6" class="text-medium-emphasis text-center py-4">
-                    No sensors configured.
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-card-text>
-          <v-card-actions>
-            <v-btn color="warning" :loading="savingSensors" :disabled="!loaded.sensors" @click="saveSensors">Save Sensors</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- Displays Panel -->
-    <v-row class="mt-2">
-      <v-col>
-        <v-card>
-          <v-card-title class="d-flex align-center justify-space-between">
-            <span>
-              <v-icon class="mr-1" color="info">mdi-monitor</v-icon>
-              Displays
-            </span>
-            <div class="d-flex ga-2">
-              <v-chip size="small">{{ displays.length }}</v-chip>
-              <v-btn prepend-icon="mdi-plus" size="small" variant="tonal" @click="addDisplay">Add</v-btn>
+            <div class="ld-fields">
+              <v-select
+                v-model="inp.subtype"
+                :items="['digital', 'analog']"
+                label="Type"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select
+                v-model="inp.pin"
+                :items="inp.subtype === 'analog' ? adcPins : ioPins"
+                label="Pin"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-checkbox
+                v-if="inp.subtype !== 'analog'"
+                v-model="inp.touch"
+                label="Capacitive touch"
+                density="compact"
+                hide-details
+                title="Read this pin as a capacitive touch pad (ESP32)"
+              />
             </div>
-          </v-card-title>
-          <v-card-text class="pa-0">
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Type</th>
-                  <th>Address</th>
-                  <th>Size</th>
-                  <th>Enabled</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(disp, idx) in displays" :key="idx">
-                  <td><v-text-field v-model="disp.id" density="compact" hide-details variant="plain" /></td>
-                  <td>
-                    <v-select
-                      v-model="disp.type"
-                      :items="displayTypes"
-                      density="compact"
-                      hide-details
-                      variant="plain"
-                      style="min-width:100px"
-                    />
-                  </td>
-                  <td><v-text-field v-model="disp.address" density="compact" hide-details variant="plain" style="max-width:80px" /></td>
-                  <td>
-                    <span class="text-body-2">{{ disp.width }}×{{ disp.height }}</span>
-                  </td>
-                  <td><v-checkbox v-model="disp.enabled" density="compact" hide-details /></td>
-                  <td>
-                    <v-btn icon="mdi-delete" size="small" variant="text" color="error" aria-label="Remove display" @click="removeDisplay(idx)" />
-                  </td>
-                </tr>
-                <tr v-if="displays.length === 0">
-                  <td colspan="6" class="text-medium-emphasis text-center py-4">
-                    No displays configured.
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-card-text>
-          <v-card-actions>
-            <v-btn color="info" :loading="savingDisplays" :disabled="!loaded.displays" @click="saveDisplays">Save Displays</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-col>
-    </v-row>
+          </v-card>
+          <button class="ld-add" @click="addInput">
+            <v-icon size="28">mdi-plus</v-icon>
+            <span>Add input</span>
+          </button>
+        </div>
+        <div class="ld-savebar">
+          <v-btn color="primary" :loading="savingInputs" :disabled="!loaded.inputs" prepend-icon="mdi-content-save" @click="saveInputs">
+            Save inputs
+          </v-btn>
+        </div>
+      </v-window-item>
+
+      <!-- Outputs -->
+      <v-window-item value="outputs">
+        <div class="ld-grid">
+          <v-card v-for="(out, idx) in outputs" :key="idx" class="ld-item ld-item--output" variant="flat">
+            <div class="ld-item-head">
+              <v-icon color="amber-darken-2">mdi-led-on</v-icon>
+              <v-text-field v-model="out.id" density="compact" variant="plain" hide-details class="ld-id" placeholder="id" />
+              <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Remove output" @click="removeOutput(idx)" />
+            </div>
+            <div class="ld-fields">
+              <v-select
+                v-model="out.type"
+                :items="['led', 'rgb', 'ws2812', 'relay', 'buzzer', 'servo', 'stepper']"
+                label="Type"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select v-model="out.pin" :items="ioPins" :label="out.type === 'stepper' ? 'STEP pin' : 'Pin'" density="compact" variant="outlined" hide-details />
+              <!-- WS2812 strips: addressable LED count (applied on restart). -->
+              <v-text-field
+                v-if="out.type === 'ws2812'"
+                v-model.number="out.led_count"
+                label="LED count"
+                type="number"
+                min="1"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <!-- Steppers: the DIR pin (STEP uses the main pin). -->
+              <v-select
+                v-else-if="out.type === 'stepper'"
+                v-model="out.pin_dir"
+                :items="ioPins"
+                label="DIR pin"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <!-- LED/RGB: opt-in gamma for perceptually-linear dimming. -->
+              <v-checkbox
+                v-else-if="['led', 'rgb'].includes(out.type)"
+                v-model="out.gamma"
+                label="Gamma correction"
+                density="compact"
+                hide-details
+                title="Perceptually-linear dimming"
+              />
+            </div>
+          </v-card>
+          <button class="ld-add" @click="addOutput">
+            <v-icon size="28">mdi-plus</v-icon>
+            <span>Add output</span>
+          </button>
+        </div>
+        <div class="ld-savebar">
+          <v-btn color="amber-darken-2" :loading="savingOutputs" :disabled="!loaded.outputs" prepend-icon="mdi-content-save" @click="saveOutputs">
+            Save outputs
+          </v-btn>
+        </div>
+      </v-window-item>
+
+      <!-- Sensors -->
+      <v-window-item value="sensors">
+        <div class="ld-grid">
+          <v-card v-for="(sensor, idx) in sensors" :key="idx" class="ld-item ld-item--sensor" variant="flat">
+            <div class="ld-item-head">
+              <v-icon color="teal">mdi-chip</v-icon>
+              <v-text-field v-model="sensor.id" density="compact" variant="plain" hide-details class="ld-id" placeholder="id" />
+              <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Remove sensor" @click="removeSensor(idx)" />
+            </div>
+            <div class="ld-fields">
+              <v-select v-model="sensor.type" :items="sensorTypes" label="Type" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="sensor.address" label="Address / pin" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model.number="sensor.poll_interval_ms" label="Poll (ms)" type="number" density="compact" variant="outlined" hide-details />
+              <v-switch v-model="sensor.enabled" label="Enabled" density="compact" color="teal" hide-details inset />
+            </div>
+          </v-card>
+          <button class="ld-add" @click="addSensor">
+            <v-icon size="28">mdi-plus</v-icon>
+            <span>Add sensor</span>
+          </button>
+        </div>
+        <div class="ld-savebar">
+          <v-btn color="teal" :loading="savingSensors" :disabled="!loaded.sensors" prepend-icon="mdi-content-save" @click="saveSensors">
+            Save sensors
+          </v-btn>
+        </div>
+      </v-window-item>
+
+      <!-- Displays -->
+      <v-window-item value="displays">
+        <div class="ld-grid">
+          <v-card v-for="(disp, idx) in displays" :key="idx" class="ld-item ld-item--display" variant="flat">
+            <div class="ld-item-head">
+              <v-icon color="indigo">mdi-monitor</v-icon>
+              <v-text-field v-model="disp.id" density="compact" variant="plain" hide-details class="ld-id" placeholder="id" />
+              <v-btn icon="mdi-close" size="x-small" variant="text" color="error" aria-label="Remove display" @click="removeDisplay(idx)" />
+            </div>
+            <div class="ld-fields">
+              <v-select v-model="disp.type" :items="displayTypes" label="Type" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="disp.address" label="Address" density="compact" variant="outlined" hide-details />
+              <v-chip size="small" variant="tonal" color="indigo">{{ disp.width }}×{{ disp.height }} px</v-chip>
+              <v-switch v-model="disp.enabled" label="Enabled" density="compact" color="indigo" hide-details inset />
+            </div>
+          </v-card>
+          <button class="ld-add" @click="addDisplay">
+            <v-icon size="28">mdi-plus</v-icon>
+            <span>Add display</span>
+          </button>
+        </div>
+        <div class="ld-savebar">
+          <v-btn color="indigo" :loading="savingDisplays" :disabled="!loaded.displays" prepend-icon="mdi-content-save" @click="saveDisplays">
+            Save displays
+          </v-btn>
+        </div>
+      </v-window-item>
+    </v-window>
   </div>
 </template>
 
@@ -353,6 +219,7 @@ const savingInputs = ref(false)
 const savingOutputs = ref(false)
 const savingSensors = ref(false)
 const savingDisplays = ref(false)
+const activeTab = ref('inputs')
 
 const inputs = ref([])
 const outputs = ref([])
@@ -365,11 +232,19 @@ const displays = ref([])
 const loaded = ref({ inputs: false, outputs: false, sensors: false, displays: false })
 
 const boardType = ref('')
+const boardLabel = computed(() => boardType.value || '')
 const ioPins = computed(() => pinItems(boardType.value, 'io'))
 const adcPins = computed(() => pinItems(boardType.value, 'adc'))
 
 const sensorTypes = ['bme280', 'bmp280', 'dht22', 'ds18b20', 'sht31', 'bh1750', 'ina219', 'mpu6050']
 const displayTypes = ['ssd1306', 'sh1106']
+
+const tabs = computed(() => [
+  { key: 'inputs', label: 'Inputs', icon: 'mdi-gesture-tap', color: 'primary', count: inputs.value.length },
+  { key: 'outputs', label: 'Outputs', icon: 'mdi-led-on', color: 'amber-darken-2', count: outputs.value.length },
+  { key: 'sensors', label: 'Sensors', icon: 'mdi-chip', color: 'teal', count: sensors.value.length },
+  { key: 'displays', label: 'Displays', icon: 'mdi-monitor', color: 'indigo', count: displays.value.length },
+])
 
 function addInput() {
   inputs.value.push({ id: `btn${inputs.value.length + 1}`, subtype: 'digital', pin: 0, pullup: true, inverted: false, touch: false })
@@ -521,3 +396,83 @@ onMounted(() => {
   refresh()
 })
 </script>
+
+<style scoped>
+.ld-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.ld-title { display: flex; align-items: center; }
+.ld-actions { display: flex; align-items: center; gap: 0.75rem; }
+.ld-board {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8rem;
+  font-family: 'Roboto Mono', monospace;
+  color: rgb(var(--v-theme-on-surface));
+  opacity: 0.7;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+}
+
+.ld-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+/* Each device is a card with a category-coloured left accent. */
+.ld-item {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 0.75rem 1rem 1rem;
+}
+.ld-item--input { border-left-color: rgb(var(--v-theme-primary)); }
+.ld-item--output { border-left-color: #f59e0b; }
+.ld-item--sensor { border-left-color: #14b8a6; }
+.ld-item--display { border-left-color: #6366f1; }
+
+.ld-item-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.ld-id :deep(input) { font-weight: 600; font-size: 0.95rem; }
+
+.ld-fields { display: flex; flex-direction: column; gap: 0.6rem; }
+
+/* "Add" ghost tile matches a card's footprint. */
+.ld-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 120px;
+  border: 1px dashed rgba(var(--v-border-color), 0.6);
+  border-radius: 12px;
+  color: rgb(var(--v-theme-on-surface));
+  opacity: 0.6;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+}
+.ld-add:hover {
+  opacity: 1;
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.05);
+}
+
+.ld-savebar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+</style>

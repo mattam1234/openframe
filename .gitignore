@@ -13,3 +13,4 @@ frontend/.env
 Thumbs.db
 *.swp
 *.swo
+.playwright-mcp/
