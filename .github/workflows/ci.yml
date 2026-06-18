@@ -187,10 +187,14 @@ jobs:
         working-directory: cms
         run: npm test
 
-      # The CMS Vue UI (cms/web) — unit tests for its pure fleet/format logic.
+      # The CMS Vue UI (cms/web) — lint + unit tests for its pure logic.
       - name: Install web UI
         working-directory: cms/web
         run: npm ci
+
+      - name: Lint web UI
+        working-directory: cms/web
+        run: npm run lint
 
       - name: Web UI unit tests
         working-directory: cms/web
