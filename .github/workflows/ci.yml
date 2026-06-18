@@ -123,6 +123,23 @@ jobs:
           path: frontend/playwright-report
           retention-days: 7
 
+      # CMS Vue UI E2E — reuses the Chromium installed above.
+      - name: Install CMS web UI
+        working-directory: cms/web
+        run: npm ci
+
+      - name: CMS web E2E tests
+        working-directory: cms/web
+        run: npm run test:e2e
+
+      - name: Upload CMS report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cms-playwright-report
+          path: cms/web/playwright-report
+          retention-days: 7
+
   audit:
     name: npm audit (${{ matrix.dir }})
     runs-on: ubuntu-latest
