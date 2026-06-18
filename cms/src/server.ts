@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import multer from 'multer';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DeviceRegistry } from './registry';
@@ -80,6 +81,16 @@ export function createServer(
   // Static UI (incl. the login overlay) is served without auth; the API below is
   // gated. Firmware binaries stay public so token-less devices can fetch them.
   app.use(express.static(path.join(__dirname, '..', 'public')));
+
+  // Vue CMS app (#45): served at /app when it's been built (cms/web/dist). The
+  // vanilla pages stay at / until the port reaches parity. Non-breaking — if the
+  // build isn't present (e.g. before `npm --prefix web run build`), /app is simply
+  // absent. The SPA fallback lets client-side routes deep-link.
+  const webDist = path.join(__dirname, '..', 'web', 'dist');
+  if (fs.existsSync(path.join(webDist, 'index.html'))) {
+    app.use('/app', express.static(webDist));
+    app.get('/app/*', (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
+  }
 
   // ── Auth (public endpoints) ──────────────────────────────────────────────────
   app.get('/api/auth', (req, res) => {
