@@ -212,6 +212,36 @@
       </v-col>
 
       <v-col cols="12" md="6">
+        <v-card title="Power Management">
+          <v-card-subtitle>Battery nodes: run for an awake window after boot, then sleep. Deep sleep reboots on wake; light sleep resumes (ESP32). Default off.</v-card-subtitle>
+          <v-card-text>
+            <v-select
+              v-model="form.power.mode"
+              :items="[
+                { title: 'Off (always on)', value: 'off' },
+                { title: 'Deep sleep (reboots on wake)', value: 'deep' },
+                { title: 'Light sleep (resumes, ESP32)', value: 'light' },
+              ]"
+              label="Sleep mode"
+            />
+            <template v-if="form.power.mode !== 'off'">
+              <v-row class="mt-1">
+                <v-col><v-text-field v-model.number="form.power.awake_seconds" label="Awake (s)" type="number" min="1" density="compact" hide-details /></v-col>
+                <v-col><v-text-field v-model.number="form.power.sleep_seconds" label="Sleep (s)" type="number" min="1" density="compact" hide-details /></v-col>
+              </v-row>
+              <v-row class="mt-1">
+                <v-col><v-text-field v-model.number="form.power.wake_pin" label="Wake GPIO (ESP32, -1 = none)" type="number" density="compact" hide-details /></v-col>
+                <v-col><v-text-field v-model.number="form.power.wake_level" label="Wake level (0/1)" type="number" min="0" max="1" density="compact" hide-details /></v-col>
+              </v-row>
+              <div class="text-caption text-medium-emphasis mt-2">
+                ESP8266 supports deep sleep only (wire GPIO16→RST). Sleep is suppressed in safe mode.
+              </div>
+            </template>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
         <v-card title="Config Backups">
           <v-card-subtitle>A snapshot is taken automatically before every settings change. Restore one to roll back instantly.</v-card-subtitle>
           <v-card-text>
@@ -274,6 +304,7 @@ const form = reactive({
   ota: { enabled: true, github_repo: '', auto_check: false },
   nodelink: { enabled: false, channel: 0, gateway: false, key: '' },
   time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '', rtc_enabled: false, rtc_address: 104 },
+  power: { mode: 'off', awake_seconds: 30, sleep_seconds: 300, wake_pin: -1, wake_level: 1 },
 })
 
 // Common POSIX TZ strings (the device applies any valid POSIX TZ; these are just
@@ -351,6 +382,11 @@ function applyConfig(config) {
   form.time.tz = config?.time?.tz || ''
   form.time.rtc_enabled = config?.time?.rtc_enabled ?? false
   form.time.rtc_address = config?.time?.rtc_address ?? 104
+  form.power.mode = config?.power?.mode || 'off'
+  form.power.awake_seconds = config?.power?.awake_seconds ?? 30
+  form.power.sleep_seconds = config?.power?.sleep_seconds ?? 300
+  form.power.wake_pin = config?.power?.wake_pin ?? -1
+  form.power.wake_level = config?.power?.wake_level ?? 1
 }
 
 function addManualNetwork() {
