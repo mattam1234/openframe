@@ -7,6 +7,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:unit": "vitest run",
+    "test:e2e": "playwright test",
     "lint": "eslint . --ext .vue,.js,.ts --fix"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "vuetify": "^3.6.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vue/test-utils": "^2.4.11",
     "eslint": "^8.57.0",
