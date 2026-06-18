@@ -6,6 +6,7 @@ import api from './api'
 
 const devices = ref([])
 const connected = ref(false)
+const activeAlerts = ref([])
 // Per-device freeHeap ring buffers, fed from live updates → shared Sparkline.
 const heapHistory = reactive({})
 
@@ -47,6 +48,14 @@ function connect() {
       for (const d of devices.value) recordHeap(d)
     } else if (msg.type === 'device') {
       upsert(msg.device)
+    } else if (msg.type === 'alerts') {
+      activeAlerts.value = msg.active || []
+    } else if (msg.type === 'alert') {
+      const a = msg.alert
+      const i = activeAlerts.value.findIndex((x) => x.id === a.id)
+      if (a.resolvedAt) { if (i >= 0) activeAlerts.value.splice(i, 1) }
+      else if (i >= 0) activeAlerts.value[i] = a
+      else activeAlerts.value.push(a)
     }
   }
 }
@@ -61,5 +70,5 @@ async function init() {
 }
 
 export function useFleet() {
-  return { devices, connected, heapHistory, init, upsert }
+  return { devices, connected, activeAlerts, heapHistory, init, upsert }
 }
