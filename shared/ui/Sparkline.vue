@@ -1,6 +1,7 @@
 <!--
   Dependency-free SVG sparkline. Renders a series of numbers as a small inline
-  trend line — no charting library, so it adds nothing to the LittleFS bundle.
+  trend line — no charting library, so it adds nothing to the bundle. Shared
+  between the device UI and the CMS (both draw telemetry trends).
 -->
 <template>
   <svg

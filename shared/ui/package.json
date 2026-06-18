@@ -1,0 +1,8 @@
+{
+  "name": "@openframe/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Vue components shared between the OpenFrame device UI and the fleet CMS (#45)."
+}

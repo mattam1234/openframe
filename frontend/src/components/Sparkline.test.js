@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import Sparkline from './Sparkline.vue'
+import { Sparkline } from '@shared'
 
 describe('Sparkline', () => {
   it('renders a placeholder when fewer than 2 points', () => {

@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
@@ -7,12 +8,19 @@ export default defineConfig({
     vue(),
     vuetify({ autoImport: true }),
   ],
+  // `@shared` is the cross-app component library (../shared/ui) consumed as
+  // source by both the device UI and the CMS (#45).
+  resolve: {
+    alias: { '@shared': fileURLToPath(new URL('../shared/ui', import.meta.url)) },
+  },
   // Vitest: unit/component specs live under src/. The Playwright E2E specs in
   // e2e/ (which import @playwright/test) run separately via `npm run test:e2e`.
   test: {
     include: ['src/**/*.{test,spec}.js'],
   },
   server: {
+    // Allow reading the shared lib, which lives outside this app's root.
+    fs: { allow: ['..'] },
     proxy: {
       '/api': {
         target: process.env.VITE_DEVICE_IP || 'http://192.168.4.1',

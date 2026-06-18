@@ -268,7 +268,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import api from '../api/client'
 import { useWebSocketStore } from '../stores/websocket'
-import Sparkline from '../components/Sparkline.vue'
+import { Sparkline } from '@shared'
 
 const wsStore = useWebSocketStore()
 const loading = ref(false)
