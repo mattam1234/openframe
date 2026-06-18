@@ -57,8 +57,8 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the MVP com
 ### Web UI
 
 - Dashboard for live device status, health, and LittleFS storage usage — with drag-to-reorder panels (saved layout), self-test and network-diagnostics actions
-- Device Layout Designer
-- Screen Designer
+- Layout Designer — map device pins to inputs, outputs, sensors, and displays from category-tabbed cards, with per-section save guards
+- Screen Designer — a drag-and-drop page editor: drag widgets from a content library onto a live device-panel canvas, position them with grid snapping/zoom, and tune each one in a property inspector
 - Sensor Dashboard
 - Action Manager and macro editor (with scenes, dry-run, and inline run status)
 - Module Manager
