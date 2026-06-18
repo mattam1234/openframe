@@ -28,6 +28,10 @@
 #include "../managers/HealthMonitor.h"
 #include "../managers/NotificationManager.h"
 
+// Constant-time token compare (defined below; forward-declared so the WS auth
+// handshake in handleWebSocketMessage can use it before its definition).
+static bool tokenEquals(const String& a, const String& b);
+
 namespace {
 
 // Maximum accepted POST/WS payload. Bodies above this are rejected before they
@@ -677,7 +681,14 @@ void ApiServer::registerWebSocket(AsyncWebServer& server) {
         (void)ws;
 
         if (type == WS_EVT_CONNECT) {
+            // Read-only telemetry snapshot is open by design (carries no secrets,
+            // mirrors the open status/sensors/logs GETs). State-changing WS
+            // messages are gated separately in handleWebSocketMessage (#75).
             ApiServer::instance().sendInitialState(client);
+            return;
+        }
+        if (type == WS_EVT_DISCONNECT) {
+            ApiServer::instance().forgetWsClient(client);
             return;
         }
         if (type != WS_EVT_DATA) return;
@@ -1113,6 +1124,33 @@ void ApiServer::handleWebSocketMessage(AsyncWebSocketClient* client, const Strin
     response["type"] = type;
     response["ok"] = true;
 
+    // First-message auth handshake (#75): a browser can't set an Authorization
+    // header on the WS upgrade, so a client proves it holds the api_token by
+    // sending {"type":"auth","payload":{"token":"…"}} once after connecting.
+    if (type == "auth") {
+        const String& token = ConfigManager::instance().config().device.apiToken;
+        const String provided = payload["token"] | String("");
+        const bool ok = token.isEmpty() || tokenEquals(provided, token);
+        if (ok && client) _authedWsClients.insert(client->id());
+        response["ok"] = ok;
+        if (!ok) response["error"] = "unauthorized";
+        sendFrame(client, "auth_result", response);
+        return;
+    }
+
+    // State-changing WS messages require auth when a token is configured. Without
+    // this, the token-gated REST writes (#75) could be bypassed over the socket
+    // (e.g. config_save persists config). Read-only frames (ping, snapshots) and
+    // the open-LAN default (no token) are unaffected.
+    const bool mutating = (type == "page_navigation" || type == "config_save" ||
+                           type == "config_change" || type == "action_trigger");
+    if (mutating && !wsClientAuthed(client)) {
+        response["ok"] = false;
+        response["error"] = "unauthorized";
+        sendFrame(client, "command_result", response);
+        return;
+    }
+
     if (type == "page_navigation") {
         const String displayId = payload["displayId"] | String("");
         const String pageId = payload["pageId"] | String("");
@@ -1154,6 +1192,17 @@ void ApiServer::handleWebSocketMessage(AsyncWebSocketClient* client, const Strin
     }
 
     sendFrame(client, "command_result", response);
+}
+
+bool ApiServer::wsClientAuthed(AsyncWebSocketClient* client) const {
+    // No token configured → LAN-trusted, everything allowed.
+    if (ConfigManager::instance().config().device.apiToken.isEmpty()) return true;
+    if (!client) return false;
+    return _authedWsClients.count(client->id()) > 0;
+}
+
+void ApiServer::forgetWsClient(AsyncWebSocketClient* client) {
+    if (client) _authedWsClients.erase(client->id());
 }
 
 void ApiServer::sendInitialState(AsyncWebSocketClient* client) const {

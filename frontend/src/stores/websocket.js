@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, reactive } from 'vue'
+import { getApiToken } from '../api/client'
 
 /**
  * WebSocket store — manages the live connection to the OpenFrame device.
@@ -31,6 +32,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
     socket.onopen = () => {
       connected.value = true
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      // Authenticate the socket when a device token is configured (#75). A WS
+      // upgrade can't carry an Authorization header, so we prove possession of
+      // the token via a first-message handshake; the device gates state-changing
+      // frames (config_save, page_navigation, …) on it. No-op when no token set.
+      const token = getApiToken()
+      if (token) socket.send(JSON.stringify({ type: 'auth', payload: { token } }))
     }
 
     socket.onclose = () => {

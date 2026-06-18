@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
+#include <set>
 #include "../core/EventBus.h"
 #include "../core/Logger.h"
 
@@ -14,8 +15,8 @@ public:
     void loop();
 
     // Returns true when the request is allowed: always true if no api_token is
-    // configured (LAN-trusted default), else requires a matching Bearer header
-    // or ?token=. Sends a 401 itself when it returns false. Public so the shared
+    // configured (LAN-trusted default), else requires a matching Bearer header.
+    // Sends a 401 itself when it returns false. Public so the shared
     // body-buffering POST helper can gate before invoking a handler.
     bool requireAuth(AsyncWebServerRequest* request) const;
 
@@ -90,6 +91,10 @@ private:
     void handleTemplateImport(AsyncWebServerRequest* request, const String& body);
 
     void handleWebSocketMessage(AsyncWebSocketClient* client, const String& message);
+    // Whether this WS client has presented the api_token via an `auth` frame.
+    // Always true when no token is configured (LAN-trusted default).
+    bool wsClientAuthed(AsyncWebSocketClient* client) const;
+    void forgetWsClient(AsyncWebSocketClient* client);  // on disconnect
     void sendInitialState(AsyncWebSocketClient* client) const;
     void publishHealthUpdate();
     void onEvent(const Event& event);
@@ -109,6 +114,10 @@ private:
     bool applyVariableUpdate(const JsonVariantConst& item, String& error) const;
 
     AsyncWebSocket _ws;
+    // WS clients that authenticated via an `auth` frame (#75). Browsers can't set
+    // an Authorization header on the WS upgrade, so state-changing WS messages are
+    // gated by a first-message token handshake instead. Cleared per disconnect.
+    std::set<uint32_t> _authedWsClients;
     bool           _started = false;
     bool           _subscribed = false;
     bool           _restartPending = false;
