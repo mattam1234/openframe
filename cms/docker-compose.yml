@@ -15,7 +15,11 @@ services:
       - mosquitto-data:/mosquitto/data
 
   cms:
-    build: .
+    # Build from the repo root so the image can bundle the shared UI lib
+    # (../shared) into the Vue app. The Dockerfile path is relative to that root.
+    build:
+      context: ..
+      dockerfile: cms/Dockerfile
     restart: unless-stopped
     depends_on:
       - mosquitto

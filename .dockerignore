@@ -1,0 +1,14 @@
+# The CMS image (cms/Dockerfile) builds from the repo root so it can include
+# shared/. Keep the build context small: it only needs cms/ and shared/ sources.
+**/node_modules
+**/dist
+**/.git
+firmware
+frontend
+docs
+.github
+*.md
+cms/web/dist
+cms/data
+cms/mosquitto
+.playwright-mcp

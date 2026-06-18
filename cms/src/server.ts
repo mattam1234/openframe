@@ -78,16 +78,20 @@ export function createServer(
   const roleOf = (req: unknown): string =>
     (req as { role?: string }).role ?? (auth.enabled ? 'unknown' : 'open');
   app.use(express.json({ limit: '256kb' }));
+
+  // Vue CMS app (#45): served at /app when it's been built (cms/web/dist). Once
+  // built, it becomes the default UI — / redirects to it — while the legacy
+  // vanilla pages stay reachable at their own .html paths as a fallback. If the
+  // build is absent (e.g. before `npm run build:web`), / serves the vanilla UI.
+  const webDist = path.join(__dirname, '..', 'web', 'dist');
+  const haveWeb = fs.existsSync(path.join(webDist, 'index.html'));
+  if (haveWeb) app.get('/', (_req, res) => res.redirect('/app/'));
+
   // Static UI (incl. the login overlay) is served without auth; the API below is
   // gated. Firmware binaries stay public so token-less devices can fetch them.
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  // Vue CMS app (#45): served at /app when it's been built (cms/web/dist). The
-  // vanilla pages stay at / until the port reaches parity. Non-breaking — if the
-  // build isn't present (e.g. before `npm --prefix web run build`), /app is simply
-  // absent. The SPA fallback lets client-side routes deep-link.
-  const webDist = path.join(__dirname, '..', 'web', 'dist');
-  if (fs.existsSync(path.join(webDist, 'index.html'))) {
+  if (haveWeb) {
     app.use('/app', express.static(webDist));
     app.get('/app/*', (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
   }
