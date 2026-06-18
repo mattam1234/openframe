@@ -1,12 +1,23 @@
 // App-wide fleet store: one WebSocket + device list shared across routes so the
 // live connection persists as you navigate between the grid and a device. Plain
 // reactive singleton — the CMS UI is small enough not to need Pinia.
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import api from './api'
 
 const devices = ref([])
 const connected = ref(false)
 const activeAlerts = ref([])
+
+// Multi-site grouping (#66): a selected site scopes the console. Persisted so it
+// survives reloads; `sites` is the distinct set across the fleet.
+let savedSite = ''
+try { savedSite = localStorage.getItem('of-cms-site') || '' } catch { /* private mode */ }
+const selectedSite = ref(savedSite)
+watch(selectedSite, (s) => { try { localStorage.setItem('of-cms-site', s || '') } catch { /* ignore */ } })
+const sites = computed(() => [...new Set(devices.value.map((d) => d.site).filter(Boolean))].sort())
+const devicesInSite = computed(() =>
+  selectedSite.value ? devices.value.filter((d) => d.site === selectedSite.value) : devices.value,
+)
 // Per-device freeHeap ring buffers, fed from live updates → shared Sparkline.
 const heapHistory = reactive({})
 
@@ -70,5 +81,5 @@ async function init() {
 }
 
 export function useFleet() {
-  return { devices, connected, activeAlerts, heapHistory, init, upsert }
+  return { devices, connected, activeAlerts, heapHistory, selectedSite, sites, devicesInSite, init, upsert }
 }

@@ -63,6 +63,17 @@ test('setNotes stores text and emits change; unknown device returns false', () =
   assert.equal(changed, true);
 });
 
+test('setSite trims and clears; unknown device returns false', () => {
+  const r = new DeviceRegistry(1000);
+  assert.equal(r.setSite('missing', 'HQ'), false);
+  r.applyStatus('a', {});
+  assert.equal(r.setSite('a', '  Berlin Office  '), true);
+  assert.equal(r.get('a')!.site, 'Berlin Office');
+  // Empty string clears the site back to undefined.
+  assert.equal(r.setSite('a', ''), true);
+  assert.equal(r.get('a')!.site, undefined);
+});
+
 test('loadSnapshot restores devices offline and normalizes tags', () => {
   const r = new DeviceRegistry(1000);
   const saved = [{ deviceId: 'a', online: true, lastSeen: 1, lastPresence: 'online', presenceAt: 1, updatedAt: 1 }] as unknown as Device[];

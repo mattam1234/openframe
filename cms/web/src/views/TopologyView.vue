@@ -44,7 +44,7 @@
 import { computed } from 'vue'
 import { useFleet } from '../store'
 
-const { devices } = useFleet()
+const { devicesInSite: devices } = useFleet()
 
 const meta = (d) => [d.board, d.ip].filter(Boolean).join(', ')
 

@@ -37,10 +37,21 @@
       </v-col>
 
       <v-col cols="12" md="6">
-        <!-- Tags -->
+        <!-- Tags & site -->
         <v-card border flat class="mb-4">
-          <v-card-title class="text-subtitle-1">Tags</v-card-title>
+          <v-card-title class="text-subtitle-1">Tags &amp; site</v-card-title>
           <v-card-text>
+            <div class="d-flex ga-2 mb-3">
+              <v-text-field
+                v-model="site"
+                label="Site / location"
+                density="compact"
+                variant="outlined"
+                hide-details
+                @keyup.enter="saveSite"
+              />
+              <v-btn variant="tonal" :loading="savingSite" @click="saveSite">Save</v-btn>
+            </div>
             <div class="mb-2">
               <v-chip
                 v-for="t in device?.tags || []"
@@ -211,6 +222,8 @@ const fields = computed(() => {
 })
 
 const newTag = ref('')
+const site = ref('')
+const savingSite = ref(false)
 const notes = ref('')
 const notesMsg = ref('')
 const savingNotes = ref(false)
@@ -231,6 +244,15 @@ function addTag() {
   const tags = device.value?.tags || []
   if (t && !tags.includes(t)) saveTags([...tags, t])
   newTag.value = ''
+}
+
+async function saveSite() {
+  savingSite.value = true
+  try {
+    const updated = await api.put(`/api/devices/${encodeURIComponent(props.id)}/site`, { site: site.value })
+    if (device.value) device.value.site = updated.site
+  } catch (e) { result.value = `error: ${e.message}` }
+  finally { savingSite.value = false }
 }
 
 async function saveNotes() {
@@ -339,8 +361,12 @@ async function load() {
   catch { /* history is optional */ }
 }
 
-// Don't clobber the notes textarea while typing; seed it once the device resolves.
-watch(device, (d) => { if (d && !notes.value) notes.value = d.notes || '' }, { immediate: true })
+// Don't clobber the editors while typing; seed them once the device resolves.
+watch(device, (d) => {
+  if (!d) return
+  if (!notes.value) notes.value = d.notes || ''
+  if (!site.value) site.value = d.site || ''
+}, { immediate: true })
 
 onMounted(load)
 onUnmounted(() => clearInterval(screensTimer))

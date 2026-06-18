@@ -20,6 +20,8 @@ export interface Device extends Heartbeat {
   tags: string[];
   /** Free-text operational notes (CMS-side; searchable in the device grid). */
   notes?: string;
+  /** Operator-assigned site/location for multi-site grouping (CMS-side, #66). */
+  site?: string;
   /** Best-known liveness, derived from presence + heartbeat freshness. */
   online: boolean;
   /** Epoch ms of the last heartbeat (status message). */

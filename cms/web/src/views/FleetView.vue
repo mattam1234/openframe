@@ -93,7 +93,7 @@ import api from '../api'
 import { useFleet } from '../store'
 import { fmtUptime, fmtHeap, fmtAgo, rssiLabel } from '../format'
 
-const { devices, heapHistory } = useFleet()
+const { devicesInSite, heapHistory } = useFleet()
 
 const selectedIds = ref([])
 const templates = ref([])
@@ -128,8 +128,8 @@ const templateItems = computed(() =>
 const wantedTags = computed(() => tagFilter.value.split(',').map((t) => t.trim()).filter(Boolean))
 
 const filteredDevices = computed(() => {
-  if (!wantedTags.value.length) return devices.value
-  return devices.value.filter((d) => (d.tags || []).some((t) => wantedTags.value.includes(t)))
+  if (!wantedTags.value.length) return devicesInSite.value
+  return devicesInSite.value.filter((d) => (d.tags || []).some((t) => wantedTags.value.includes(t)))
 })
 
 const summary = computed(() => {
@@ -141,7 +141,7 @@ const summary = computed(() => {
 const selectionLabel = computed(() => {
   if (selectedIds.value.length) return `${selectedIds.value.length} selected`
   if (wantedTags.value.length) return `tagged: ${wantedTags.value.join(', ')}`
-  return `all devices (${devices.value.filter((d) => d.online).length} online)`
+  return `all devices (${devicesInSite.value.filter((d) => d.online).length} online)`
 })
 
 // Target spec: explicit selection → tag filter → whole fleet (online-only applies

@@ -65,6 +65,18 @@ export class DeviceRegistry extends EventEmitter {
     return true;
   }
 
+  // Set a device's site/location for multi-site grouping (#66). Empty clears it.
+  // Returns false if the device is unknown.
+  setSite(id: string, site: string): boolean {
+    const d = this.devices.get(id);
+    if (!d) return false;
+    const clean = String(site).trim();
+    d.site = clean || undefined;
+    d.updatedAt = Date.now();
+    this.emit('change', d);
+    return true;
+  }
+
   applyStatus(id: string, hb: Heartbeat): void {
     const d = this.ensure(id);
     const now = Date.now();

@@ -253,6 +253,24 @@ export function createServer(
     res.json(registry.get(req.params.id));
   });
 
+  // Assign a device to a site/location for multi-site grouping (#66).
+  app.put('/api/devices/:id/site', (req, res) => {
+    const site = (req.body ?? {}).site;
+    if (typeof site !== 'string') {
+      res.status(400).json({ error: 'site must be a string' });
+      return;
+    }
+    if (site.length > 120) {
+      res.status(400).json({ error: 'site too long (max 120 chars)' });
+      return;
+    }
+    if (!registry.setSite(req.params.id, site)) {
+      res.status(404).json({ error: 'unknown device' });
+      return;
+    }
+    res.json(registry.get(req.params.id));
+  });
+
   // ── Alerts ───────────────────────────────────────────────────────────────────
   app.get('/api/alerts', (_req, res) => {
     res.json({ active: alerts.activeAlerts(), recent: alerts.recentAlerts() });

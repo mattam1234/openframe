@@ -9,6 +9,17 @@
         </router-link>
       </v-app-bar-title>
       <template #append>
+        <v-select
+          v-if="!needLogin && sites.length"
+          v-model="selectedSite"
+          :items="siteItems"
+          density="compact"
+          variant="solo-filled"
+          flat
+          hide-details
+          prepend-inner-icon="mdi-map-marker"
+          class="mr-3 site-select"
+        />
         <v-chip v-if="!needLogin" :color="connected ? 'success' : 'error'" size="small" variant="flat" class="mr-2">
           <v-icon start size="14">{{ connected ? 'mdi-lan-connect' : 'mdi-lan-disconnect' }}</v-icon>
           {{ connected ? 'live' : 'reconnecting…' }}
@@ -69,8 +80,9 @@ import api from './api'
 import { useFleet } from './store'
 
 const drawer = ref(true)
-const { connected, activeAlerts, init } = useFleet()
+const { connected, activeAlerts, selectedSite, sites, init } = useFleet()
 const alertCount = computed(() => activeAlerts.value.length)
+const siteItems = computed(() => [{ title: 'All sites', value: '' }, ...sites.value.map((s) => ({ title: s, value: s }))])
 
 const needLogin = ref(false)
 const canLogout = ref(false)
@@ -122,4 +134,5 @@ onMounted(checkAuth)
 
 <style scoped>
 .brand { color: inherit; text-decoration: none; display: inline-flex; align-items: center; }
+.site-select { max-width: 200px; }
 </style>
