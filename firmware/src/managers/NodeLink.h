@@ -119,7 +119,18 @@ private:
         uint32_t nextMs;
     };
     std::vector<Pending>        _pending;
-    std::map<String, uint32_t>  _lastSeq;   // per-src last seq seen, for dedup
+    // Per-source ring of the most-recently-accepted seqs, for dedup. A single
+    // "last seq" is wrong: unicast + broadcast share one seq counter, so an
+    // Announce/Heartbeat arriving between a Cmd's retransmits would advance the
+    // stored value and let the retransmit through (executing the Cmd twice). A
+    // small window keeps the original seq remembered across interleaved traffic.
+    static constexpr size_t SEQ_WINDOW = 8;
+    struct SeqWindow {
+        uint32_t recent[SEQ_WINDOW] = {0};
+        bool     used[SEQ_WINDOW]   = {false};
+        uint8_t  head = 0;
+    };
+    std::map<String, SeqWindow> _lastSeq;
 
     void heartbeat();
     void timeSync();

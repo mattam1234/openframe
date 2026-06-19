@@ -476,7 +476,10 @@ async function saveSettings() {
 // the operator just reviews and saves.
 function decodeProvision(param) {
   const b64 = param.replace(/-/g, '+').replace(/_/g, '/')
-  return JSON.parse(decodeURIComponent(escape(atob(b64))))
+  // Decode as UTF-8 — the deprecated escape(atob()) trick mangles multi-byte
+  // characters (accented SSIDs, non-ASCII device names/passwords).
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes))
 }
 
 function applyProvision() {

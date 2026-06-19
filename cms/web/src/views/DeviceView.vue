@@ -299,7 +299,9 @@ async function loadScreens() {
   loadingScreens.value = true
   screensMsg.value = 'loading…'
   try {
-    const body = await api.post(`/api/devices/${encodeURIComponent(props.id)}/cmd`, { type: 'get_screens' })
+    // Use the read-only GET route, not POST /cmd — the latter is blocked for
+    // viewer-token holders by the read-method auth gate.
+    const body = await api.get(`/api/devices/${encodeURIComponent(props.id)}/screens`)
     if (!body.ok) { screensMsg.value = `error: ${body.error || 'failed'}`; return }
     screens.value = body.screens || []
     screensMsg.value = screens.value.length ? '' : 'no displays configured'

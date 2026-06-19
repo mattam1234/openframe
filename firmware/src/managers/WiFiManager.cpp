@@ -259,8 +259,10 @@ bool WiFiManager::connectToBestConfiguredNetwork() {
                 }
             }
         }
-        WiFi.scanDelete();
     }
+    // Always release the scan buffer — a failed/empty scan (found <= 0) still
+    // allocates it, and this runs on every ~10s reconnect attempt.
+    WiFi.scanDelete();
 
     const auto& target = configured[bestConfiguredIndex];
 
@@ -277,6 +279,10 @@ bool WiFiManager::connectToBestConfiguredNetwork() {
         if (!(wc.dns1.length() && d1.fromString(wc.dns1))) d1 = gw;
         d2.fromString(wc.dns2);  // ok if blank → 0.0.0.0
         if (!WiFi.config(ip, gw, sn, d1, d2)) {
+            // On ESP8266 a half-applied static config persists in the SDK even
+            // after a failed config() — explicitly clear it so begin() actually
+            // falls back to DHCP instead of coming up with no IP.
+            WiFi.config(IPAddress(0, 0, 0, 0), IPAddress(0, 0, 0, 0), IPAddress(0, 0, 0, 0));
             LOG_W(TAG, "Static IP config rejected — falling back to DHCP");
         } else {
             LOG_I(TAG, "Static IP " + wc.staticIp + " (gw " + gw.toString() + ")");

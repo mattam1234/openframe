@@ -225,6 +225,11 @@ bool InputManager::readDigitalPressed(const DigitalInputConfig& cfg) const {
         bool pressed = touchRead(cfg.pin) < cfg.touchThreshold;
         return cfg.inverted ? !pressed : pressed;
     }
+#else
+    // No capacitive-touch peripheral on this target. configureDigitalPins() skips
+    // pinMode() for touch pins, so falling through to digitalRead() would read a
+    // floating pin and emit phantom presses — report not-pressed instead.
+    if (cfg.touch) return false;
 #endif
     const int raw = digitalRead(cfg.pin);
     bool pressed = (raw == HIGH);

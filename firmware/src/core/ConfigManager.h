@@ -143,6 +143,12 @@ public:
     void toJson(JsonDocument& doc) const;
     bool fromJson(const JsonDocument& doc);
 
+    // Mirror a config document into the NVS backup slot. Use after a code path
+    // writes config.json directly (restore, raw FS upload) so the NVS shadow —
+    // the boot-time fallback when LittleFS is unreadable — doesn't stay stale and
+    // silently revert the change on the next reboot. No-op on ESP8266 (no NVS).
+    bool syncNvsBackup(const JsonDocument& doc);
+
 private:
     ConfigManager() = default;
     void applyDefaults();

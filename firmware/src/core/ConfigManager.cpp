@@ -51,6 +51,10 @@ bool writeConfigBackup(const JsonDocument& doc) {
 
 }  // namespace
 
+bool ConfigManager::syncNvsBackup(const JsonDocument& doc) {
+    return writeConfigBackup(doc);
+}
+
 ConfigManager& ConfigManager::instance() {
     static ConfigManager inst;
     return inst;

@@ -195,19 +195,25 @@ bool purgeJsonBackupFromNvs(const String& path) {
 }
 
 bool writeJsonFileOnly(const String& path, const String& body) {
-    File f = LittleFS.open(path, "w");
+    // Write to a sibling temp then atomically rename, same as every other write
+    // path. Opening `path` with "w" truncates it immediately, so a power loss
+    // mid-write would leave a corrupt-but-existing file that the NVS restore then
+    // skips forever (it only restores when the target is *missing*).
+    const String tmp = tempPathFor(path);
+    File f = LittleFS.open(tmp, "w");
     if (!f) {
-        LOG_E("Storage", "Cannot open for write: " + path);
+        LOG_E("Storage", "Cannot open for write: " + tmp);
         return false;
     }
 
     const size_t written = f.print(body);
     f.close();
     if (written != body.length()) {
-        LOG_E("Storage", "Short write: " + path + " (" + String(written) + "/" + String(body.length()) + ")");
+        LOG_E("Storage", "Short write: " + tmp + " (" + String(written) + "/" + String(body.length()) + ")");
+        LittleFS.remove(tmp);
         return false;
     }
-    return true;
+    return commitTemp(tmp, path);
 }
 
 bool restoreJsonBackupsFromNvs() {

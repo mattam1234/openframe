@@ -44,7 +44,10 @@ export class TemplateStore {
     const type = typeof input.command?.type === 'string' ? input.command.type.trim() : '';
     if (!name || !type) return null;
 
-    const id = input.id && this.templates.has(input.id) ? input.id : randomUUID();
+    // Honor a caller-supplied id even when the key doesn't exist yet (e.g.
+    // PUT /api/templates/:id creating with a chosen id) — otherwise the stored
+    // template lands under a random UUID that mismatches the request URL.
+    const id = typeof input.id === 'string' && input.id ? input.id : randomUUID();
     const template: Template = {
       id,
       name,

@@ -305,6 +305,14 @@ bool ActionRunner::run(const ActionConfig& action, String& error, bool dryRun,
         }
     }
 
+    // An unbalanced If/Repeat leaves its jump target at -1. Executing anyway
+    // silently runs the body of a false If (the >= 0 guard at the If case fails
+    // open), so reject malformed bracketing up front instead.
+    if (!ifStack.empty() || !repStack.empty()) {
+        error = "Unmatched If/Repeat bracket in action";
+        return false;
+    }
+
     // ── Execute ───────────────────────────────────────────────────────────────
     struct LoopFrame { int startIdx; int endIdx; uint16_t remaining; };
     std::vector<LoopFrame> loops;
@@ -640,7 +648,17 @@ void ActionEngine::registerBuiltInExecutors() {
     auto& runner = ActionRunner::instance();
 
     runner.registerExecutor(ActionType::Delay, [](const ActionStep& step, String&) -> bool {
-        if (step.delayMs > 0) delay(step.delayMs);
+        // Chunk the wait and feed the watchdog: on ESP32 delay()/vTaskDelay()
+        // yields the scheduler but does NOT reset the task WDT (armed at 60s in
+        // HealthMonitor), so a delay_ms >= 60000 would hard-reboot mid-step.
+        constexpr uint32_t CHUNK_MS = 5000;
+        uint32_t remaining = step.delayMs;
+        while (remaining > 0) {
+            const uint32_t chunk = remaining < CHUNK_MS ? remaining : CHUNK_MS;
+            delay(chunk);
+            of_watchdog_feed();
+            remaining -= chunk;
+        }
         return true;
     });
 
@@ -659,7 +677,9 @@ void ActionEngine::registerBuiltInExecutors() {
                 error = "wait_until timed out after " + String(timeout) + "ms";
                 return false;
             }
-            delay(10);  // delay() yields to WiFi/RTOS, so the watchdog stays fed
+            delay(10);
+            of_watchdog_feed();  // ESP32 delay() doesn't reset the task WDT — a
+                                 // user timeout >= 60s would otherwise reboot
         }
         return true;
     });

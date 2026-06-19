@@ -1050,6 +1050,9 @@ void ApiServer::handleConfigRestore(AsyncWebServerRequest* request, const String
         sendError(request, 500, "Failed to write restored config");
         return;
     }
+    // writeRaw doesn't touch the NVS config mirror; sync it so a boot with an
+    // unreadable LittleFS doesn't fall back to the pre-restore config.
+    ConfigManager::instance().syncNvsBackup(check);
 
     JsonDocument response;
     response["ok"] = true;
@@ -2881,6 +2884,15 @@ void ApiServer::handleFsUpload(AsyncWebServerRequest* request, const String& pat
     if (!StorageManager::instance().writeRaw(path, body)) {
         sendError(request, 500, "Write failed");
         return;
+    }
+    // Overwriting config.json directly bypasses ConfigManager::save(), so refresh
+    // the NVS config mirror too — otherwise a boot with unreadable LittleFS would
+    // revert to the old config (body already validated as JSON above).
+    if (path == OF_CONFIG_PATH) {
+        JsonDocument cfg;
+        if (!deserializeJson(cfg, body)) {
+            ConfigManager::instance().syncNvsBackup(cfg);
+        }
     }
     JsonDocument doc;
     doc["ok"]    = true;

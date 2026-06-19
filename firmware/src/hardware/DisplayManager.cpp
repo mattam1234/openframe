@@ -893,11 +893,12 @@ void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
         if (!page) page = firstPageForDisplay(display.config);
 
         JsonArray widgets = screen["widgets"].to<JsonArray>();
+        bool truncated = false;
         if (page) {
             screen["page"]  = page->id;
             screen["title"] = page->title;
             for (const auto& widget : page->widgets) {
-                if (widgetBudget == 0) { screen["truncated"] = true; break; }
+                if (widgetBudget == 0) { screen["truncated"] = true; truncated = true; break; }
                 String text = resolveWidgetText(widget);
                 if (widget.maxChars > 0 && text.length() > widget.maxChars) {
                     text = text.substring(0, widget.maxChars);
@@ -914,5 +915,11 @@ void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
         // Surface the transient notification overlay so the preview matches the
         // glass (it renders bottom-left at text size 1 — see renderDisplay).
         if (notifActive) screen["notification"] = _notifMessage;
+
+        // The widget budget is a global cap that keeps this JSON inside the MQTT
+        // buffer. If it ran out mid-display, stop here rather than appending the
+        // remaining displays as empty `truncated` screens (which read as blank in
+        // the CMS preview); the `truncated` flag on this last screen signals more.
+        if (truncated) break;
     }
 }

@@ -212,12 +212,18 @@ void NodeLinkManager::retryPending(uint32_t now) {
 }
 
 bool NodeLinkManager::isDuplicate(const String& srcId, uint32_t seq) {
-    auto it = _lastSeq.find(srcId);
-    // Exact-equal consecutive seq from the same source == a retransmit. New
-    // messages always carry a fresh incrementing seq; a peer reboot resets to a
-    // low seq which won't equal the stored high one, so it's still accepted.
-    if (it != _lastSeq.end() && it->second == seq) return true;
-    _lastSeq[srcId] = seq;
+    SeqWindow& w = _lastSeq[srcId];
+    // A retransmit carries the same seq as the original; it may arrive after
+    // other frames from the same source (Announce/Heartbeat use the same seq
+    // counter). Match against a small window of recently-accepted seqs rather
+    // than just the latest, so interleaved traffic can't reopen the gate. A peer
+    // reboot resets to low seqs that won't be in the window, so it's accepted.
+    for (size_t i = 0; i < SEQ_WINDOW; ++i) {
+        if (w.used[i] && w.recent[i] == seq) return true;
+    }
+    w.recent[w.head] = seq;
+    w.used[w.head]   = true;
+    w.head           = (w.head + 1) % SEQ_WINDOW;
     return false;
 }
 

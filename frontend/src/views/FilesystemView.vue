@@ -642,11 +642,11 @@ async function submitNameDialog() {
       await api.fs.rename(nameDialog.original, to)
       notify(`Renamed to ${to}`)
     } else if (nameDialog.mode === 'folder') {
-      const target = joinPath(currentPath.value, raw)
+      const target = raw.startsWith('/') ? raw : joinPath(currentPath.value, raw)
       await api.fs.mkdir(target)
       notify(`Created folder ${target}`)
     } else {
-      const target = joinPath(currentPath.value, raw)
+      const target = raw.startsWith('/') ? raw : joinPath(currentPath.value, raw)
       // Seed new JSON files with {} so they pass the device's JSON validation.
       await api.fs.upload(target, target.endsWith('.json') ? '{}' : '')
       notify(`Created ${target}`)

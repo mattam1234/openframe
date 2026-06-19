@@ -378,15 +378,18 @@ function onWidgetPointerDown(event, idx) {
     x: (event.clientX - rect.left) / scale.value - (widget.x || 0),
     y: (event.clientY - rect.top) / scale.value - (widget.y || 0),
   }
-  dragState = { idx, grab, rect }
+  dragState = { idx, grab }
   event.target.setPointerCapture?.(event.pointerId)
 }
 
 function onWidgetPointerMove(event) {
   if (!dragState) return
   const widget = selectedPage.value.widgets[dragState.idx]
+  // Re-read the rect each frame — caching it at pointer-down makes the widget
+  // drift if the page scrolls or reflows mid-drag.
+  const rect = canvasEl.value.getBoundingClientRect()
   const { x, y } = pointerToDevicePx(
-    event.clientX, event.clientY, dragState.rect, scale.value, activeDisplay.value, gridStep.value, dragState.grab,
+    event.clientX, event.clientY, rect, scale.value, activeDisplay.value, gridStep.value, dragState.grab,
   )
   widget.x = x
   widget.y = y

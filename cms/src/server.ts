@@ -488,7 +488,11 @@ export function createServer(
     // flash-success gating would watch the heartbeat `version` change over time —
     // see the Fleet grid; left as a follow-up needing device telemetry.)
     const canaryN = Math.floor(Number((req.body ?? {}).canary) || 0);
-    const minAckRate = typeof (req.body ?? {}).minAckRate === 'number' ? (req.body as { minAckRate: number }).minAckRate : 1;
+    // Clamp to [0,1] — a negative value would make `ackRate < minAckRate` never
+    // true, silently disabling the canary safety halt.
+    const minAckRate = typeof (req.body ?? {}).minAckRate === 'number'
+      ? Math.min(1, Math.max(0, (req.body as { minAckRate: number }).minAckRate))
+      : 1;
 
     if (canaryN > 0 && canaryN < targets.length) {
       const canaryTargets = targets.slice(0, canaryN);

@@ -33,6 +33,11 @@ namespace {
         memcpy(f.mac, mac, 6);
         f.len = (len > NodeLinkManager::MAX_FRAME) ? NodeLinkManager::MAX_FRAME : len;
         memcpy(f.data, data, f.len);
+        // Publish the frame data before advancing the head. On dual-core ESP32 the
+        // recv callback (WiFi task) and the consumer (loop task) can run on
+        // separate cores, so `volatile` alone doesn't order these writes — without
+        // the fence the consumer could observe the new head before the payload.
+        __sync_synchronize();
         s_head = next;
     }
 }
