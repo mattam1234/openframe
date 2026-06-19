@@ -1,10 +1,16 @@
 #include "DisplayManager.h"
+#include "../OpenFrameConfig.h"
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_SH110X.h>
+// SPI TFT drivers pull in the large Adafruit_ILI9341 / ST7789 libraries; compile
+// them in only on boards that enable TFT support (off by default on constrained
+// boards — see OpenFrameConfig.h).
+#if OF_ENABLE_TFT
 #include <Adafruit_ILI9341.h>
 #include <Adafruit_ST7789.h>
+#endif
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -48,13 +54,37 @@ class Ssd1306DisplayProvider final : public DisplayProvider {
 public:
     bool begin(const DisplayConfig& config, String& error) override {
         _config = config;
+
+        // Resolve the GDDRAM sub-window. A 72x40 panel (0.42" OLED) shows only a
+        // window offset into the controller's 128x64 RAM; auto-derive the column
+        // offset and the alternative COM-pin map the Adafruit library misses.
+        const bool is72x40 = (config.width == 72 && config.height == 40);
+        _colOffset  = (config.colOffset  == 0xFF) ? (is72x40 ? 28 : 0) : config.colOffset;
+        _pageOffset = (config.pageOffset == 0xFF) ? 0 : config.pageOffset;
+        _comPins    = (config.comPins < 0 && is72x40) ? 0x12 : config.comPins;
+
+        // Own the Wire.begin() call so a board-specific SDA/SCL (e.g. the C3
+        // 0.42" OLED on GPIO5/6) survives — periphBegin=false below stops the
+        // library from re-running Wire.begin() with the chip defaults.
+        if (config.sdaPin >= 0 && config.sclPin >= 0) {
+            Wire.begin(config.sdaPin, config.sclPin);
+        } else {
+            Wire.begin();
+        }
+
         _display.reset(new Adafruit_SSD1306(config.width, config.height, &Wire, config.resetPin));
 
-        if (!_display->begin(SSD1306_SWITCHCAPVCC, config.address)) {
+        if (!_display->begin(SSD1306_SWITCHCAPVCC, config.address, /*reset=*/true,
+                             /*periphBegin=*/false)) {
             error = "SSD1306 init failed at 0x" + String(config.address, HEX);
             error.toUpperCase();
             _display.reset();
             return false;
+        }
+
+        if (_comPins >= 0) {
+            _display->ssd1306_command(SSD1306_SETCOMPINS);
+            _display->ssd1306_command(static_cast<uint8_t>(_comPins));
         }
 
         _display->clearDisplay();
@@ -62,7 +92,7 @@ public:
         _display->setTextColor(SSD1306_WHITE);
         _display->ssd1306_command(SSD1306_SETCONTRAST);
         _display->ssd1306_command(config.contrast);
-        _display->display();
+        present();
         return true;
     }
 
@@ -81,9 +111,13 @@ public:
     }
 
     void present() override {
-        if (_display) {
+        if (!_display) return;
+        // No offset → the library's own column addressing is correct; use it.
+        if (_colOffset == 0 && _pageOffset == 0) {
             _display->display();
+            return;
         }
+        pushOffsetFrame();
     }
 
     String describe() const override {
@@ -91,8 +125,38 @@ public:
     }
 
 private:
+    // Push the framebuffer into an offset GDDRAM window. Mirrors the library's
+    // display() data write but sets the column/page range to the visible window
+    // first (required for panels like the 72x40 that don't start at column 0).
+    void pushOffsetFrame() {
+        const uint8_t pages = static_cast<uint8_t>((_config.height + 7) / 8);
+        _display->ssd1306_command(SSD1306_PAGEADDR);
+        _display->ssd1306_command(_pageOffset);
+        _display->ssd1306_command(static_cast<uint8_t>(_pageOffset + pages - 1));
+        _display->ssd1306_command(SSD1306_COLUMNADDR);
+        _display->ssd1306_command(_colOffset);
+        _display->ssd1306_command(static_cast<uint8_t>(_colOffset + _config.width - 1));
+
+        const uint8_t* buf = _display->getBuffer();
+        const uint16_t count = static_cast<uint16_t>(_config.width) * pages;
+        uint16_t i = 0;
+        while (i < count) {
+            Wire.beginTransmission(_config.address);
+            Wire.write(static_cast<uint8_t>(0x40));  // Co=0, D/C#=1: data stream
+            uint8_t n = 0;
+            while (i < count && n < 16) {
+                Wire.write(buf[i++]);
+                ++n;
+            }
+            Wire.endTransmission();
+        }
+    }
+
     DisplayConfig                      _config;
     std::unique_ptr<Adafruit_SSD1306> _display;
+    uint8_t                            _colOffset  = 0;
+    uint8_t                            _pageOffset = 0;
+    int16_t                            _comPins    = -1;
 };
 
 // ── OLED: SH1106 ─────────────────────────────────────────────────────────────
@@ -146,6 +210,7 @@ private:
 };
 
 // ── TFT: ILI9341 ─────────────────────────────────────────────────────────────
+#if OF_ENABLE_TFT
 
 class Ili9341DisplayProvider final : public DisplayProvider {
 public:
@@ -250,6 +315,7 @@ private:
     DisplayConfig                      _config;
     std::unique_ptr<Adafruit_ST7789>  _display;
 };
+#endif  // OF_ENABLE_TFT
 
 // ── Nextion ───────────────────────────────────────────────────────────────────
 //
@@ -343,7 +409,11 @@ private:
         return num == 0 ? Serial : Serial1;
 #else
         if (num == 1) return Serial1;
+    #if !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(CONFIG_IDF_TARGET_ESP32S2)
+        // C3/S2 expose only UART0 and UART1; Serial2 is undefined there, so a
+        // request for UART2 falls through to the default port below.
         if (num >= 2) return Serial2;
+    #endif
     #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
         // On USB-CDC boards (e.g. ESP32-S3 devkit) `Serial` is the USB CDC port,
         // which is not a HardwareSerial. The physical UART0 is exposed as Serial0.
@@ -469,6 +539,7 @@ void DisplayManager::registerBuiltInDisplays() {
             return std::unique_ptr<DisplayProvider>(new Sh1106DisplayProvider());
         });
     }
+#if OF_ENABLE_TFT
     if (!_registry.count("ili9341")) {
         registerDisplay("ili9341", []() {
             return std::unique_ptr<DisplayProvider>(new Ili9341DisplayProvider());
@@ -479,6 +550,7 @@ void DisplayManager::registerBuiltInDisplays() {
             return std::unique_ptr<DisplayProvider>(new St7789DisplayProvider());
         });
     }
+#endif
     if (!_registry.count("nextion")) {
         registerDisplay("nextion", []() {
             return std::unique_ptr<DisplayProvider>(new NextionDisplayProvider());
@@ -534,6 +606,11 @@ bool DisplayManager::loadConfig() {
         cfg.address           = readUint8(item["address"], 0x3C);
         cfg.resetPin          = static_cast<int8_t>(readInt16(item["reset_pin"], -1));
         cfg.contrast          = readUint8(item["contrast"], 255);
+        cfg.sdaPin            = static_cast<int8_t>(readInt16(item["sda_pin"], -1));
+        cfg.sclPin            = static_cast<int8_t>(readInt16(item["scl_pin"], -1));
+        cfg.colOffset         = readUint8(item["col_offset"], 0xFF);
+        cfg.pageOffset        = readUint8(item["page_offset"], 0xFF);
+        cfg.comPins           = readInt16(item["com_pins"], -1);
 
         // SPI TFT fields
         cfg.csPin             = static_cast<int8_t>(readInt16(item["cs_pin"], -1));

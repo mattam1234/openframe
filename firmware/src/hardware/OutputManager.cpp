@@ -467,6 +467,12 @@ bool OutputManager::initWs2812(size_t index) {
     #define OF_WS2812_PIN_LIST(X) \
         X(2) X(4) X(5) X(12) X(13) X(14) X(15) X(16) X(17) X(18) X(19) X(21) \
         X(26) X(33) X(38) X(47) X(48)
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+    // ESP32-C3: 22 GPIOs; FastLED masks GPIO 11-17 (SPI flash). GPIO 18-19 are
+    // the native USB pins and 20-21 the default UART, so usable but reserved.
+    #define OF_WS2812_PIN_LIST(X) \
+        X(0) X(1) X(2) X(3) X(4) X(5) X(6) X(7) X(8) X(9) X(10) \
+        X(18) X(19) X(20) X(21)
 #elif defined(ESP8266)
     // ESP8266 (default GPIO pin order): GPIO 6-11 are tied to flash.
     #define OF_WS2812_PIN_LIST(X) \

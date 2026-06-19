@@ -17,6 +17,17 @@ struct DisplayConfig {
     uint8_t  address           = 0x3C;
     int8_t   resetPin          = -1;
     uint8_t  contrast          = 255;
+    int8_t   sdaPin            = -1;  // -1 = use the bus default for the board
+    int8_t   sclPin            = -1;  // -1 = use the bus default for the board
+
+    // SSD1306 sub-window mapping. Small panels (e.g. the 0.42" 72x40 used on
+    // some ESP32-C3 boards) expose only a window of the controller's 128x64
+    // GDDRAM, so the frame must be pushed at a column/page offset. 0xFF = auto
+    // (derive from geometry: 72x40 → column 28). comPins overrides SETCOMPINS
+    // when >= 0 (72x40 needs 0x12, which the Adafruit library doesn't pick).
+    uint8_t  colOffset         = 0xFF;
+    uint8_t  pageOffset        = 0xFF;
+    int16_t  comPins           = -1;
 
     // SPI TFT (ILI9341, ST7789)
     int8_t   csPin             = -1;

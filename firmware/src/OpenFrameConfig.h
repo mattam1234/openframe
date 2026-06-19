@@ -4,6 +4,9 @@
 #if defined(ESP32S3_BOARD)
     #define OF_BOARD_TYPE "ESP32-S3"
     #define OF_USB_HID_SUPPORTED 1
+#elif defined(ESP32C3_BOARD)
+    #define OF_BOARD_TYPE "ESP32-C3"
+    #define OF_USB_HID_SUPPORTED 0
 #elif defined(ESP32_BOARD)
     #define OF_BOARD_TYPE "ESP32"
     #define OF_USB_HID_SUPPORTED 0
@@ -51,9 +54,79 @@
 #define OF_CONFIG_BACKUP_DIR "/cfgbak"
 #define OF_CONFIG_BACKUP_KEEP 5
 
-// Ring buffer sizes
-#define OF_LOG_BUFFER_SIZE 1000
-#define OF_ACTION_HISTORY_SIZE 1000
+// ── Resource profile ──────────────────────────────────────────────────────────
+// "Constrained" boards have a small heap and/or a single core and cannot afford
+// the full set of in-RAM buffers, the live log-over-WebSocket firehose, or every
+// optional driver compiled in. The ESP8266 (~80 KB heap, ~25 KB free at boot) and
+// the single-core ESP32-C3 (flash ~81% full) both qualify. Everything below is
+// `#ifndef`-guarded so platformio.ini build_flags can override per board.
+#if defined(ESP8266_BOARD) || defined(ESP32C3_BOARD)
+    #define OF_CONSTRAINED 1
+#else
+    #define OF_CONSTRAINED 0
+#endif
+
+// Ring buffer sizes — each LogEntry / action-history record holds Arduino Strings,
+// so a large ring is tens of KB of heap. Keep them small where heap is scarce.
+#ifndef OF_LOG_BUFFER_SIZE
+    #if OF_CONSTRAINED
+        #define OF_LOG_BUFFER_SIZE 80
+    #else
+        #define OF_LOG_BUFFER_SIZE 1000
+    #endif
+#endif
+#ifndef OF_ACTION_HISTORY_SIZE
+    #if OF_CONSTRAINED
+        #define OF_ACTION_HISTORY_SIZE 100
+    #else
+        #define OF_ACTION_HISTORY_SIZE 1000
+    #endif
+#endif
+
+// Live log streaming over WebSocket: every emitted log line builds a JSON frame
+// and pushes it to all clients. On constrained boards only forward Warning+ to
+// cut the per-line heap churn (the full ring is still readable via the REST API).
+// LogLevel::Warning == 3.
+#ifndef OF_LOG_WS_MIN_LEVEL
+    #if OF_CONSTRAINED
+        #define OF_LOG_WS_MIN_LEVEL 3
+    #else
+        #define OF_LOG_WS_MIN_LEVEL 0
+    #endif
+#endif
+
+// Largest accepted POST/WS body. A full 64 KB buffer is most of the ESP8266 heap,
+// so cap constrained boards well below that.
+#ifndef OF_MAX_POST_PAYLOAD
+    #if OF_CONSTRAINED
+        #define OF_MAX_POST_PAYLOAD (16 * 1024)
+    #else
+        #define OF_MAX_POST_PAYLOAD (64 * 1024)
+    #endif
+#endif
+
+// Optional drivers. The library code (and its flash footprint) is only compiled
+// when its #include is reached, so gating the include + registration here strips
+// the driver entirely on boards that don't enable it. Heavy/rarely-paired drivers
+// default off on constrained boards; override with -DOF_ENABLE_* in platformio.ini.
+#ifndef OF_ENABLE_TFT          // ILI9341 / ST7735 / ST7789 SPI TFTs (large GFX libs)
+    #define OF_ENABLE_TFT          (!OF_CONSTRAINED)
+#endif
+#ifndef OF_ENABLE_SENSOR_MPU6050
+    #define OF_ENABLE_SENSOR_MPU6050 (!OF_CONSTRAINED)
+#endif
+#ifndef OF_ENABLE_SENSOR_SCD4X
+    #define OF_ENABLE_SENSOR_SCD4X   (!OF_CONSTRAINED)
+#endif
+#ifndef OF_ENABLE_SENSOR_VL53L0X
+    #define OF_ENABLE_SENSOR_VL53L0X (!OF_CONSTRAINED)
+#endif
+#ifndef OF_ENABLE_SENSOR_SGP30
+    #define OF_ENABLE_SENSOR_SGP30   (!OF_CONSTRAINED)
+#endif
+#ifndef OF_ENABLE_SENSOR_MAX6675
+    #define OF_ENABLE_SENSOR_MAX6675 (!OF_CONSTRAINED)
+#endif
 
 // WebSocket
 #define OF_WS_PATH "/ws"

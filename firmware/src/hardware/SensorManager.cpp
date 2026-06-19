@@ -1,4 +1,5 @@
 #include "SensorManager.h"
+#include "../OpenFrameConfig.h"
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <Adafruit_BME280.h>
@@ -8,12 +9,24 @@
 #include <DallasTemperature.h>
 #include <BH1750.h>
 #include <Adafruit_INA219.h>
-#include <Adafruit_MPU6050.h>
 #include <Adafruit_SHT31.h>
+// Optional/heavy drivers — compiled in only when enabled for this board (see
+// OpenFrameConfig.h). Gating the #include strips the library's flash footprint.
+#if OF_ENABLE_SENSOR_MPU6050
+#include <Adafruit_MPU6050.h>
+#endif
+#if OF_ENABLE_SENSOR_SGP30
 #include <Adafruit_SGP30.h>
+#endif
+#if OF_ENABLE_SENSOR_VL53L0X
 #include <Adafruit_VL53L0X.h>
+#endif
+#if OF_ENABLE_SENSOR_MAX6675
 #include <max6675.h>
+#endif
+#if OF_ENABLE_SENSOR_SCD4X
 #include <SensirionI2CScd4x.h>
+#endif
 #include <math.h>
 
 namespace {
@@ -259,6 +272,7 @@ private:
     std::unique_ptr<Adafruit_INA219> _sensor;
 };
 
+#if OF_ENABLE_SENSOR_MPU6050
 class Mpu6050SensorDriver final : public SensorDriver {
 public:
     bool begin(const SensorConfig& config, String& error) override {
@@ -294,6 +308,7 @@ public:
 private:
     Adafruit_MPU6050 _mpu;
 };
+#endif  // OF_ENABLE_SENSOR_MPU6050
 
 }  // namespace
 
@@ -436,6 +451,7 @@ private:
 };
 
 // SGP30 air-quality (#17): eCO2 + TVOC over I²C.
+#if OF_ENABLE_SENSOR_SGP30
 class Sgp30SensorDriver final : public SensorDriver {
 public:
     bool begin(const SensorConfig&, String& error) override {
@@ -453,8 +469,10 @@ public:
 private:
     Adafruit_SGP30 _sensor;
 };
+#endif  // OF_ENABLE_SENSOR_SGP30
 
 // VL53L0X time-of-flight distance (#17).
+#if OF_ENABLE_SENSOR_VL53L0X
 class Vl53l0xSensorDriver final : public SensorDriver {
 public:
     bool begin(const SensorConfig& config, String& error) override {
@@ -476,8 +494,10 @@ public:
 private:
     Adafruit_VL53L0X _sensor;
 };
+#endif  // OF_ENABLE_SENSOR_VL53L0X
 
 // MAX6675 K-type thermocouple (#17): SPI-ish — SCK=clock_pin, CS=cs_pin, SO=pin.
+#if OF_ENABLE_SENSOR_MAX6675
 class Max6675SensorDriver final : public SensorDriver {
 public:
     bool begin(const SensorConfig& config, String& error) override {
@@ -499,8 +519,10 @@ public:
 private:
     std::unique_ptr<MAX6675> _sensor;
 };
+#endif  // OF_ENABLE_SENSOR_MAX6675
 
 // Sensirion SCD40/41 CO₂ (#17): CO₂ + temperature + humidity over I²C.
+#if OF_ENABLE_SENSOR_SCD4X
 class Scd4xSensorDriver final : public SensorDriver {
 public:
     bool begin(const SensorConfig&, String& error) override {
@@ -524,20 +546,29 @@ public:
 private:
     SensirionI2CScd4x _sensor;
 };
+#endif  // OF_ENABLE_SENSOR_SCD4X
 
 void SensorManager::registerBuiltInSensors() {
+#if OF_ENABLE_SENSOR_SGP30
     if (!_registry.count("sgp30")) {
         registerSensor("sgp30", []() { return std::unique_ptr<SensorDriver>(new Sgp30SensorDriver()); });
     }
+#endif
+#if OF_ENABLE_SENSOR_VL53L0X
     if (!_registry.count("vl53l0x")) {
         registerSensor("vl53l0x", []() { return std::unique_ptr<SensorDriver>(new Vl53l0xSensorDriver()); });
     }
+#endif
+#if OF_ENABLE_SENSOR_MAX6675
     if (!_registry.count("max6675")) {
         registerSensor("max6675", []() { return std::unique_ptr<SensorDriver>(new Max6675SensorDriver()); });
     }
+#endif
+#if OF_ENABLE_SENSOR_SCD4X
     if (!_registry.count("scd4x")) {
         registerSensor("scd4x", []() { return std::unique_ptr<SensorDriver>(new Scd4xSensorDriver()); });
     }
+#endif
 
     if (!_registry.count("hx711")) {
         registerSensor("hx711", []() { return std::unique_ptr<SensorDriver>(new Hx711SensorDriver()); });
@@ -576,9 +607,11 @@ void SensorManager::registerBuiltInSensors() {
     if (!_registry.count("ina219")) {
         registerSensor("ina219", []() { return std::unique_ptr<SensorDriver>(new Ina219SensorDriver()); });
     }
+#if OF_ENABLE_SENSOR_MPU6050
     if (!_registry.count("mpu6050")) {
         registerSensor("mpu6050", []() { return std::unique_ptr<SensorDriver>(new Mpu6050SensorDriver()); });
     }
+#endif
 }
 
 bool SensorManager::loadConfig() {

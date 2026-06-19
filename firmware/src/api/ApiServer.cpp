@@ -36,7 +36,7 @@ namespace {
 
 // Maximum accepted POST/WS payload. Bodies above this are rejected before they
 // can exhaust the heap on a memory-constrained device.
-constexpr size_t MAX_POST_PAYLOAD = 64 * 1024;
+constexpr size_t MAX_POST_PAYLOAD = OF_MAX_POST_PAYLOAD;
 
 // Free the accumulated body buffer stashed in request->_tempObject. The library
 // destructor only free()s _tempObject (it never runs the String destructor), so
@@ -211,6 +211,10 @@ void serializeLogEntry(JsonObject obj, const LogEntry& entry) {
 
 String toJsonString(const JsonDocument& doc) {
     String body;
+    // Reserve the exact size up front: serializeJson() into a String otherwise
+    // grows it by repeated reallocation, churning/fragmenting the heap on every
+    // response and WebSocket frame.
+    body.reserve(measureJson(doc) + 1);
     serializeJson(doc, body);
     return body;
 }
@@ -1275,6 +1279,10 @@ void ApiServer::onEvent(const Event& event) {
 
 void ApiServer::onLogEntry(const LogEntry& entry) {
     if (!_started) return;
+    // Skip the per-line JSON build when nobody is listening, and on constrained
+    // boards only stream Warning+ (the full ring is still readable via REST).
+    if (static_cast<uint8_t>(entry.level) < OF_LOG_WS_MIN_LEVEL) return;
+    if (_ws.count() == 0) return;
 
     JsonDocument doc;
     auto obj = doc.to<JsonObject>();
@@ -1343,26 +1351,40 @@ void ApiServer::scheduleRestart(uint32_t delayMs) {
     _restartAtMs = millis() + delayMs;
 }
 
+// Assemble a {"type":...,"payload":...} frame into a single pre-reserved String.
+// Chained operator+ would allocate a fresh heap String at every "+" (4+ per frame),
+// fragmenting the heap on memory-tight boards; one reserve()d buffer avoids that.
+static String buildWsFrame(const char* type, const String& payloadJson) {
+    const char* payload = payloadJson.length() ? payloadJson.c_str() : "null";
+    const size_t payloadLen = payloadJson.length() ? payloadJson.length() : 4;
+    String frame;
+    frame.reserve(20 + strlen(type) + payloadLen);
+    frame += "{\"type\":\"";
+    frame += type;
+    frame += "\",\"payload\":";
+    frame += payload;
+    frame += "}";
+    return frame;
+}
+
 void ApiServer::sendFrame(AsyncWebSocketClient* client, const char* type, const JsonDocument& payload) const {
     if (!client) return;
-    const String payloadJson = toJsonString(payload);
-    client->text("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
+    client->text(buildWsFrame(type, toJsonString(payload)));
 }
 
 void ApiServer::sendRawFrame(AsyncWebSocketClient* client, const char* type, const String& rawPayloadJson) const {
     if (!client) return;
-    const String payloadJson = rawPayloadJson.length() ? rawPayloadJson : String("null");
-    client->text("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
+    client->text(buildWsFrame(type, rawPayloadJson));
 }
 
 void ApiServer::broadcastFrame(const char* type, const JsonDocument& payload) {
-    const String payloadJson = toJsonString(payload);
-    _ws.textAll("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
+    if (_ws.count() == 0) return;   // no subscribers — skip serialize + send entirely
+    _ws.textAll(buildWsFrame(type, toJsonString(payload)));
 }
 
 void ApiServer::broadcastRawFrame(const char* type, const String& rawPayloadJson) {
-    const String payloadJson = rawPayloadJson.length() ? rawPayloadJson : String("null");
-    _ws.textAll("{\"type\":\"" + String(type) + "\",\"payload\":" + payloadJson + "}");
+    if (_ws.count() == 0) return;
+    _ws.textAll(buildWsFrame(type, rawPayloadJson));
 }
 
 String ApiServer::buildStatusJson() const {

@@ -218,9 +218,10 @@ void InputManager::updateDigitalInput(size_t index, uint32_t nowMs) {
 }
 
 bool InputManager::readDigitalPressed(const DigitalInputConfig& cfg) const {
-#if defined(ESP32) && !defined(ESP8266_BOARD)
+#if defined(ESP32) && !defined(ESP8266_BOARD) && !defined(CONFIG_IDF_TARGET_ESP32C3)
     if (cfg.touch) {
         // touchRead() falls as the pad is touched; below threshold = pressed.
+        // (The ESP32-C3 has no capacitive-touch peripheral, hence the guard.)
         bool pressed = touchRead(cfg.pin) < cfg.touchThreshold;
         return cfg.inverted ? !pressed : pressed;
     }

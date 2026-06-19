@@ -1,0 +1,13 @@
+# OpenFrame 4 MB flash layout (ESP32-C3) — single app slot, large LittleFS.
+#
+# A 4 MB part can't fit twin OTA app slots (~1.8 MB each) alongside the ~1.1 MB
+# web UI, so this scheme keeps ONE app slot and gives the rest to the
+# filesystem. Trade-off: no over-the-air *firmware* updates on the C3 — reflash
+# over the native USB-CDC port instead. Filesystem (web-UI) OTA still works.
+#
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+factory,    app,  factory,  0x10000,   0x1F0000,
+spiffs,     data, spiffs,   0x200000,  0x1E0000,
+coredump,   data, coredump, 0x3E0000,  0x20000,

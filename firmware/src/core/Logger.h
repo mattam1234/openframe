@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <vector>
 #include <functional>
+#include "../OpenFrameConfig.h"
 
 // ── Log Level ─────────────────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ public:
 private:
     Logger() = default;
 
-    static constexpr size_t BUFFER_SIZE = 1000;
+    static constexpr size_t BUFFER_SIZE = OF_LOG_BUFFER_SIZE;
 
     LogLevel               _level = LogLevel::Debug;
     std::vector<LogEntry>  _buffer;
