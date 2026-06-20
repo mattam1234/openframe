@@ -60,6 +60,28 @@
       </v-col>
     </v-row>
 
+    <!-- Live screen mirror -->
+    <v-row v-if="!status.apMode" class="mt-2">
+      <v-col cols="12">
+        <v-card>
+          <v-card-title class="d-flex align-center justify-space-between">
+            <span><v-icon class="mr-1" size="small">mdi-monitor</v-icon>Screen</span>
+            <router-link to="/screens" class="text-caption text-decoration-none">designer →</router-link>
+          </v-card-title>
+          <v-card-text>
+            <div v-if="screens.length" class="d-flex flex-wrap ga-4">
+              <ScreenPreview v-for="s in screens" :key="s.id" :screen="s" :scale="3" />
+            </div>
+            <div v-else-if="screensLoaded" class="text-body-2 text-medium-emphasis">
+              No active displays.
+              <router-link to="/layout" class="text-decoration-none">Configure a display →</router-link>
+            </div>
+            <v-skeleton-loader v-else type="image" />
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
     <div class="d-flex align-center justify-space-between mt-2">
       <h2 class="text-subtitle-1"><v-icon class="mr-1" size="small">mdi-view-grid</v-icon>Panels</h2>
       <v-btn v-if="layoutCustomised" size="x-small" variant="text" prepend-icon="mdi-restore" @click="resetLayout">Reset layout</v-btn>
@@ -288,7 +310,10 @@
               <div>Flash: <v-chip size="x-small" :color="selfTest.result.flash?.ok ? 'success' : 'error'">{{ selfTest.result.flash?.ok ? 'OK' : 'FAIL' }}</v-chip></div>
               <div>Filesystem: <v-chip size="x-small" :color="selfTest.result.fs?.ok ? 'success' : 'error'">{{ selfTest.result.fs?.ok ? 'OK' : 'FAIL' }}</v-chip>
                 {{ Math.round((selfTest.result.fs?.used || 0) / 1024) }}/{{ Math.round((selfTest.result.fs?.total || 0) / 1024) }} KB</div>
-              <div>I²C devices: {{ (selfTest.result.i2c?.devices || []).join(', ') || 'none found' }}</div>
+              <div>
+                I²C devices<span v-if="selfTest.result.i2c?.sda != null"> (SDA {{ selfTest.result.i2c.sda }}/SCL {{ selfTest.result.i2c.scl }})</span>:
+                {{ (selfTest.result.i2c?.devices || []).join(', ') || 'none found' }}
+              </div>
             </div>
             <div v-else-if="selfTest.error" class="mt-2 text-error text-body-2">{{ selfTest.error }}</div>
 
@@ -321,11 +346,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
 import api from '../api/client'
 import OutputControlCard from '../components/OutputControlCard.vue'
+import ScreenPreview from '../components/ScreenPreview.vue'
 
 const wsStore = useWebSocketStore()
 const deviceStore = useDeviceStore()
@@ -334,6 +360,24 @@ const storage = ref({ total: 0, used: 0, free: 0 })
 const outputs = ref([])
 const crashlog = ref([])
 const selfTest = ref({ busy: false, result: null, error: '' })
+
+// Live screen mirror: poll the device's reported screen content and render it as
+// a monochrome preview (see ScreenPreview). `screensLoaded` distinguishes "no
+// displays configured" from "haven't fetched yet".
+const screens = ref([])
+const screensLoaded = ref(false)
+let screensTimer = null
+
+async function refreshScreens() {
+  try {
+    const d = await api.get('/api/screens')
+    screens.value = Array.isArray(d.screens) ? d.screens : []
+  } catch {
+    screens.value = []
+  } finally {
+    screensLoaded.value = true
+  }
+}
 
 async function runSelfTest() {
   selfTest.value.busy = true
@@ -425,6 +469,12 @@ onMounted(() => {
   api.fs.stat().then((s) => { storage.value = s }).catch(() => {})
   api.get('/api/outputs/state').then((d) => { outputs.value = d.outputs || [] }).catch(() => {})
   api.get('/api/crashlog').then((d) => { crashlog.value = d.resets || [] }).catch(() => {})
+  refreshScreens()
+  screensTimer = setInterval(refreshScreens, 2000)
+})
+
+onUnmounted(() => {
+  if (screensTimer) { clearInterval(screensTimer); screensTimer = null }
 })
 
 const storagePercent = computed(() =>

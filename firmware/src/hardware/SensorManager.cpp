@@ -1,5 +1,6 @@
 #include "SensorManager.h"
 #include "../OpenFrameConfig.h"
+#include "../core/PlatformCompat.h"  // of_i2c_begin — shared I²C bus owner
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <Adafruit_BME280.h>
@@ -319,7 +320,7 @@ SensorManager& SensorManager::instance() {
 
 bool SensorManager::begin() {
     registerBuiltInSensors();
-    Wire.begin();
+    of_i2c_begin();  // start the bus without clobbering pins a display will rebind
 
     if (!loadConfig()) {
         LOG_W(TAG, "Using empty sensor configuration");
@@ -352,7 +353,7 @@ public:
             error = "i2c_generic needs a non-empty 'registers' map";
             return false;
         }
-        Wire.begin();
+        of_i2c_begin();
         Wire.beginTransmission(_config.address);
         if (Wire.endTransmission() != 0) {
             error = "No I2C device at 0x" + String(_config.address, HEX);

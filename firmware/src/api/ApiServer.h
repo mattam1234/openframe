@@ -30,6 +30,7 @@ private:
     void sendConfig(AsyncWebServerRequest* request) const;
     void sendWifiScan(AsyncWebServerRequest* request) const;
     void sendVariables(AsyncWebServerRequest* request) const;
+    void sendScreens(AsyncWebServerRequest* request) const;
     void sendLogs(AsyncWebServerRequest* request) const;
     void sendOtaStatus(AsyncWebServerRequest* request) const;
     void sendInputs(AsyncWebServerRequest* request) const;

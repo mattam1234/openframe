@@ -25,6 +25,7 @@
 #include "../managers/MqttManager.h"
 #include "../managers/ProfileManager.h"
 #include "../managers/TimeManager.h"
+#include "../managers/NodeLink.h"
 #include "../managers/HealthMonitor.h"
 #include "../managers/NotificationManager.h"
 
@@ -485,6 +486,11 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     registerJsonPost(server, "/api/displays", [](AsyncWebServerRequest* request, const String& body) {
         ApiServer::instance().handleDisplaysUpdate(request, body);
     });
+    // Live screen content (geometry + active page + resolved widget text) so the
+    // web UI can render a preview of what's on the glass without a framebuffer.
+    server.on("/api/screens", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendScreens(request);
+    });
 
     server.on("/api/modules", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendModules(request);
@@ -785,9 +791,23 @@ void ApiServer::sendSelfTest(AsyncWebServerRequest* request) const {
     fs["free"]  = si.free;
     fs["ok"]    = fsOk;
 
-    // I2C bus scan (default pins). Wire.begin() is idempotent if already started.
-    Wire.begin();
+    // I2C bus scan. On boards where the OLED isn't on the default I2C pins (e.g.
+    // the C3's 0.42" panel on GPIO5/6), scanning the default bus finds nothing and
+    // looks like a wiring fault even when the panel is fine. Scan on the first
+    // configured display's pins when it specifies them, so this is a meaningful
+    // "is the panel actually on the bus?" check. Falls back to the board default.
+    int8_t scanSda = -1, scanScl = -1;
+    for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
+        if (cfg.sdaPin >= 0 && cfg.sclPin >= 0) { scanSda = cfg.sdaPin; scanScl = cfg.sclPin; break; }
+    }
     auto i2c = doc["i2c"].to<JsonObject>();
+    if (scanSda >= 0 && scanScl >= 0) {
+        of_i2c_begin(scanSda, scanScl);  // rebind to the panel's pins if needed
+        i2c["sda"] = scanSda;
+        i2c["scl"] = scanScl;
+    } else {
+        of_i2c_begin();
+    }
     auto found = i2c["devices"].to<JsonArray>();
     for (uint8_t addr = 1; addr < 127; ++addr) {
         Wire.beginTransmission(addr);
@@ -1449,6 +1469,30 @@ String ApiServer::buildStatusJson() const {
     doc["time"] = TimeManager::instance().epoch();
     doc["timeSource"] = TimeManager::instance().source();
 
+    // NodeLink (ESP-NOW mesh) live status: which peers we've recently heard. A
+    // peer is "online" if seen within PEER_TIMEOUT (2× the 10s announce interval).
+    {
+        auto& nl = NodeLinkManager::instance();
+        auto nodelink = doc["nodelink"].to<JsonObject>();
+        nodelink["enabled"] = nl.enabled();
+        const uint32_t now = millis();
+        constexpr uint32_t PEER_TIMEOUT_MS = 25000;
+        size_t online = 0;
+        auto peers = nodelink["peers"].to<JsonArray>();
+        for (const auto& kv : nl.peers()) {
+            const uint32_t ageMs = now - kv.second.lastSeenMs;
+            const bool isOnline = ageMs < PEER_TIMEOUT_MS;
+            if (isOnline) ++online;
+            auto p = peers.add<JsonObject>();
+            p["id"]     = kv.second.id;
+            p["name"]   = kv.second.name;
+            p["ageMs"]  = ageMs;
+            p["online"] = isOnline;
+        }
+        nodelink["peerCount"]  = online;
+        nodelink["totalSeen"]  = nl.peers().size();
+    }
+
     return toJsonString(doc);
 }
 
@@ -1616,6 +1660,13 @@ void ApiServer::sendSensors(AsyncWebServerRequest* request) const {
         }
     }
     doc["count"] = doc["sensors"].is<JsonArrayConst>() ? doc["sensors"].as<JsonArrayConst>().size() : 0;
+    sendJson(request, doc);
+}
+
+void ApiServer::sendScreens(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    DisplayManager::instance().fillScreensJson(doc["screens"].to<JsonArray>());
+    doc["count"] = doc["screens"].as<JsonArrayConst>().size();
     sendJson(request, doc);
 }
 
@@ -1916,7 +1967,27 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
             out["enabled"] = item["enabled"] | true;
             out["width"] = item["width"] | 128;
             out["height"] = item["height"] | 64;
-            out["address"] = item["address"] | 0x3C;
+
+            // Address may arrive as a number (60) or a hex string ("0x3C") from the
+            // UI — accept both so the field round-trips and arbitrary addresses work.
+            JsonVariantConst addrVar = item["address"];
+            uint8_t address = 0x3C;
+            if (addrVar.is<const char*>()) {
+                address = static_cast<uint8_t>(strtol(addrVar.as<const char*>(), nullptr, 0));
+            } else if (addrVar.is<int>()) {
+                address = static_cast<uint8_t>(addrVar.as<int>());
+            }
+            out["address"] = address;
+
+            // I²C wiring (SSD1306/SH1106): pins and the sub-window mapping for small
+            // panels (e.g. the C3's 0.42" 72x40, which needs col_offset 28 / com_pins
+            // 0x12). Without these the bus falls back to board defaults and the panel
+            // can't be configured — only persist when present so omitted = auto.
+            if (item["sda_pin"].is<int>())     out["sda_pin"]     = item["sda_pin"].as<int>();
+            if (item["scl_pin"].is<int>())     out["scl_pin"]     = item["scl_pin"].as<int>();
+            if (item["col_offset"].is<int>())  out["col_offset"]  = item["col_offset"].as<int>();
+            if (item["page_offset"].is<int>()) out["page_offset"] = item["page_offset"].as<int>();
+            if (item["com_pins"].is<int>())    out["com_pins"]    = item["com_pins"].as<int>();
 
             if (item["rotation"].is<int>()) out["rotation"] = item["rotation"].as<int>();
             if (item["refresh_interval_ms"].is<int>()) out["refresh_interval_ms"] = item["refresh_interval_ms"].as<int>();

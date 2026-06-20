@@ -105,6 +105,10 @@ void WiFiManager::startAP() {
     // Captive portal — redirect all DNS queries to our IP
     _dns.start(DNS_PORT, "*", IPAddress(192, 168, 4, 1));
 
+    // Honour the TX-power cap for the AP's beacons too (modem sleep is omitted in
+    // AP mode — the radio must stay up for connected clients).
+    of_wifi_set_tx_power_dbm(ConfigManager::instance().config().wifi.txPower);
+
     _apMode    = true;
     _connected = false;
     _retryCount = 0;
@@ -194,6 +198,17 @@ void WiFiManager::onDisconnected() {
     EventBus::instance().publish(EventType::WifiDisconnected, "wifi", "");
 }
 
+void WiFiManager::applyRadioTuning() {
+    const auto& cfg = ConfigManager::instance().config().wifi;
+    // Modem sleep on: lets the radio idle between beacons (lower average current
+    // and heat). Small latency cost, acceptable for this device.
+    of_wifi_set_modem_sleep(true);
+    of_wifi_set_tx_power_dbm(cfg.txPower);
+    if (cfg.txPower >= 0) {
+        LOG_I(TAG, "WiFi TX power capped to ~" + String(cfg.txPower) + " dBm");
+    }
+}
+
 String WiFiManager::buildApSsid() const {
     uint8_t mac[6];
     WiFi.macAddress(mac);
@@ -248,21 +263,33 @@ bool WiFiManager::connectToBestConfiguredNetwork() {
     }
 
     int bestConfiguredIndex = 0;
-    int bestRssi = -1000;
-    const int found = WiFi.scanNetworks(false, true);
-    if (found > 0) {
-        for (size_t cfgIndex = 0; cfgIndex < configured.size(); ++cfgIndex) {
-            for (int i = 0; i < found; ++i) {
-                if (WiFi.SSID(i) == configured[cfgIndex].ssid && WiFi.RSSI(i) > bestRssi) {
-                    bestConfiguredIndex = static_cast<int>(cfgIndex);
-                    bestRssi = WiFi.RSSI(i);
+
+    // Only scan when there's an actual choice to make. With a single saved SSID we
+    // connect directly — scanning on every ~10s reconnect attempt is a needless
+    // active-scan burst (extra heat/current, and it slows recovery on a flaky
+    // link). With multiple networks we use a *passive* scan (no probe-request TX)
+    // to pick the strongest without transmitting.
+    if (configured.size() > 1) {
+        int bestRssi = -1000;
+        const int found = of_wifi_scan_passive(/*show_hidden=*/true, /*max_ms_per_chan=*/300);
+        if (found > 0) {
+            for (size_t cfgIndex = 0; cfgIndex < configured.size(); ++cfgIndex) {
+                for (int i = 0; i < found; ++i) {
+                    if (WiFi.SSID(i) == configured[cfgIndex].ssid && WiFi.RSSI(i) > bestRssi) {
+                        bestConfiguredIndex = static_cast<int>(cfgIndex);
+                        bestRssi = WiFi.RSSI(i);
+                    }
                 }
             }
         }
+        // Always release the scan buffer — a failed/empty scan (found <= 0) still
+        // allocates it.
+        WiFi.scanDelete();
+        if (bestRssi > -1000) {
+            LOG_I(TAG, "Selected strongest saved network: " +
+                           configured[bestConfiguredIndex].ssid + " (RSSI " + String(bestRssi) + " dBm)");
+        }
     }
-    // Always release the scan buffer — a failed/empty scan (found <= 0) still
-    // allocates it, and this runs on every ~10s reconnect attempt.
-    WiFi.scanDelete();
 
     const auto& target = configured[bestConfiguredIndex];
 
@@ -290,12 +317,10 @@ bool WiFiManager::connectToBestConfiguredNetwork() {
     }
 
     WiFi.begin(target.ssid.c_str(), target.password.c_str());
+    // Re-apply radio tuning: WiFi.begin() can reset TX power / sleep on some cores.
+    applyRadioTuning();
 
-    if (bestRssi > -1000) {
-        LOG_I(TAG, "Connecting to strongest saved network: " + target.ssid + " (RSSI " + String(bestRssi) + " dBm)");
-    } else {
-        LOG_I(TAG, "Connecting to saved network: " + target.ssid);
-    }
+    LOG_I(TAG, "Connecting to saved network: " + target.ssid);
 
     return true;
 }

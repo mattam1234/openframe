@@ -13,6 +13,14 @@
     #include <ESP8266WiFi.h>
     #include <ESP8266HTTPClient.h>
     #include <ESP8266mDNS.h>
+    #include <Wire.h>
+
+    // Shared I²C bus init. The ESP8266 Wire reconfigures pins on each begin(), so
+    // no end()/rebind dance is needed — just begin on the requested pins.
+    inline void of_i2c_begin(int sda = -1, int scl = -1) {
+        if (sda >= 0 && scl >= 0) Wire.begin(sda, scl);
+        else                      Wire.begin();
+    }
 
     // WiFi enum-name compatibility with the ESP32 core.
     #ifndef WIFI_MODE_NULL
@@ -30,6 +38,24 @@
     // ESP8266 uses WiFi.hostname() instead of WiFi.setHostname()
     inline void of_wifi_set_hostname(const char* name) {
         WiFi.hostname(name);
+    }
+
+    // ── Radio power tuning ─────────────────────────────────────────────────────
+    // Lower TX power trims the peak current of WiFi bursts (the usual trigger for
+    // brownout resets on marginal supplies) and cuts heat; dbm < 0 leaves the SDK
+    // default (max). Modem sleep lets the radio idle between DTIM beacons.
+    inline void of_wifi_set_tx_power_dbm(int dbm) {
+        if (dbm < 0) return;            // -1 = auto / SDK default (max)
+        if (dbm > 20) dbm = 20;         // ESP8266 caps at ~20.5 dBm
+        WiFi.setOutputPower(static_cast<float>(dbm));
+    }
+    inline void of_wifi_set_modem_sleep(bool on) {
+        WiFi.setSleepMode(on ? WIFI_MODEM_SLEEP : WIFI_NONE_SLEEP);
+    }
+    // ESP8266's scan API has no passive mode — fall back to a standard scan. The
+    // max_ms_per_chan hint is ignored here.
+    inline int of_wifi_scan_passive(bool show_hidden, uint32_t /*max_ms_per_chan*/) {
+        return WiFi.scanNetworks(false, show_hidden);
     }
 
     // ── mDNS (Bonjour) ─────────────────────────────────────────────────────────
@@ -114,11 +140,67 @@
     #include <esp_system.h>
     #include <esp_task_wdt.h>
     #include <Preferences.h>
+    #include <Wire.h>
+
+    // ── Shared I²C bus ─────────────────────────────────────────────────────────
+    // The ESP32 core IGNORES a second Wire.begin() once the bus is started, so the
+    // FIRST caller's pins win for the whole device. That silently broke displays on
+    // non-default pins (e.g. the C3 OLED on GPIO5/6): a sensor/RTC that begins the
+    // bus on the chip-default pins first locks the display out. Route every I²C
+    // consumer through this so a caller that knows the real pins can rebind the bus
+    // (end + re-begin); a caller with no pins (-1) never clobbers a configured bus.
+    inline void of_i2c_begin(int sda = -1, int scl = -1) {
+        static bool started = false;
+        static int  curSda = -1, curScl = -1;
+        if (sda >= 0 && scl >= 0) {
+            if (started && sda == curSda && scl == curScl) return;  // already correct
+            if (started) Wire.end();                                // free the wrong pins
+            Wire.begin(sda, scl);
+            curSda = sda; curScl = scl; started = true;
+        } else {
+            if (started) return;                                    // don't override configured pins
+            Wire.begin();
+            started = true;
+        }
+    }
 
     #define OF_WIFI_AUTH_OPEN WIFI_AUTH_OPEN
 
     inline void of_wifi_set_hostname(const char* name) {
         WiFi.setHostname(name);
+    }
+
+    // ── Radio power tuning ─────────────────────────────────────────────────────
+    // Lower TX power trims the peak current of WiFi bursts (the usual trigger for
+    // brownout resets on marginal supplies) and cuts heat; dbm < 0 leaves the SDK
+    // default (max). We floor to the nearest supported level so the effective
+    // power never exceeds what was requested.
+    inline void of_wifi_set_tx_power_dbm(int dbm) {
+        if (dbm < 0) return;            // -1 = auto / SDK default (max)
+        wifi_power_t level;
+        if      (dbm >= 20) level = WIFI_POWER_19_5dBm;
+        else if (dbm >= 19) level = WIFI_POWER_19dBm;
+        else if (dbm >= 18) level = WIFI_POWER_18_5dBm;
+        else if (dbm >= 17) level = WIFI_POWER_17dBm;
+        else if (dbm >= 15) level = WIFI_POWER_15dBm;
+        else if (dbm >= 13) level = WIFI_POWER_13dBm;
+        else if (dbm >= 11) level = WIFI_POWER_11dBm;
+        else if (dbm >= 8)  level = WIFI_POWER_8_5dBm;
+        else if (dbm >= 7)  level = WIFI_POWER_7dBm;
+        else if (dbm >= 5)  level = WIFI_POWER_5dBm;
+        else if (dbm >= 2)  level = WIFI_POWER_2dBm;
+        else                level = WIFI_POWER_MINUS_1dBm;
+        WiFi.setTxPower(level);
+    }
+    // Modem sleep (WIFI_PS_MIN_MODEM) lets the radio idle between DTIM beacons — a
+    // big cut in average current/heat for a small added latency.
+    inline void of_wifi_set_modem_sleep(bool on) {
+        WiFi.setSleep(on);
+    }
+    // Passive scan: listen for beacons instead of transmitting probe requests, so
+    // it adds no TX bursts — used for reconnect network selection.
+    inline int of_wifi_scan_passive(bool show_hidden, uint32_t max_ms_per_chan) {
+        return WiFi.scanNetworks(/*async=*/false, show_hidden, /*passive=*/true, max_ms_per_chan);
     }
 
     // ── mDNS (Bonjour) ─────────────────────────────────────────────────────────

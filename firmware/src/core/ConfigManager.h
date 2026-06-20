@@ -27,6 +27,11 @@ struct WifiConfig {
     String subnet = "255.255.255.0";
     String dns1;
     String dns2;
+    // WiFi transmit power in dBm. -1 = SDK default (max). Lowering it (e.g. 8–13)
+    // trims the peak current of TX bursts — the usual trigger for brownout resets
+    // and excess heat on marginally-powered boards. Mapped to the nearest level
+    // the radio supports; applied on the next connect/restart.
+    int8_t txPower = -1;
 };
 
 struct MqttConfig {

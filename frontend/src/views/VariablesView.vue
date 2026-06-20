@@ -97,7 +97,12 @@ async function refresh() {
   try {
     const data = await api.get('/api/variables')
     const map = {}
-    for (const v of data.variables || []) if (v && v.id) map[v.id] = v
+    // /api/variables returns an id-keyed object (matching the live store), not
+    // an array — normalize either shape before iterating.
+    const list = Array.isArray(data.variables)
+      ? data.variables
+      : Object.values(data.variables || {})
+    for (const v of list) if (v && v.id) map[v.id] = v
     seed.value = map
   } catch { /* live store still fills in */ }
   finally { loading.value = false }

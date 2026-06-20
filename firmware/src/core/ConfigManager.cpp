@@ -197,6 +197,7 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     wifi["subnet"]    = _config.wifi.subnet;
     wifi["dns1"]      = _config.wifi.dns1;
     wifi["dns2"]      = _config.wifi.dns2;
+    wifi["tx_power"]  = _config.wifi.txPower;
 
     auto mqtt         = doc["mqtt"].to<JsonObject>();
     mqtt["enabled"]   = _config.mqtt.enabled;
@@ -299,6 +300,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.wifi.subnet   = wifiObj["subnet"]    | String("255.255.255.0");
         _config.wifi.dns1     = wifiObj["dns1"]      | String("");
         _config.wifi.dns2     = wifiObj["dns2"]      | String("");
+        _config.wifi.txPower  = static_cast<int8_t>(wifiObj["tx_power"] | _config.wifi.txPower);
     }
     if (doc["mqtt"].is<JsonObjectConst>()) {
         _config.mqtt.enabled   = doc["mqtt"]["enabled"]    | false;

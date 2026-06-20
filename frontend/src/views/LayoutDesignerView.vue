@@ -188,10 +188,31 @@
             </div>
             <div class="ld-fields">
               <v-select v-model="disp.type" :items="displayTypes" label="Type" density="compact" variant="outlined" hide-details />
-              <v-text-field v-model="disp.address" label="Address" density="compact" variant="outlined" hide-details />
-              <v-chip size="small" variant="tonal" color="indigo">{{ disp.width }}×{{ disp.height }} px</v-chip>
+              <v-text-field v-model="disp.address" label="Address" placeholder="0x3C" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model.number="disp.width" label="Width (px)" type="number" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model.number="disp.height" label="Height (px)" type="number" density="compact" variant="outlined" hide-details />
+              <v-select v-model="disp.sda_pin" :items="ioPins" label="SDA pin" density="compact" variant="outlined" hide-details clearable />
+              <v-select v-model="disp.scl_pin" :items="ioPins" label="SCL pin" density="compact" variant="outlined" hide-details clearable />
               <v-switch v-model="disp.enabled" label="Enabled" density="compact" color="indigo" hide-details inset />
             </div>
+            <v-expansion-panels variant="accordion" class="ld-advanced">
+              <v-expansion-panel>
+                <v-expansion-panel-title>Advanced (sub-window &amp; pins)</v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div class="ld-fields">
+                    <v-text-field v-model.number="disp.col_offset" label="Col offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="disp.page_offset" label="Page offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="disp.com_pins" label="COM pins (e.g. 18 = 0x12)" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
+                    <v-select v-model="disp.reset_pin" :items="ioPins" label="Reset pin" density="compact" variant="outlined" hide-details clearable />
+                    <v-text-field v-model.number="disp.contrast" label="Contrast (0-255)" placeholder="255" type="number" density="compact" variant="outlined" hide-details />
+                    <v-select v-model.number="disp.rotation" :items="rotationItems" label="Rotation" density="compact" variant="outlined" hide-details />
+                  </div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Leave offsets blank for auto. The 0.42" 72×40 panel auto-derives col offset 28 / COM pins 0x12 from its geometry.
+                  </div>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
           </v-card>
           <button class="ld-add" @click="addDisplay">
             <v-icon size="28">mdi-plus</v-icon>
@@ -237,7 +258,17 @@ const ioPins = computed(() => pinItems(boardType.value, 'io'))
 const adcPins = computed(() => pinItems(boardType.value, 'adc'))
 
 const sensorTypes = ['bme280', 'bmp280', 'dht22', 'ds18b20', 'sht31', 'bh1750', 'ina219', 'mpu6050']
-const displayTypes = ['ssd1306', 'sh1106']
+const displayTypes = [
+  { title: 'SSD1306 (128×64 etc.)', value: 'ssd1306' },
+  { title: 'SSD1306 72×40 — 0.42" OLED (U8g2)', value: 'ssd1306_72x40' },
+  { title: 'SH1106', value: 'sh1106' },
+]
+const rotationItems = [
+  { title: '0°', value: 0 },
+  { title: '90°', value: 1 },
+  { title: '180°', value: 2 },
+  { title: '270°', value: 3 },
+]
 
 const tabs = computed(() => [
   { key: 'inputs', label: 'Inputs', icon: 'mdi-gesture-tap', color: 'primary', count: inputs.value.length },
@@ -273,7 +304,12 @@ function removeSensor(idx) {
 }
 
 function addDisplay() {
-  displays.value.push({ id: `display${displays.value.length + 1}`, type: 'ssd1306', address: '0x3C', width: 128, height: 64, enabled: true })
+  // C3 boards ship with the 0.42" 72×40 OLED on GPIO5/6 — prefill those so it
+  // works out of the box; other boards default to a common 128×64 panel.
+  const isC3 = (boardType.value || '').toUpperCase().includes('C3')
+  displays.value.push(isC3
+    ? { id: `display${displays.value.length + 1}`, type: 'ssd1306_72x40', address: '0x3C', width: 72, height: 40, sda_pin: 5, scl_pin: 6, enabled: true }
+    : { id: `display${displays.value.length + 1}`, type: 'ssd1306', address: '0x3C', width: 128, height: 64, enabled: true })
 }
 
 function removeDisplay(idx) {
@@ -378,7 +414,17 @@ async function refresh() {
       .catch(() => { loaded.value.outputs = false }),
     api.get('/api/sensors').then((d) => { sensors.value = d.sensors || []; loaded.value.sensors = true })
       .catch(() => { loaded.value.sensors = false }),
-    api.get('/api/displays').then((d) => { displays.value = d.displays || []; loaded.value.displays = true })
+    api.get('/api/displays').then((d) => {
+      // The device stores the I²C address as a number (e.g. 60); show it as hex
+      // ("0x3C") so it's editable in the familiar form. The save path accepts both.
+      displays.value = (d.displays || []).map((disp) => ({
+        ...disp,
+        address: typeof disp.address === 'number'
+          ? '0x' + disp.address.toString(16).toUpperCase()
+          : (disp.address || '0x3C'),
+      }))
+      loaded.value.displays = true
+    })
       .catch(() => { loaded.value.displays = false }),
   ])
 

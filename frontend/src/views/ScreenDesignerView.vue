@@ -474,7 +474,12 @@ async function refresh() {
       api.get('/api/variables').catch(() => ({ variables: [] })),
     ])
     displayList.value = dispData.displays || []
-    variableIds.value = (varData.variables || []).map((v) => v.id).filter(Boolean)
+    // /api/variables returns variables as an id-keyed object (matching the live
+    // store and variable_change frames), not an array — normalize either shape.
+    const varList = Array.isArray(varData.variables)
+      ? varData.variables
+      : Object.values(varData.variables || {})
+    variableIds.value = varList.map((v) => v.id).filter(Boolean)
     pages.value = (pageData.pages || []).map((p) => ({ ...p, widgets: p.widgets || [] }))
     // Re-bind the open page to the freshly loaded copy (or clear if it's gone).
     if (selectedPage.value) {

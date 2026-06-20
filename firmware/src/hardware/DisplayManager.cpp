@@ -1,5 +1,6 @@
 #include "DisplayManager.h"
 #include "../OpenFrameConfig.h"
+#include "../core/PlatformCompat.h"  // of_i2c_begin — owns the shared I²C bus pins
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -10,6 +11,10 @@
 #if OF_ENABLE_TFT
 #include <Adafruit_ILI9341.h>
 #include <Adafruit_ST7789.h>
+#endif
+// U8g2 drives the 0.42" 72x40 SSD1306 panel that the Adafruit driver can't init.
+#if OF_ENABLE_U8G2
+#include <U8g2lib.h>
 #endif
 #include <ArduinoJson.h>
 #include <SPI.h>
@@ -63,14 +68,11 @@ public:
         _pageOffset = (config.pageOffset == 0xFF) ? 0 : config.pageOffset;
         _comPins    = (config.comPins < 0 && is72x40) ? 0x12 : config.comPins;
 
-        // Own the Wire.begin() call so a board-specific SDA/SCL (e.g. the C3
-        // 0.42" OLED on GPIO5/6) survives — periphBegin=false below stops the
-        // library from re-running Wire.begin() with the chip defaults.
-        if (config.sdaPin >= 0 && config.sclPin >= 0) {
-            Wire.begin(config.sdaPin, config.sclPin);
-        } else {
-            Wire.begin();
-        }
+        // Bind the shared I²C bus to this display's pins (e.g. the C3 0.42" OLED on
+        // GPIO5/6), rebinding if a sensor/RTC already claimed it on other pins — the
+        // ESP32 core ignores a plain Wire.begin() once started. periphBegin=false
+        // below then stops the Adafruit library from re-running Wire.begin().
+        of_i2c_begin(config.sdaPin, config.sclPin);
 
         _display.reset(new Adafruit_SSD1306(config.width, config.height, &Wire, config.resetPin));
 
@@ -158,6 +160,79 @@ private:
     uint8_t                            _pageOffset = 0;
     int16_t                            _comPins    = -1;
 };
+
+// ── OLED: SSD1306 72x40 via U8g2 ─────────────────────────────────────────────
+#if OF_ENABLE_U8G2
+// The cheap 0.42" 72x40 "ER" panels (common on ESP32-C3 "egg" boards) need a
+// specific init sequence the Adafruit library's manual sub-window/COM-pin remap
+// doesn't reproduce — they stay blank. U8g2 ships a tested profile for exactly
+// this panel (U8G2_SSD1306_72X40_ER), so we use it for the "ssd1306_72x40" type.
+// We keep widget coordinates top-left (setFontPosTop) to match the page layout
+// used by every other provider.
+class Ssd1306_72x40_U8g2Provider final : public DisplayProvider {
+public:
+    bool begin(const DisplayConfig& config, String& error) override {
+        _config = config;
+
+        const uint8_t scl = config.sclPin >= 0 ? static_cast<uint8_t>(config.sclPin) : U8X8_PIN_NONE;
+        const uint8_t sda = config.sdaPin >= 0 ? static_cast<uint8_t>(config.sdaPin) : U8X8_PIN_NONE;
+        const u8g2_cb_t* rot = U8G2_R0;
+        switch (config.rotation) {
+            case 1: rot = U8G2_R1; break;
+            case 2: rot = U8G2_R2; break;
+            case 3: rot = U8G2_R3; break;
+            default: break;
+        }
+
+        // Force the shared bus onto this panel's pins FIRST. U8g2's own begin()
+        // would call Wire.begin(scl,sda), but the ESP32 core ignores that if a
+        // sensor/RTC already started the bus on the chip-default pins — which is
+        // exactly why the panel stayed dark. of_i2c_begin() does the end+rebind.
+        of_i2c_begin(config.sdaPin, config.sclPin);
+
+        // HW-I2C ctor takes (rotation, reset, clock=SCL, data=SDA) — same order as
+        // the standalone sketch that's known to drive this panel.
+        _u8g2.reset(new U8G2_SSD1306_72X40_ER_F_HW_I2C(rot, U8X8_PIN_NONE, scl, sda));
+        _u8g2->setI2CAddress(static_cast<uint8_t>(config.address) << 1);  // U8g2 wants the 8-bit address
+        if (!_u8g2->begin()) {
+            error = "SSD1306 72x40 (U8g2) init failed";
+            _u8g2.reset();
+            return false;
+        }
+        _u8g2->setBusClock(400000);
+        _u8g2->setContrast(config.contrast);
+        _u8g2->setFontPosTop();
+        _u8g2->clearBuffer();
+        _u8g2->sendBuffer();
+        return true;
+    }
+
+    void clear() override {
+        if (_u8g2) _u8g2->clearBuffer();
+    }
+
+    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
+        if (!_u8g2) return;
+        // U8g2 can't scale a font like Adafruit's setTextSize; pick a larger glyph
+        // set for size >= 2. The 5x8 matches the small Adafruit cell closely.
+        _u8g2->setFont(textSize >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
+        _u8g2->setFontPosTop();
+        _u8g2->drawStr(x, y, text.c_str());
+    }
+
+    void present() override {
+        if (_u8g2) _u8g2->sendBuffer();
+    }
+
+    String describe() const override {
+        return "SSD1306 72x40 (U8g2)";
+    }
+
+private:
+    DisplayConfig _config;
+    std::unique_ptr<U8G2_SSD1306_72X40_ER_F_HW_I2C> _u8g2;
+};
+#endif  // OF_ENABLE_U8G2
 
 // ── OLED: SH1106 ─────────────────────────────────────────────────────────────
 
@@ -539,6 +614,13 @@ void DisplayManager::registerBuiltInDisplays() {
             return std::unique_ptr<DisplayProvider>(new Sh1106DisplayProvider());
         });
     }
+#if OF_ENABLE_U8G2
+    if (!_registry.count("ssd1306_72x40")) {
+        registerDisplay("ssd1306_72x40", []() {
+            return std::unique_ptr<DisplayProvider>(new Ssd1306_72x40_U8g2Provider());
+        });
+    }
+#endif
 #if OF_ENABLE_TFT
     if (!_registry.count("ili9341")) {
         registerDisplay("ili9341", []() {

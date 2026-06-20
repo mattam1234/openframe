@@ -59,6 +59,9 @@ private:
     String   buildApSsid() const;
     bool     connectToBestConfiguredNetwork();
     bool     hasConfiguredNetworks() const;
+    // Apply radio power settings (modem sleep + configured TX-power cap). Called
+    // after each (re)connect since the core can reset TX power on WiFi.begin().
+    void     applyRadioTuning();
 
     DNSServer _dns;
     bool      _apMode       = false;

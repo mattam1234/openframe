@@ -17,6 +17,12 @@ const BOARDS = {
     io:  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 38, 39, 40, 41, 42, 45, 47, 48],
     adc: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   },
+  // GPIO18/19 are the USB-Serial-JTAG D-/D+ and 20/21 are UART0 on the C3, so
+  // they're excluded from the general-IO set. ADC1 covers GPIO0-4.
+  'ESP32-C3': {
+    io:  [0, 1, 2, 3, 4, 5, 6, 7, 10],
+    adc: [0, 1, 2, 3, 4],
+  },
   'ESP8266': {
     io:  [0, 2, 4, 5, 12, 13, 14, 15, 16],
     adc: [17], // A0

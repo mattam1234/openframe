@@ -127,6 +127,17 @@
 #ifndef OF_ENABLE_SENSOR_MAX6675
     #define OF_ENABLE_SENSOR_MAX6675 (!OF_CONSTRAINED)
 #endif
+// U8g2 OLED driver — used for the 0.42" 72x40 SSD1306 panel, which the Adafruit
+// library can't init reliably (its sub-window/COM-pin remap doesn't drive these
+// "ER" panels). Enabled on the ESP32 family incl. the flash-tight C3; off on the
+// ESP8266. ~25-35 KB flash for one panel + a couple of fonts.
+#ifndef OF_ENABLE_U8G2
+    #if defined(ESP32)
+        #define OF_ENABLE_U8G2 1
+    #else
+        #define OF_ENABLE_U8G2 0
+    #endif
+#endif
 
 // WebSocket
 #define OF_WS_PATH "/ws"

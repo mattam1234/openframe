@@ -101,6 +101,19 @@
             <v-switch v-model="form.wifi.ap_mode" label="Force AP Mode" color="primary" />
 
             <v-divider class="my-2" />
+            <v-select
+              v-model="form.wifi.tx_power"
+              :items="txPowerOptions"
+              label="WiFi TX Power"
+              density="compact"
+              hide-details
+              class="mb-1"
+            />
+            <div class="text-caption text-medium-emphasis mb-2">
+              Lower power reduces heat and the current spikes that can brown out marginally-powered boards. Lower it if the device runs hot or the connection is flaky. Applied on next connect/restart.
+            </div>
+
+            <v-divider class="my-2" />
             <div class="text-subtitle-2 mb-1">Static IP (optional)</div>
             <div class="text-caption text-medium-emphasis mb-2">
               Leave the IP blank for DHCP. A blank gateway defaults to x.x.x.1; blank DNS uses the gateway. Applied on next connect/restart.
@@ -171,6 +184,33 @@
               hint="≤16 chars. Encrypts unicast mesh traffic; all nodes must match. Blank = off."
               persistent-hint
             />
+
+            <v-divider class="my-3" />
+            <div class="text-subtitle-2 mb-1">Linked nodes</div>
+            <div v-if="!form.nodelink.enabled" class="text-caption text-medium-emphasis">
+              Enable the node link to discover peers over ESP-NOW.
+            </div>
+            <template v-else>
+              <div class="text-caption text-medium-emphasis mb-2">
+                <v-icon size="x-small" :color="nodelinkStatus.peerCount > 0 ? 'success' : 'grey'" class="mr-1">mdi-access-point-network</v-icon>
+                {{ nodelinkStatus.peerCount }} online<span v-if="nodelinkStatus.totalSeen > nodelinkStatus.peerCount"> · {{ nodelinkStatus.totalSeen }} seen total</span>
+              </div>
+              <v-table v-if="nodelinkStatus.peers.length" density="compact">
+                <tbody>
+                  <tr v-for="p in nodelinkStatus.peers" :key="p.id">
+                    <td>
+                      <v-icon size="x-small" :color="p.online ? 'success' : 'grey'" class="mr-1">mdi-circle</v-icon>
+                      {{ p.name || p.id }}
+                    </td>
+                    <td class="text-caption text-medium-emphasis mono">{{ p.id }}</td>
+                    <td class="text-caption text-right">{{ formatAge(p.ageMs) }}</td>
+                  </tr>
+                </tbody>
+              </v-table>
+              <div v-else class="text-caption text-medium-emphasis">
+                No peers heard yet — nodes announce every ~10s. Check that peers share the same channel and key.
+              </div>
+            </template>
           </v-card-text>
         </v-card>
       </v-col>
@@ -287,9 +327,29 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useDeviceStore } from '../stores/device'
+import { useWebSocketStore } from '../stores/websocket'
 import api, { setApiToken } from '../api/client'
 
 const deviceStore = useDeviceStore()
+const wsStore = useWebSocketStore()
+
+// Live ESP-NOW peer status rides the WebSocket health frame (buildStatusJson →
+// nodelink). Falls back to empty until the first health frame arrives.
+const nodelinkStatus = computed(() => {
+  const nl = wsStore.health?.nodelink || {}
+  return {
+    peerCount: nl.peerCount ?? 0,
+    totalSeen: nl.totalSeen ?? 0,
+    peers: Array.isArray(nl.peers) ? nl.peers : [],
+  }
+})
+
+function formatAge(ms) {
+  if (ms == null) return ''
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s ago`
+  return `${Math.round(s / 60)}m ago`
+}
 const saving = ref(false)
 const statusMessage = ref(null)
 const scanningWifi = ref(false)
@@ -298,7 +358,7 @@ const selectedScannedSsid = ref('')
 
 const form = reactive({
   device: { name: '', board: '', id: '', api_token: '' },
-  wifi: { ssid: '', password: '', ap_mode: true, networks: [], static_ip: '', gateway: '', subnet: '255.255.255.0', dns1: '', dns2: '' },
+  wifi: { ssid: '', password: '', ap_mode: true, networks: [], static_ip: '', gateway: '', subnet: '255.255.255.0', dns1: '', dns2: '', tx_power: -1 },
   mqtt: { enabled: false, host: '', port: 1883, user: '', password: '', base_topic: 'openframe', tls: false, tls_insecure: false },
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
@@ -306,6 +366,21 @@ const form = reactive({
   time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '', rtc_enabled: false, rtc_address: 104 },
   power: { mode: 'off', awake_seconds: 30, sleep_seconds: 300, wake_pin: -1, wake_level: 1 },
 })
+
+// WiFi TX-power choices (dBm). -1 = leave at the SDK default (max). Lower values
+// cut the current spikes that brown out marginally-powered boards, and reduce
+// heat — the device maps the value to the nearest level its radio supports.
+const txPowerOptions = [
+  { title: 'Auto (max)', value: -1 },
+  { title: '20 dBm', value: 20 },
+  { title: '17 dBm', value: 17 },
+  { title: '15 dBm', value: 15 },
+  { title: '13 dBm', value: 13 },
+  { title: '11 dBm', value: 11 },
+  { title: '8 dBm', value: 8 },
+  { title: '7 dBm', value: 7 },
+  { title: '5 dBm', value: 5 },
+]
 
 // Common POSIX TZ strings (the device applies any valid POSIX TZ; these are just
 // shortcuts). Format: stdOFFSET[dstOFFSET][,start[/time],end[/time]].
@@ -360,6 +435,7 @@ function applyConfig(config) {
   form.wifi.subnet = config?.wifi?.subnet || '255.255.255.0'
   form.wifi.dns1 = config?.wifi?.dns1 || ''
   form.wifi.dns2 = config?.wifi?.dns2 || ''
+  form.wifi.tx_power = config?.wifi?.tx_power ?? -1
   form.mqtt.enabled = config?.mqtt?.enabled ?? false
   form.mqtt.host = config?.mqtt?.host || ''
   form.mqtt.port = config?.mqtt?.port ?? 1883

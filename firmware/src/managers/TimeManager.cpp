@@ -1,4 +1,5 @@
 #include "TimeManager.h"
+#include "../core/PlatformCompat.h"  // of_i2c_begin — shared I²C bus owner
 
 #include <time.h>
 #include <sys/time.h>
@@ -44,7 +45,7 @@ TimeManager& TimeManager::instance() {
 
 bool TimeManager::readRtc(uint32_t& epochOut) {
     const uint8_t addr = ConfigManager::instance().config().time.rtcAddress;
-    Wire.begin();
+    of_i2c_begin();
     Wire.beginTransmission(addr);
     Wire.write(0x00);
     if (Wire.endTransmission() != 0) return false;
@@ -68,7 +69,7 @@ void TimeManager::writeRtc(uint32_t epoch) {
     time_t t = static_cast<time_t>(epoch);
     struct tm g;
     gmtime_r(&t, &g);
-    Wire.begin();
+    of_i2c_begin();
     Wire.beginTransmission(addr);
     Wire.write(0x00);
     Wire.write(dec2bcd(g.tm_sec));
