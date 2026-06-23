@@ -1,6 +1,7 @@
 #include "InputManager.h"
 #include <map>
 #include "../core/PlatformCompat.h"
+#include "../managers/VariableManager.h"
 
 InputManager& InputManager::instance() {
     static InputManager inst;
@@ -18,9 +19,28 @@ bool InputManager::begin() {
     _digitalStates.resize(_digitalConfigs.size());
     _analogStates.resize(_analogConfigs.size());
 
+    registerVariables();
+
     LOG_I(TAG, "Initialised (" + String(_digitalConfigs.size()) + " digital, " + String(_analogConfigs.size()) + " analog)");
     return true;
 }
+
+// ── F1: read-only variable mirror ───────────────────────────────────────────────
+#if OF_ENABLE_HW_VARIABLES
+void InputManager::registerVariables() {
+    auto& vm = VariableManager::instance();
+    for (const auto& c : _digitalConfigs)
+        vm.define("input." + c.id + ".pressed", VarType::Boolean, c.id + " pressed", false, true);
+    for (const auto& c : _analogConfigs)
+        vm.define("input." + c.id + ".value", VarType::Integer, c.id + " value", false, true);
+    for (const auto& c : _encoderConfigs)
+        if (c.pinButton) vm.define("input." + c.id + ".pressed", VarType::Boolean, c.id + " pressed", false, true);
+    for (const auto& c : _keypadConfigs)
+        vm.define("input." + c.id + ".key", VarType::String, c.id + " key", false, true);
+}
+#else
+void InputManager::registerVariables() {}
+#endif
 
 void InputManager::loop() {
     const uint32_t nowMs = millis();
@@ -257,6 +277,11 @@ void InputManager::emitDigitalEvent(const DigitalInputConfig& cfg, const char* e
     String payload;
     serializeJson(doc, payload);
     EventBus::instance().publish(EventType::InputDigitalChanged, cfg.id, payload);
+
+#if OF_ENABLE_HW_VARIABLES
+    if      (strcmp(eventName, "Press") == 0)   VariableManager::instance().setBool("input." + cfg.id + ".pressed", true);
+    else if (strcmp(eventName, "Release") == 0) VariableManager::instance().setBool("input." + cfg.id + ".pressed", false);
+#endif
 }
 
 void InputManager::configureEncoderPins() {
@@ -275,6 +300,11 @@ void InputManager::emitEncoderEvent(const EncoderInputConfig& cfg, const char* e
     String payload;
     serializeJson(doc, payload);
     EventBus::instance().publish(EventType::InputDigitalChanged, cfg.id, payload);
+
+#if OF_ENABLE_HW_VARIABLES
+    if      (strcmp(eventName, "Press") == 0)   VariableManager::instance().setBool("input." + cfg.id + ".pressed", true);
+    else if (strcmp(eventName, "Release") == 0) VariableManager::instance().setBool("input." + cfg.id + ".pressed", false);
+#endif
 }
 
 void InputManager::updateEncoders(uint32_t nowMs) {
@@ -325,6 +355,10 @@ void InputManager::emitKeypadEvent(const KeypadInputConfig& cfg, const String& k
     String payload;
     serializeJson(doc, payload);
     EventBus::instance().publish(EventType::InputDigitalChanged, cfg.id, payload);
+
+#if OF_ENABLE_HW_VARIABLES
+    if (strcmp(eventName, "KeyPress") == 0) VariableManager::instance().setString("input." + cfg.id + ".key", key);
+#endif
 }
 
 void InputManager::updateKeypads(uint32_t nowMs) {
@@ -424,4 +458,8 @@ void InputManager::emitAnalogEvent(const AnalogInputConfig& cfg, const char* eve
     String payload;
     serializeJson(doc, payload);
     EventBus::instance().publish(EventType::InputAnalogChanged, cfg.id, payload);
+
+#if OF_ENABLE_HW_VARIABLES
+    VariableManager::instance().setInt("input." + cfg.id + ".value", value);
+#endif
 }

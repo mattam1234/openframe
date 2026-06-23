@@ -188,6 +188,15 @@ void serializeVariable(JsonObject obj, const Variable& var) {
     obj["type"] = varTypeToString(var.type);
     obj["label"] = var.label;
     obj["persistent"] = var.persistent;
+    obj["readOnly"] = var.readOnly;
+    // Source category for the Variables tab / designer (F3) — derived from the id
+    // namespace so the frontend doesn't have to string-parse prefixes.
+    const char* source = "local";
+    if      (var.id.startsWith("sensor.")) source = "sensor";
+    else if (var.id.startsWith("input."))  source = "input";
+    else if (var.id.startsWith("output.")) source = "output";
+    else if (var.id.startsWith("node."))   source = "node";
+    obj["source"] = source;
     if (var.hasRange) { obj["min"] = var.rangeMin; obj["max"] = var.rangeMax; }
     if (var.unit.length()) obj["unit"] = var.unit;
     if (!var.options.empty()) {
@@ -1180,8 +1189,14 @@ void ApiServer::handleWebSocketMessage(AsyncWebSocketClient* client, const Strin
 
     if (type == "page_navigation") {
         const String displayId = payload["displayId"] | String("");
-        const String pageId = payload["pageId"] | String("");
-        const bool ok = DisplayManager::instance().setActivePage(displayId, pageId);
+        // action: "next"/"prev" use the device-authoritative page order (F6); an
+        // explicit pageId still does a direct goto. Keeps ordering on the device so
+        // the dashboard never re-derives it.
+        const String action = payload["action"] | String("");
+        bool ok;
+        if (action == "next")      ok = DisplayManager::instance().nextPage(displayId);
+        else if (action == "prev") ok = DisplayManager::instance().previousPage(displayId);
+        else ok = DisplayManager::instance().setActivePage(displayId, payload["pageId"] | String(""));
         response["ok"] = ok;
         if (!ok) response["error"] = "Unknown display or page";
     } else if (type == "config_save" || type == "config_change") {
@@ -1234,6 +1249,10 @@ void ApiServer::forgetWsClient(AsyncWebSocketClient* client) {
 
 void ApiServer::sendInitialState(AsyncWebSocketClient* client) const {
     if (!client) return;
+    // Under heap pressure, skip the (larger) initial snapshot rather than risk the
+    // throw-on-fail allocation aborting the device; the live stream still resumes
+    // once memory recovers.
+    if (!wsSendSafe()) return;
 
     JsonDocument statusDoc;
     deserializeJson(statusDoc, buildStatusJson());
@@ -1246,11 +1265,17 @@ void ApiServer::sendInitialState(AsyncWebSocketClient* client) const {
     serializeJson(variablesDoc["variables"], variablePayload);
     sendRawFrame(client, "variable_snapshot", variablePayload);
 
-    const String logsJson = buildLogsJson();
+    // Bounded, copy-free log snapshot: serialise only the most recent entries
+    // straight into one array. Avoids getEntries()' full deep copy and the
+    // build-string → re-parse → re-serialise round trip that OOM'd the tight heap
+    // on every WebSocket connect. The live stream delivers newer lines after this.
     JsonDocument logsDoc;
-    deserializeJson(logsDoc, logsJson);
+    auto logEntries = logsDoc.to<JsonArray>();
+    Logger::instance().forEachEntry([&](const LogEntry& entry) {
+        serializeLogEntry(logEntries.add<JsonObject>(), entry);
+    }, OF_WS_LOG_SNAPSHOT_MAX);
     String logPayload;
-    serializeJson(logsDoc["entries"], logPayload);
+    serializeJson(logsDoc, logPayload);
     sendRawFrame(client, "log_snapshot", logPayload);
 }
 
@@ -1400,13 +1425,24 @@ void ApiServer::sendRawFrame(AsyncWebSocketClient* client, const char* type, con
     client->text(buildWsFrame(type, rawPayloadJson));
 }
 
+bool ApiServer::wsSendSafe() const {
+#if defined(ESP8266)
+    const uint32_t largest = ESP.getMaxFreeBlockSize();
+#else
+    const uint32_t largest = ESP.getMaxAllocHeap();
+#endif
+    return ESP.getFreeHeap() >= WS_MIN_FREE_HEAP && largest >= WS_MIN_ALLOC_BLOCK;
+}
+
 void ApiServer::broadcastFrame(const char* type, const JsonDocument& payload) {
     if (_ws.count() == 0) return;   // no subscribers — skip serialize + send entirely
+    if (!wsSendSafe()) return;      // heap too low/fragmented to allocate the buffer
     _ws.textAll(buildWsFrame(type, toJsonString(payload)));
 }
 
 void ApiServer::broadcastRawFrame(const char* type, const String& rawPayloadJson) {
     if (_ws.count() == 0) return;
+    if (!wsSendSafe()) return;
     _ws.textAll(buildWsFrame(type, rawPayloadJson));
 }
 
@@ -1507,13 +1543,12 @@ String ApiServer::buildVariablesJson() const {
     return toJsonString(doc);
 }
 
-String ApiServer::buildLogsJson() const {
+String ApiServer::buildLogsJson(size_t maxCount) const {
     JsonDocument doc;
     auto entries = doc["entries"].to<JsonArray>();
-    for (const auto& entry : Logger::instance().getEntries()) {
-        auto obj = entries.add<JsonObject>();
-        serializeLogEntry(obj, entry);
-    }
+    Logger::instance().forEachEntry([&](const LogEntry& entry) {
+        serializeLogEntry(entries.add<JsonObject>(), entry);
+    }, maxCount);
     doc["count"] = Logger::instance().getEntryCount();
     return toJsonString(doc);
 }
@@ -1534,6 +1569,14 @@ bool ApiServer::applyVariableUpdate(const JsonVariantConst& item, String& error)
     const Variable* var = VariableManager::instance().get(id);
     if (!var) {
         error = "Unknown variable: " + id;
+        return false;
+    }
+
+    // Read-only mirrors (sensor metrics, input states) reflect live hardware and
+    // cannot be set from the API. Writable output mirrors fall through and drive
+    // the hardware via the VariableManager change subscription (F1).
+    if (var->readOnly) {
+        error = "Variable is read-only: " + id;
         return false;
     }
 
@@ -1926,6 +1969,12 @@ void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String
             if (item["cs_pin"].is<int>()) out["cs_pin"] = item["cs_pin"].as<int>();
             if (item["scale"].is<float>()) out["scale"] = item["scale"].as<float>();
             if (item["tare_offset"].is<int>()) out["tare_offset"] = item["tare_offset"].as<int>();
+            if (item["offset"].is<float>()) out["offset"] = item["offset"].as<float>();
+            // UART sensors (MH-Z19, PMS5003): wiring + bus.
+            if (item["rx_pin"].is<int>()) out["rx_pin"] = item["rx_pin"].as<int>();
+            if (item["tx_pin"].is<int>()) out["tx_pin"] = item["tx_pin"].as<int>();
+            if (item["uart_num"].is<int>()) out["uart_num"] = item["uart_num"].as<int>();
+            if (item["baud_rate"].is<int>()) out["baud_rate"] = item["baud_rate"].as<int>();
 
             // Generic I2C register map (#22): copy it through verbatim so a custom
             // chip definition round-trips through save/load.
@@ -1992,6 +2041,11 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
             if (item["rotation"].is<int>()) out["rotation"] = item["rotation"].as<int>();
             if (item["refresh_interval_ms"].is<int>()) out["refresh_interval_ms"] = item["refresh_interval_ms"].as<int>();
             if (item["page"].is<const char*>()) out["page"] = item["page"].as<const char*>();
+
+            // Multi-screen rotation (F4): cycle pages on a timer in page_order.
+            if (item["rotation_enabled"].is<bool>())     out["rotation_enabled"]     = item["rotation_enabled"].as<bool>();
+            if (item["rotation_interval_ms"].is<int>())  out["rotation_interval_ms"] = item["rotation_interval_ms"].as<int>();
+            if (item["page_order"].is<JsonArrayConst>()) out["page_order"]           = item["page_order"];
             if (item["reset_pin"].is<int>()) out["reset_pin"] = item["reset_pin"].as<int>();
             if (item["contrast"].is<int>()) out["contrast"] = item["contrast"].as<int>();
             if (item["cs_pin"].is<int>()) out["cs_pin"] = item["cs_pin"].as<int>();

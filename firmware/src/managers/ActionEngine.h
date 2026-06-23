@@ -33,7 +33,9 @@ enum class ActionType : uint8_t {
     WaitUntil,      // block until (variableId op value) holds, or delayMs timeout elapses (then the step fails)
     SceneRestore,   // restore a named scene (value = scene name) — see SceneManager
     HaServiceCall,
-    PageChange,
+    PageChange,          // goto a specific display page (displayId, pageId)
+    NavigateScreenNext,  // advance the display to its next page (displayId; wraps)
+    NavigateScreenPrev,  // step the display to its previous page (displayId; wraps)
     Notification,
     KeyboardShortcut,
     MediaControl,

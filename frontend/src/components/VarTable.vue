@@ -5,7 +5,14 @@
     </thead>
     <tbody>
       <tr v-for="v in rows" :key="v.id">
-        <td class="mono">{{ v.name ?? v.id }}</td>
+        <td class="mono">
+          {{ v.name ?? v.id }}
+          <v-tooltip v-if="v.readOnly" text="Read-only — mirrors live hardware state" location="top">
+            <template #activator="{ props }">
+              <v-icon v-bind="props" size="x-small" class="ml-1 text-medium-emphasis">mdi-lock-outline</v-icon>
+            </template>
+          </v-tooltip>
+        </td>
         <td>{{ fmtValue(v) }}</td>
         <td class="text-medium-emphasis">{{ v.type ?? '' }}</td>
       </tr>

@@ -52,6 +52,24 @@ public:
     std::vector<LogEntry> getEntries() const;
     size_t getEntryCount() const;
 
+    // Visit ring-buffer entries oldest-first WITHOUT copying them. Pass
+    // maxCount > 0 to visit only the most recent maxCount entries. Preferred over
+    // getEntries() on tight heaps: it allocates nothing, where getEntries() deep-
+    // copies every String-bearing entry into a fresh vector (an OOM risk when a
+    // WebSocket client connects and the snapshot is built — see ApiServer).
+    template <typename F>
+    void forEachEntry(F&& visitor, size_t maxCount = 0) const {
+        const size_t count = _full ? BUFFER_SIZE : _buffer.size();
+        const size_t skip  = (maxCount && count > maxCount) ? count - maxCount : 0;
+        size_t idx = 0;
+        if (_full) {
+            for (size_t i = _head; i < BUFFER_SIZE; ++i) { if (idx++ >= skip) visitor(_buffer[i]); }
+            for (size_t i = 0;     i < _head;       ++i) { if (idx++ >= skip) visitor(_buffer[i]); }
+        } else {
+            for (const auto& e : _buffer) { if (idx++ >= skip) visitor(e); }
+        }
+    }
+
 private:
     Logger() = default;
 

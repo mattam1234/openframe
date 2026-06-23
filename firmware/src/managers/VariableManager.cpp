@@ -20,14 +20,31 @@ bool VariableManager::save() {
     return StorageManager::instance().writeJson(OF_VARIABLES_PATH, doc);
 }
 
-void VariableManager::define(const String& id, VarType type, const String& label, bool persistent) {
+void VariableManager::define(const String& id, VarType type, const String& label, bool persistent,
+                             bool readOnly) {
     if (_vars.count(id)) return;
     Variable v;
     v.id         = id;
     v.type       = type;
     v.label      = label;
     v.persistent = persistent;
+    v.readOnly   = readOnly;
     _vars[id]    = v;
+}
+
+void VariableManager::setMeta(const String& id, float min, float max, const String& unit) {
+    auto it = _vars.find(id);
+    if (it == _vars.end()) return;
+    it->second.hasRange = true;
+    it->second.rangeMin = min;
+    it->second.rangeMax = max;
+    if (unit.length()) it->second.unit = unit;
+}
+
+void VariableManager::setOptions(const String& id, const std::vector<String>& options) {
+    auto it = _vars.find(id);
+    if (it == _vars.end()) return;
+    it->second.options = options;
 }
 
 // ── Getters ───────────────────────────────────────────────────────────────────

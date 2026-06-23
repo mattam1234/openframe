@@ -51,6 +51,16 @@ public:
     void registerDisplay(const String& type, DisplayFactory factory);
     bool setActivePage(const String& displayId, const String& pageId);
 
+    // Screen navigation primitive (F4/F5/F6) — all built on setActivePage() and the
+    // canonical ordered page list (buildPageList). next/prev/index WRAP around.
+    bool nextPage(const String& displayId);
+    bool previousPage(const String& displayId);
+    bool gotoPageByIndex(const String& displayId, int index);
+    // Ordered page ids for a display: explicit DisplayConfig.pageOrder first, then
+    // any remaining matching pages in load order. Authoritative on the device so
+    // the dashboard never has to re-derive ordering.
+    std::vector<String> buildPageList(const String& displayId) const;
+
     // Show a temporary text notification overlay on all active displays for
     // the given duration. The overlay is rendered on top of the current page.
     void showNotification(const String& message, uint32_t durationMs = 3000);
@@ -72,6 +82,7 @@ private:
         String                          currentPageId;
         uint32_t                        lastRenderMs = 0;
         bool                            dirty = true;
+        uint32_t                        lastRotationMs = 0;  // F4 auto-rotation timer
     };
 
     DisplayManager() = default;
@@ -80,6 +91,7 @@ private:
     bool loadConfig();
     bool loadPages();
     void startConfiguredDisplays();
+    void advanceRotations(uint32_t nowMs);   // F4: auto-advance rotating displays
     void renderDisplays(uint32_t nowMs);
     void renderDisplay(DisplayInstance& display, uint32_t nowMs);
     void onVariableChanged(const String& variableId);

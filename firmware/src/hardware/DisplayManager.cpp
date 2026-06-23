@@ -232,6 +232,106 @@ private:
     DisplayConfig _config;
     std::unique_ptr<U8G2_SSD1306_72X40_ER_F_HW_I2C> _u8g2;
 };
+
+// ── Generic U8g2 HW-I2C OLED ─────────────────────────────────────────────────
+// The U8G2 base class exposes a uniform API across controllers, so one template
+// covers any full-buffer HW-I2C panel (SH1107, SSD1309, …) — only the concrete
+// panel type and a label differ. Mirrors the 72x40 path: the shared I²C bus is
+// rebound to the panel's pins before begin().
+template <class T>
+class U8g2I2cProvider final : public DisplayProvider {
+public:
+    explicit U8g2I2cProvider(const char* desc) : _desc(desc) {}
+
+    bool begin(const DisplayConfig& config, String& error) override {
+        const uint8_t scl = config.sclPin >= 0 ? static_cast<uint8_t>(config.sclPin) : U8X8_PIN_NONE;
+        const uint8_t sda = config.sdaPin >= 0 ? static_cast<uint8_t>(config.sdaPin) : U8X8_PIN_NONE;
+        const u8g2_cb_t* rot = U8G2_R0;
+        switch (config.rotation) {
+            case 1: rot = U8G2_R1; break;
+            case 2: rot = U8G2_R2; break;
+            case 3: rot = U8G2_R3; break;
+            default: break;
+        }
+        of_i2c_begin(config.sdaPin, config.sclPin);
+        _u8g2.reset(new T(rot, U8X8_PIN_NONE, scl, sda));
+        _u8g2->setI2CAddress(static_cast<uint8_t>(config.address) << 1);
+        if (!_u8g2->begin()) {
+            error = String(_desc) + " init failed";
+            _u8g2.reset();
+            return false;
+        }
+        _u8g2->setBusClock(400000);
+        _u8g2->setContrast(config.contrast);
+        _u8g2->setFontPosTop();
+        _u8g2->clearBuffer();
+        _u8g2->sendBuffer();
+        return true;
+    }
+
+    void clear() override { if (_u8g2) _u8g2->clearBuffer(); }
+
+    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
+        if (!_u8g2) return;
+        _u8g2->setFont(textSize >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
+        _u8g2->setFontPosTop();
+        _u8g2->drawStr(x, y, text.c_str());
+    }
+
+    void present() override { if (_u8g2) _u8g2->sendBuffer(); }
+    String describe() const override { return _desc; }
+
+private:
+    const char*        _desc;
+    std::unique_ptr<T> _u8g2;
+};
+
+// ── LCD: Nokia 5110 / PCD8544 84x48 over HW SPI ──────────────────────────────
+// cs/dc/reset come from the SPI pin fields in DisplayConfig.
+class Nokia5110DisplayProvider final : public DisplayProvider {
+public:
+    bool begin(const DisplayConfig& config, String& error) override {
+        if (config.dcPin < 0 || config.csPin < 0) {
+            error = "Nokia5110 requires cs_pin and dc_pin in config";
+            return false;
+        }
+        const u8g2_cb_t* rot = U8G2_R0;
+        switch (config.rotation) {
+            case 1: rot = U8G2_R1; break;
+            case 2: rot = U8G2_R2; break;
+            case 3: rot = U8G2_R3; break;
+            default: break;
+        }
+        _u8g2.reset(new U8G2_PCD8544_84X48_F_4W_HW_SPI(
+            rot, static_cast<uint8_t>(config.csPin), static_cast<uint8_t>(config.dcPin),
+            config.resetPin >= 0 ? static_cast<uint8_t>(config.resetPin) : U8X8_PIN_NONE));
+        if (!_u8g2->begin()) {
+            error = "Nokia5110 (PCD8544) init failed";
+            _u8g2.reset();
+            return false;
+        }
+        _u8g2->setContrast(config.contrast);
+        _u8g2->setFontPosTop();
+        _u8g2->clearBuffer();
+        _u8g2->sendBuffer();
+        return true;
+    }
+
+    void clear() override { if (_u8g2) _u8g2->clearBuffer(); }
+
+    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
+        if (!_u8g2) return;
+        _u8g2->setFont(textSize >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
+        _u8g2->setFontPosTop();
+        _u8g2->drawStr(x, y, text.c_str());
+    }
+
+    void present() override { if (_u8g2) _u8g2->sendBuffer(); }
+    String describe() const override { return "Nokia5110 84x48 (PCD8544)"; }
+
+private:
+    std::unique_ptr<U8G2_PCD8544_84X48_F_4W_HW_SPI> _u8g2;
+};
 #endif  // OF_ENABLE_U8G2
 
 // ── OLED: SH1106 ─────────────────────────────────────────────────────────────
@@ -580,7 +680,9 @@ bool DisplayManager::begin() {
 }
 
 void DisplayManager::loop() {
-    renderDisplays(millis());
+    const uint32_t nowMs = millis();
+    advanceRotations(nowMs);
+    renderDisplays(nowMs);
 }
 
 void DisplayManager::registerDisplay(const String& type, DisplayFactory factory) {
@@ -598,9 +700,74 @@ bool DisplayManager::setActivePage(const String& displayId, const String& pageId
 
     display.currentPageId = page->id;
     display.dirty = true;
+    // Explicit navigation defers the next auto-rotation by a full interval, so
+    // manual/button/dashboard nav pauses the carousel rather than fighting it (F4).
+    display.lastRotationMs = millis();
     if (display.provider) display.provider->setPage(page->id);
     publishPageChange(display, *page);
     return true;
+}
+
+// ── Screen navigation primitive (F4/F5/F6) ──────────────────────────────────────
+
+std::vector<String> DisplayManager::buildPageList(const String& displayId) const {
+    std::vector<String> result;
+    const int di = findDisplayIndexById(displayId);
+    if (di < 0) return result;
+    const DisplayConfig& cfg = _displays[static_cast<size_t>(di)].config;
+
+    // 1) explicit order first (only ids that resolve to a real page for this display)
+    for (const auto& pid : cfg.pageOrder) {
+        if (findPageForDisplay(cfg, pid)) result.push_back(pid);
+    }
+    // 2) append remaining matching pages in load order
+    for (const auto& page : _pages) {
+        if (page.displayId.length() && page.displayId != cfg.id) continue;
+        bool already = false;
+        for (const auto& r : result) if (r == page.id) { already = true; break; }
+        if (!already) result.push_back(page.id);
+    }
+    return result;
+}
+
+bool DisplayManager::gotoPageByIndex(const String& displayId, int index) {
+    const std::vector<String> list = buildPageList(displayId);
+    if (list.empty()) return false;
+    const int n = static_cast<int>(list.size());
+    index = ((index % n) + n) % n;   // wrap (handles negatives)
+    return setActivePage(displayId, list[static_cast<size_t>(index)]);
+}
+
+bool DisplayManager::nextPage(const String& displayId) {
+    const std::vector<String> list = buildPageList(displayId);
+    if (list.empty()) return false;
+    const int di = findDisplayIndexById(displayId);
+    if (di < 0) return false;
+    const String& cur = _displays[static_cast<size_t>(di)].currentPageId;
+    int idx = 0;
+    for (size_t i = 0; i < list.size(); ++i) if (list[i] == cur) { idx = static_cast<int>(i); break; }
+    return gotoPageByIndex(displayId, idx + 1);
+}
+
+bool DisplayManager::previousPage(const String& displayId) {
+    const std::vector<String> list = buildPageList(displayId);
+    if (list.empty()) return false;
+    const int di = findDisplayIndexById(displayId);
+    if (di < 0) return false;
+    const String& cur = _displays[static_cast<size_t>(di)].currentPageId;
+    int idx = 0;
+    for (size_t i = 0; i < list.size(); ++i) if (list[i] == cur) { idx = static_cast<int>(i); break; }
+    return gotoPageByIndex(displayId, idx - 1);
+}
+
+void DisplayManager::advanceRotations(uint32_t nowMs) {
+    for (auto& display : _displays) {
+        if (!display.config.rotationEnabled || display.config.rotationIntervalMs == 0) continue;
+        if (display.lastRotationMs == 0) { display.lastRotationMs = nowMs; continue; }
+        if (nowMs - display.lastRotationMs < display.config.rotationIntervalMs) continue;
+        // nextPage()→setActivePage() resets lastRotationMs, anchoring the next tick.
+        nextPage(display.config.id);
+    }
 }
 
 void DisplayManager::registerBuiltInDisplays() {
@@ -618,6 +785,23 @@ void DisplayManager::registerBuiltInDisplays() {
     if (!_registry.count("ssd1306_72x40")) {
         registerDisplay("ssd1306_72x40", []() {
             return std::unique_ptr<DisplayProvider>(new Ssd1306_72x40_U8g2Provider());
+        });
+    }
+    if (!_registry.count("sh1107")) {
+        registerDisplay("sh1107", []() {
+            return std::unique_ptr<DisplayProvider>(
+                new U8g2I2cProvider<U8G2_SH1107_128X128_F_HW_I2C>("SH1107 128x128 (U8g2)"));
+        });
+    }
+    if (!_registry.count("ssd1309")) {
+        registerDisplay("ssd1309", []() {
+            return std::unique_ptr<DisplayProvider>(
+                new U8g2I2cProvider<U8G2_SSD1309_128X64_NONAME0_F_HW_I2C>("SSD1309 128x64 (U8g2)"));
+        });
+    }
+    if (!_registry.count("nokia5110")) {
+        registerDisplay("nokia5110", []() {
+            return std::unique_ptr<DisplayProvider>(new Nokia5110DisplayProvider());
         });
     }
 #endif
@@ -683,6 +867,16 @@ bool DisplayManager::loadConfig() {
         cfg.rotation          = readUint8(item["rotation"], 0);
         cfg.refreshIntervalMs = item["refresh_interval_ms"] | 250;
         cfg.initialPageId     = item["page"] | String("");
+
+        // Multi-screen rotation (F4)
+        cfg.rotationEnabled    = item["rotation_enabled"] | false;
+        cfg.rotationIntervalMs = item["rotation_interval_ms"] | static_cast<uint32_t>(0);
+        if (item["page_order"].is<JsonArrayConst>()) {
+            for (JsonVariantConst p : item["page_order"].as<JsonArrayConst>()) {
+                const String pid = p | String("");
+                if (pid.length()) cfg.pageOrder.push_back(pid);
+            }
+        }
 
         // I²C fields
         cfg.address           = readUint8(item["address"], 0x3C);

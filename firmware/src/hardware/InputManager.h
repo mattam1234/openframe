@@ -106,6 +106,9 @@ private:
     InputManager() = default;
 
     bool loadConfig();
+    // F1 — define read-only mirror variables (input.<id>.pressed/value/key) for
+    // every configured input. No-op when OF_ENABLE_HW_VARIABLES is off.
+    void registerVariables();
 
     void configureDigitalPins();
     void updateDigitalInputs(uint32_t nowMs);

@@ -109,6 +109,9 @@ public:
     bool setBrightness(const String& id, uint8_t brightness);
     bool setRgb(const String& id, uint8_t r, uint8_t g, uint8_t b);
     bool setAnimation(const String& id, LedAnimation animation, uint8_t speed);
+    // Current animation + speed for a WS2812 output (HA effect echo, F2). Returns
+    // false if id is not a WS2812 output.
+    bool getAnimation(const String& id, LedAnimation& animation, uint8_t& speed) const;
     bool beep(const String& id, uint16_t frequency, uint16_t durationMs);
     bool setAngle(const String& id, uint8_t angle);  // Servo: 0–180°
     bool setPosition(const String& id, int32_t steps);  // Stepper: absolute target
@@ -147,6 +150,18 @@ private:
     void renderWs2812(size_t index);
     void tickAnimations(uint32_t nowMs);
     void emitOutputEvent(size_t index, const char* action);
+
+    // F1 — live variable mirror for this output's properties.
+    //  registerVariables: define output.<id>.<prop> vars + subscribe writable ones.
+    //  pushVariables:     mirror current state into those vars (called from
+    //                     emitOutputEvent so every change propagates).
+    //  applyVariable:     drive the hardware when a writable mirror is set.
+    void registerVariables(size_t index);
+    void pushVariables(size_t index);
+    void applyVariable(size_t index, const class Variable& var);
+    // Guards the mirror→hardware→mirror loop: true while pushVariables() is
+    // writing, so our own pushes don't re-enter applyVariable().
+    bool _suppressVarRouting = false;
 
     static const char* outputTypeToString(OutputType type);
 

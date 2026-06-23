@@ -561,6 +561,19 @@
                     :no-data-text="'No pages for this display'"
                   />
                 </template>
+                <!-- F5: screen navigation actions only need the target display;
+                     the device advances/rewinds within that display's page order. -->
+                <template v-if="step.type === 'navigate_screen_next' || step.type === 'navigate_screen_prev'">
+                  <v-select
+                    v-model="step.display_id"
+                    :items="displaysList"
+                    label="Display"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                    :no-data-text="'No displays configured'"
+                  />
+                </template>
                 <v-text-field v-if="step.type === 'notification'" v-model="step.message" label="Message" hint="Supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                 <template v-if="step.type === 'http_request'">
                   <v-text-field v-model="step.url" label="URL" hint="Webhook URL — supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
@@ -784,6 +797,8 @@ const actionStepTypes = [
   { value: 'variable_increment', label: 'Variable Increment' },
   { value: 'variable_toggle', label: 'Variable Toggle' },
   { value: 'page_change', label: 'Page Change' },
+  { value: 'navigate_screen_next', label: 'Next Screen' },
+  { value: 'navigate_screen_prev', label: 'Previous Screen' },
   { value: 'notification', label: 'Notification' },
   { value: 'delay', label: 'Delay' },
   { value: 'wait_until', label: 'Wait Until (variable)' },

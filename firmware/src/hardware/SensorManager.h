@@ -35,8 +35,15 @@ struct SensorConfig {
     uint8_t  pin                  = 0;        // for pin-based sensors (DHT22, DS18B20, HX711 data)
     uint8_t  clockPin             = 0;        // second pin for two-wire bit-bang sensors (HX711 SCK, MAX6675 SCK)
     uint8_t  csPin                = 0;        // chip-select (MAX6675 CS)
-    float    scale                = 1.0f;     // raw→unit scale (HX711 counts per unit)
+    float    scale                = 1.0f;     // raw→unit scale (HX711 counts per unit; analog gain)
     int32_t  tareOffset           = 0;        // raw zero offset (HX711 tare)
+    float    offset               = 0.0f;     // additive offset for the "analog" sensor (value = raw*scale + offset)
+    // UART sensors (MH-Z19 CO₂, PMS5003 particulate) — ESP32 family only. rxPin/txPin
+    // wire the chosen hardware UART (uartNum) to the sensor's TX/RX.
+    uint8_t  rxPin                = 0;
+    uint8_t  txPin                = 0;
+    uint8_t  uartNum              = 1;
+    uint32_t baudRate             = 9600;
     // type == "i2c_generic": JSON-defined register map — add new chips without reflashing.
     std::vector<RegisterSpec> registers;
 };

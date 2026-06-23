@@ -129,6 +129,7 @@ void loop() {
     TimeManager::instance().loop();
     MqttManager::instance().loop();
     TelemetryManager::instance().loop();
+    HaManager::instance().loop();
     CommandManager::instance().loop();
     NodeLinkManager::instance().loop();
     GatewayManager::instance().loop();

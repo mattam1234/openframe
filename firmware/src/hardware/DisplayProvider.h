@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <vector>
 
 struct DisplayConfig {
     // Common
@@ -9,9 +10,17 @@ struct DisplayConfig {
     bool     enabled           = true;
     uint16_t width             = 128;
     uint16_t height            = 64;
-    uint8_t  rotation          = 0;
+    uint8_t  rotation          = 0;   // physical panel rotation (0/1/2/3)
     uint32_t refreshIntervalMs = 250;
     String   initialPageId;
+
+    // Multi-screen rotation (F4): cycle through this display's pages on a timer.
+    // pageOrder is the canonical navigation order (next/prev/index) — filesystem
+    // page order is unstable, so an explicit order is required for predictable
+    // rotation/navigation. Empty pageOrder falls back to load order.
+    bool                 rotationEnabled    = false;
+    uint32_t             rotationIntervalMs = 0;
+    std::vector<String>  pageOrder;
 
     // I²C (SSD1306, SH1106)
     uint8_t  address           = 0x3C;

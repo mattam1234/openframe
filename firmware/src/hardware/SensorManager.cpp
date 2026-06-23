@@ -311,6 +311,267 @@ private:
 };
 #endif  // OF_ENABLE_SENSOR_MPU6050
 
+// ── Library-free additions (raw Wire / analogRead / pulseIn / HardwareSerial) ────
+
+#if OF_ENABLE_SENSOR_AHT20
+// AHT10/AHT20/AHT21 temperature + humidity over I²C (0x38), raw Wire — no library.
+// begin() triggers calibration; each read issues a one-shot measurement.
+class Aht20SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _addr    = config.address ? config.address : 0x38;
+        _offsetC = config.temperatureOffsetC;
+        of_i2c_begin();
+        delay(40);
+        Wire.beginTransmission(_addr);
+        if (Wire.endTransmission() != 0) { error = "AHT20 not found at 0x" + String(_addr, HEX); return false; }
+        Wire.beginTransmission(_addr);                 // calibrate: 0xBE 0x08 0x00
+        Wire.write(0xBE); Wire.write(0x08); Wire.write(0x00);
+        Wire.endTransmission();
+        delay(10);
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "temperature_c", "humidity_pct" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        Wire.beginTransmission(_addr);                 // trigger: 0xAC 0x33 0x00
+        Wire.write(0xAC); Wire.write(0x33); Wire.write(0x00);
+        if (Wire.endTransmission() != 0) { error = "AHT20 measure cmd failed"; return false; }
+        delay(80);
+        if (Wire.requestFrom((int)_addr, 6) != 6) { error = "AHT20 read short"; return false; }
+        uint8_t d[6];
+        for (uint8_t i = 0; i < 6; ++i) d[i] = Wire.read();
+        if (d[0] & 0x80) { error = "AHT20 busy"; return false; }   // status bit7 = busy
+        uint32_t rawHum = ((uint32_t)d[1] << 12) | ((uint32_t)d[2] << 4) | (d[3] >> 4);
+        uint32_t rawTmp = (((uint32_t)d[3] & 0x0F) << 16) | ((uint32_t)d[4] << 8) | d[5];
+        values.clear();
+        values.push_back({ "temperature_c", (float)rawTmp * 200.0f / 1048576.0f - 50.0f + _offsetC });
+        values.push_back({ "humidity_pct",  (float)rawHum * 100.0f / 1048576.0f });
+        return true;
+    }
+private:
+    uint8_t _addr    = 0x38;
+    float   _offsetC = 0.0f;
+};
+#endif  // OF_ENABLE_SENSOR_AHT20
+
+#if OF_ENABLE_SENSOR_DHT11
+// DHT11 temperature + humidity — same library as DHT22, different chip constant.
+class Dht11SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String&) override {
+        _dht.reset(new DHT(config.pin, DHT11));
+        _dht->begin();
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "temperature_c", "humidity_pct" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        _dht->read(true);
+        const float t = _dht->readTemperature(false, true);
+        const float h = _dht->readHumidity(true);
+        if (isnan(t) || isnan(h)) { error = "DHT11 returned invalid readings"; return false; }
+        values.clear();
+        values.push_back({ "temperature_c", t });
+        values.push_back({ "humidity_pct",  h });
+        return true;
+    }
+private:
+    std::unique_ptr<DHT> _dht;
+};
+#endif  // OF_ENABLE_SENSOR_DHT11
+
+#if OF_ENABLE_SENSOR_ANALOG
+// Generic analog input: value = analogRead(pin) * scale + offset. Covers soil
+// moisture, MQ gas, LDR/photoresistor, potentiometers, voltage dividers, …
+class AnalogSensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String&) override {
+        _pin = config.pin; _scale = config.scale; _offset = config.offset;
+        pinMode(_pin, INPUT);
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "value" }; }
+    bool read(std::vector<SensorMetricValue>& values, String&) override {
+        values.clear();
+        values.push_back({ "value", (float)analogRead(_pin) * _scale + _offset });
+        return true;
+    }
+private:
+    uint8_t _pin = 0; float _scale = 1.0f; float _offset = 0.0f;
+};
+#endif  // OF_ENABLE_SENSOR_ANALOG
+
+#if OF_ENABLE_SENSOR_ULTRASONIC
+// HC-SR04 ultrasonic range finder: trig = pin, echo = clock_pin. Reports cm.
+class UltrasonicSensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!config.clockPin) { error = "ultrasonic needs 'clock_pin' (echo)"; return false; }
+        _trig = config.pin; _echo = config.clockPin;
+        pinMode(_trig, OUTPUT); digitalWrite(_trig, LOW);
+        pinMode(_echo, INPUT);
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "distance_cm" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        digitalWrite(_trig, LOW);  delayMicroseconds(3);
+        digitalWrite(_trig, HIGH); delayMicroseconds(10);
+        digitalWrite(_trig, LOW);
+        const unsigned long us = pulseIn(_echo, HIGH, 30000UL);   // ~5 m ceiling
+        if (us == 0) { error = "ultrasonic timeout (no echo)"; return false; }
+        values.clear();
+        values.push_back({ "distance_cm", us / 58.0f });
+        return true;
+    }
+private:
+    uint8_t _trig = 0, _echo = 0;
+};
+#endif  // OF_ENABLE_SENSOR_ULTRASONIC
+
+#if OF_ENABLE_SENSOR_ADS1115
+// ADS1115 16-bit I²C ADC (0x48): all 4 single-ended channels as volts (±4.096 V
+// FSR). Raw Wire — no library.
+class Ads1115SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _addr = config.address ? config.address : 0x48;
+        of_i2c_begin();
+        Wire.beginTransmission(_addr);
+        if (Wire.endTransmission() != 0) { error = "ADS1115 not found at 0x" + String(_addr, HEX); return false; }
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "ch0_v", "ch1_v", "ch2_v", "ch3_v" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        static const char* keys[4] = { "ch0_v", "ch1_v", "ch2_v", "ch3_v" };
+        values.clear();
+        for (uint8_t ch = 0; ch < 4; ++ch) {
+            // OS=1 | MUX=100+ch (single-ended) | PGA=001(±4.096V) | MODE=1(single-shot)
+            //      | DR=100(128SPS) | COMP_QUE=11(disabled)
+            const uint16_t cfg = 0x8000 | ((uint16_t)(0x4 | ch) << 12) | (0x1 << 9)
+                               | 0x0100 | (0x4 << 5) | 0x0003;
+            Wire.beginTransmission(_addr);
+            Wire.write(0x01); Wire.write(cfg >> 8); Wire.write(cfg & 0xFF);
+            if (Wire.endTransmission() != 0) { error = "ADS1115 config write failed"; return false; }
+            delay(9);                                  // 128 SPS → ~8 ms conversion
+            Wire.beginTransmission(_addr);
+            Wire.write(0x00);
+            if (Wire.endTransmission(false) != 0) { error = "ADS1115 pointer write failed"; return false; }
+            if (Wire.requestFrom((int)_addr, 2) != 2) { error = "ADS1115 read short"; return false; }
+            const uint8_t hi = Wire.read();            // sequence the two reads explicitly
+            const uint8_t lo = Wire.read();
+            const int16_t raw = (int16_t)(((uint16_t)hi << 8) | lo);
+            values.push_back({ keys[ch], raw * 4.096f / 32768.0f });
+        }
+        return true;
+    }
+private:
+    uint8_t _addr = 0x48;
+};
+#endif  // OF_ENABLE_SENSOR_ADS1115
+
+#if OF_ENABLE_SENSOR_CCS811
+// CCS811 eCO₂/TVOC air-quality (0x5A) over raw I²C — no library.
+class Ccs811SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        _addr = config.address ? config.address : 0x5A;
+        of_i2c_begin();
+        uint8_t id = 0;                                // HW_ID (0x20) must read 0x81
+        if (!readReg(0x20, &id, 1) || id != 0x81) { error = "CCS811 not found at 0x" + String(_addr, HEX); return false; }
+        Wire.beginTransmission(_addr); Wire.write(0xF4);   // APP_START — leave boot mode
+        if (Wire.endTransmission() != 0) { error = "CCS811 app start failed"; return false; }
+        delay(20);
+        Wire.beginTransmission(_addr); Wire.write(0x01); Wire.write(0x10);  // MEAS_MODE=1 (1 Hz)
+        Wire.endTransmission();
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "eco2_ppm", "tvoc_ppb" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        uint8_t d[4];
+        if (!readReg(0x02, d, 4)) { error = "CCS811 read failed"; return false; }   // ALG_RESULT_DATA
+        values.clear();
+        values.push_back({ "eco2_ppm", (float)(((uint16_t)d[0] << 8) | d[1]) });
+        values.push_back({ "tvoc_ppb", (float)(((uint16_t)d[2] << 8) | d[3]) });
+        return true;
+    }
+private:
+    bool readReg(uint8_t reg, uint8_t* buf, uint8_t n) {
+        Wire.beginTransmission(_addr); Wire.write(reg);
+        if (Wire.endTransmission(false) != 0) return false;
+        if (Wire.requestFrom((int)_addr, (int)n) != n) return false;
+        for (uint8_t i = 0; i < n; ++i) buf[i] = Wire.read();
+        return true;
+    }
+    uint8_t _addr = 0x5A;
+};
+#endif  // OF_ENABLE_SENSOR_CCS811
+
+#if OF_ENABLE_SENSOR_UART
+// MH-Z19 NDIR CO₂ over UART (9600 8N1). rx_pin/tx_pin wire the hardware UART
+// (uart_num) to the sensor. ESP32 family only.
+class Mhz19SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!config.rxPin || !config.txPin) { error = "mhz19 needs rx_pin and tx_pin"; return false; }
+        _uart.reset(new HardwareSerial(config.uartNum));
+        _uart->begin(config.baudRate ? config.baudRate : 9600, SERIAL_8N1,
+                     (int8_t)config.rxPin, (int8_t)config.txPin);
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "co2_ppm" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        static const uint8_t cmd[9] = { 0xFF, 0x01, 0x86, 0, 0, 0, 0, 0, 0x79 };
+        while (_uart->available()) _uart->read();      // flush stale bytes
+        _uart->write(cmd, 9);
+        uint8_t r[9]; uint8_t got = 0; const uint32_t start = millis();
+        while (got < 9 && millis() - start < 200) {
+            if (_uart->available()) r[got++] = _uart->read();
+        }
+        if (got < 9 || r[0] != 0xFF || r[1] != 0x86) { error = "mhz19 no/bad response"; return false; }
+        values.clear();
+        values.push_back({ "co2_ppm", (float)(((uint16_t)r[2] << 8) | r[3]) });
+        return true;
+    }
+private:
+    std::unique_ptr<HardwareSerial> _uart;
+};
+
+// PMS5003 / PMSx003 particulate matter over UART (9600 8N1). Reports atmospheric
+// PM1.0 / PM2.5 / PM10 (µg/m³). ESP32 family only.
+class Pms5003SensorDriver final : public SensorDriver {
+public:
+    bool begin(const SensorConfig& config, String& error) override {
+        if (!config.rxPin) { error = "pms5003 needs rx_pin"; return false; }
+        _uart.reset(new HardwareSerial(config.uartNum));
+        _uart->begin(config.baudRate ? config.baudRate : 9600, SERIAL_8N1,
+                     (int8_t)config.rxPin, config.txPin ? (int8_t)config.txPin : (int8_t)-1);
+        return true;
+    }
+    std::vector<String> metricKeys() const override { return { "pm1_0", "pm2_5", "pm10" }; }
+    bool read(std::vector<SensorMetricValue>& values, String& error) override {
+        const uint32_t start = millis();
+        while (millis() - start < 1500) {              // hunt for a 0x42 0x4D frame header
+            if (_uart->available() < 2) { delay(2); continue; }
+            if (_uart->read() != 0x42)  continue;
+            if (_uart->peek() != 0x4D)  continue;
+            _uart->read();                             // consume 0x4D
+            uint8_t b[30]; uint8_t got = 0; const uint32_t t = millis();
+            while (got < 30 && millis() - t < 200) { if (_uart->available()) b[got++] = _uart->read(); }
+            if (got < 30) { error = "pms5003 short frame"; return false; }
+            // b[0..1] = frame length; atmospheric PM at b[8..9], b[10..11], b[12..13].
+            values.clear();
+            values.push_back({ "pm1_0", (float)(((uint16_t)b[8]  << 8) | b[9])  });
+            values.push_back({ "pm2_5", (float)(((uint16_t)b[10] << 8) | b[11]) });
+            values.push_back({ "pm10",  (float)(((uint16_t)b[12] << 8) | b[13]) });
+            return true;
+        }
+        error = "pms5003 no frame";
+        return false;
+    }
+private:
+    std::unique_ptr<HardwareSerial> _uart;
+};
+#endif  // OF_ENABLE_SENSOR_UART
+
 }  // namespace
 
 SensorManager& SensorManager::instance() {
@@ -613,6 +874,46 @@ void SensorManager::registerBuiltInSensors() {
         registerSensor("mpu6050", []() { return std::unique_ptr<SensorDriver>(new Mpu6050SensorDriver()); });
     }
 #endif
+
+    // ── Library-free additions ──────────────────────────────────────────────────
+#if OF_ENABLE_SENSOR_AHT20
+    if (!_registry.count("aht20")) {
+        registerSensor("aht20", []() { return std::unique_ptr<SensorDriver>(new Aht20SensorDriver()); });
+    }
+#endif
+#if OF_ENABLE_SENSOR_DHT11
+    if (!_registry.count("dht11")) {
+        registerSensor("dht11", []() { return std::unique_ptr<SensorDriver>(new Dht11SensorDriver()); });
+    }
+#endif
+#if OF_ENABLE_SENSOR_ANALOG
+    if (!_registry.count("analog")) {
+        registerSensor("analog", []() { return std::unique_ptr<SensorDriver>(new AnalogSensorDriver()); });
+    }
+#endif
+#if OF_ENABLE_SENSOR_ULTRASONIC
+    if (!_registry.count("ultrasonic")) {
+        registerSensor("ultrasonic", []() { return std::unique_ptr<SensorDriver>(new UltrasonicSensorDriver()); });
+    }
+#endif
+#if OF_ENABLE_SENSOR_ADS1115
+    if (!_registry.count("ads1115")) {
+        registerSensor("ads1115", []() { return std::unique_ptr<SensorDriver>(new Ads1115SensorDriver()); });
+    }
+#endif
+#if OF_ENABLE_SENSOR_CCS811
+    if (!_registry.count("ccs811")) {
+        registerSensor("ccs811", []() { return std::unique_ptr<SensorDriver>(new Ccs811SensorDriver()); });
+    }
+#endif
+#if OF_ENABLE_SENSOR_UART
+    if (!_registry.count("mhz19")) {
+        registerSensor("mhz19", []() { return std::unique_ptr<SensorDriver>(new Mhz19SensorDriver()); });
+    }
+    if (!_registry.count("pms5003")) {
+        registerSensor("pms5003", []() { return std::unique_ptr<SensorDriver>(new Pms5003SensorDriver()); });
+    }
+#endif
 }
 
 bool SensorManager::loadConfig() {
@@ -664,6 +965,11 @@ bool SensorManager::loadConfig() {
         cfg.csPin               = item["cs_pin"] | 0;
         cfg.scale               = item["scale"] | 1.0f;
         cfg.tareOffset          = item["tare_offset"] | 0;
+        cfg.offset              = item["offset"] | 0.0f;
+        cfg.rxPin               = item["rx_pin"] | 0;
+        cfg.txPin               = item["tx_pin"] | 0;
+        cfg.uartNum             = item["uart_num"] | 1;
+        cfg.baudRate            = item["baud_rate"] | 9600;
         if (item["registers"].is<JsonArrayConst>()) {
             for (JsonObjectConst r : item["registers"].as<JsonArrayConst>()) {
                 RegisterSpec spec;

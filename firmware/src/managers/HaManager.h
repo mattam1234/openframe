@@ -28,17 +28,21 @@ enum class HaEntityType : uint8_t {
 
 struct HaEntity {
     HaEntityType type;
-    String       id;          // unique ID within this device
-    String       name;        // friendly name
-    String       unit;        // for sensors (e.g. "°C")
-    String       deviceClass; // optional HA device_class
-    float        min  = 0;    // for number entities
-    float        max  = 100;  // for number entities
-    float        step = 1;    // for number entities
+    String       id;            // unique ID within this device
+    String       name;          // friendly name
+    String       unit;          // for sensors (e.g. "°C")
+    String       deviceClass;   // optional HA device_class
+    String       stateClass;    // optional HA state_class (e.g. "measurement") — enables long-term statistics
+    String       entityCategory;// optional HA entity_category ("diagnostic" / "config")
+    float        min  = 0;      // for number entities
+    float        max  = 100;    // for number entities
+    float        step = 1;      // for number entities
     std::vector<String> options; // for select entities
     // Light entities: extra capabilities (brightness slider / RGB colour).
     bool         brightness = false;
     bool         rgb        = false;
+    // Multi-LED WS2812 strip: expose its animations to HA as an effect_list (F2).
+    bool         effects    = false;
 };
 
 // ── HaManager ─────────────────────────────────────────────────────────────────
@@ -56,6 +60,11 @@ public:
 
     // Call once in setup() after MqttManager is ready
     void begin();
+
+    // Call every loop() — periodically re-publishes all entity states while MQTT
+    // is connected so Home Assistant recovers current values after a broker/HA
+    // restart (state topics are not retained). No-op when HA is disabled.
+    void loop();
 
     // Register an entity — must be called before publishDiscovery()
     void registerEntity(const HaEntity& entity);
@@ -88,14 +97,32 @@ private:
     // first MQTT connection (by which point all hardware managers have loaded).
     void buildEntities();
     void publishAllStates();
+    // Re-assert the last-known state of every entity on the periodic cadence.
+    void republishStates();
     void onSensorEvent(const String& payload);
     void onOutputEvent(const String& payload);
     void onInputEvent(const String& sourceId, const String& payload);
 
+    // Device-level diagnostic + control entities (RSSI, uptime, heap, IP, restart).
+    void buildDeviceEntities();
+    void updateDiagnostics();
+    // Clear retained discovery configs for entities removed since the last boot,
+    // then persist the current set. Keeps HA free of stale "unavailable" entities.
+    void pruneStaleDiscovery();
+    // Handle HA's birth message (<discoveryPrefix>/status == "online"): re-announce
+    // discovery + state so entities recover immediately after a Home Assistant restart.
+    void onHaStatus(const String& payload);
+
     std::map<String, HaEntity>          _entities;
     std::map<String, String>            _cmdTopicToEntityId;  // command topic → entity ID
     std::map<String, CommandCallback>   _callbacks;
+    std::map<String, String>            _lastState;           // entity ID → last published state
     bool                                _entitiesBuilt = false;
+
+    // Periodic state-republish cadence (mirrors TelemetryManager's heartbeat).
+    bool     _wasConnected        = false;
+    uint32_t _lastStatePublishMs  = 0;
+    static constexpr uint32_t STATE_PUBLISH_INTERVAL_MS = 30000;  // 30 s
 
     static constexpr const char* TAG = "HA";
 };

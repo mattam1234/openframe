@@ -51,6 +51,9 @@
 #define OF_NOTIFICATIONS_PATH "/notifications.json"
 #define OF_CRASHLOG_PATH "/crashlog.json"
 #define OF_MQTT_CA_PATH "/mqtt_ca.pem"
+// Set of HA discovery topics published last boot, so we can clear (publish empty
+// retained payload) the ones for entities that no longer exist after a config edit.
+#define OF_HA_ENTITIES_PATH "/ha_entities.json"
 #define OF_CONFIG_BACKUP_DIR "/cfgbak"
 #define OF_CONFIG_BACKUP_KEEP 5
 
@@ -71,9 +74,31 @@
 #ifndef OF_LOG_BUFFER_SIZE
     #if OF_CONSTRAINED
         #define OF_LOG_BUFFER_SIZE 80
+    #elif defined(ESP32_BOARD)
+        // Classic ESP32: dual-core but only ~320 KB DRAM, most of which is already
+        // claimed by the BLE-HID (NimBLE) + WiFi-AP + async web stack. A full
+        // 1000-entry ring of String-bearing LogEntry records is ~70 KB of heap —
+        // far too much here. The S3 targets (PSRAM, 512 KB DRAM) keep the full ring.
+        #define OF_LOG_BUFFER_SIZE 200
     #else
         #define OF_LOG_BUFFER_SIZE 1000
     #endif
+#endif
+// Cap on how many recent log lines a WebSocket client receives in its connect
+// snapshot. The full ring stays available via the REST /api/logs endpoint; the
+// live stream delivers everything after connect. Keep this small — the snapshot
+// is built as a JSON array in RAM at connect time, on whatever heap is free then.
+#ifndef OF_WS_LOG_SNAPSHOT_MAX
+    #define OF_WS_LOG_SNAPSHOT_MAX 40
+#endif
+
+// Auto-register a live Variable for every input/output/sensor property (F1), so
+// they can be read (and, for outputs, written) like any other variable and bound
+// in the screen designer. OFF on constrained boards: dozens of extra String-keyed
+// map entries fragment the already-tight heap and bloat the /api/variables + WS
+// snapshot payloads. Override with -DOF_ENABLE_HW_VARIABLES=1/0 per board.
+#ifndef OF_ENABLE_HW_VARIABLES
+    #define OF_ENABLE_HW_VARIABLES (!OF_CONSTRAINED)
 #endif
 #ifndef OF_ACTION_HISTORY_SIZE
     #if OF_CONSTRAINED
@@ -126,6 +151,35 @@
 #endif
 #ifndef OF_ENABLE_SENSOR_MAX6675
     #define OF_ENABLE_SENSOR_MAX6675 (!OF_CONSTRAINED)
+#endif
+// Lightweight, library-free drivers (raw Wire / analogRead / pulseIn). Small flash
+// cost, so on by default everywhere; override with -DOF_ENABLE_SENSOR_*=0.
+#ifndef OF_ENABLE_SENSOR_AHT20        // AHT10/AHT20/AHT21 I²C temp+humidity
+    #define OF_ENABLE_SENSOR_AHT20      1
+#endif
+#ifndef OF_ENABLE_SENSOR_DHT11        // DHT11 (reuses the already-linked DHT library)
+    #define OF_ENABLE_SENSOR_DHT11      1
+#endif
+#ifndef OF_ENABLE_SENSOR_ANALOG       // generic ADC pin: value = raw*scale + offset
+    #define OF_ENABLE_SENSOR_ANALOG     1
+#endif
+#ifndef OF_ENABLE_SENSOR_ULTRASONIC   // HC-SR04 trig/echo distance
+    #define OF_ENABLE_SENSOR_ULTRASONIC 1
+#endif
+#ifndef OF_ENABLE_SENSOR_ADS1115      // ADS1115 4-channel I²C ADC
+    #define OF_ENABLE_SENSOR_ADS1115    1
+#endif
+#ifndef OF_ENABLE_SENSOR_CCS811       // CCS811 eCO₂/TVOC air-quality I²C
+    #define OF_ENABLE_SENSOR_CCS811     1
+#endif
+// UART sensors (MH-Z19 CO₂, PMS5003 particulate) need a spare HardwareSerial with
+// remappable pins — ESP32 family only (the ESP8266 lacks free remappable UARTs).
+#ifndef OF_ENABLE_SENSOR_UART
+    #if defined(ESP32)
+        #define OF_ENABLE_SENSOR_UART   1
+    #else
+        #define OF_ENABLE_SENSOR_UART   0
+    #endif
 #endif
 // U8g2 OLED driver — used for the 0.42" 72x40 SSD1306 panel, which the Adafruit
 // library can't init reliably (its sub-window/COM-pin remap doesn't drive these

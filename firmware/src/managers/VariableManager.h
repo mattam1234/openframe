@@ -25,6 +25,10 @@ struct Variable {
     // Metadata
     String  label;
     bool    persistent = true;
+    // Read-only variables mirror live hardware state and reject API writes
+    // (e.g. sensor metrics, input states). Writable hardware mirrors (output
+    // properties) leave this false so a write drives the hardware. See F1.
+    bool    readOnly   = false;
     // Optional typing constraints (#11):
     //  • range — clamps Integer/Float sets to [rangeMin, rangeMax]
     //  • unit  — display suffix (e.g. "°C", "%")
@@ -54,7 +58,15 @@ public:
     void loop();
 
     // Define a variable (idempotent — only registers if not already present)
-    void define(const String& id, VarType type, const String& label = "", bool persistent = true);
+    void define(const String& id, VarType type, const String& label = "", bool persistent = true,
+                bool readOnly = false);
+
+    // Attach range (clamps Integer/Float sets) and/or a display unit to an existing
+    // variable. Used by the hardware auto-registry to give generated property
+    // variables sensible bounds (e.g. brightness 0–255) and units. No-op if absent.
+    void setMeta(const String& id, float min, float max, const String& unit = "");
+    // Attach an enum option set to an existing String variable (e.g. animations).
+    void setOptions(const String& id, const std::vector<String>& options);
 
     // Getters
     int32_t getInt(const String& id) const;

@@ -195,6 +195,15 @@
               <v-select v-model="disp.scl_pin" :items="ioPins" label="SCL pin" density="compact" variant="outlined" hide-details clearable />
               <v-switch v-model="disp.enabled" label="Enabled" density="compact" color="indigo" hide-details inset />
             </div>
+            <!-- F4: cycle through this display's pages on a timer. Page order comes
+                 from the Screen Designer; without an explicit order, pages rotate in
+                 load order. -->
+            <div class="ld-fields">
+              <v-switch v-model="disp.rotation_enabled" label="Auto-rotate screens" density="compact" color="indigo" hide-details inset />
+              <v-text-field v-if="disp.rotation_enabled" v-model.number="disp.rotation_interval_ms"
+                label="Rotate every (ms)" type="number" min="1000" placeholder="8000"
+                density="compact" variant="outlined" hide-details />
+            </div>
             <v-expansion-panels variant="accordion" class="ld-advanced">
               <v-expansion-panel>
                 <v-expansion-panel-title>Advanced (sub-window &amp; pins)</v-expansion-panel-title>
@@ -204,6 +213,8 @@
                     <v-text-field v-model.number="disp.page_offset" label="Page offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
                     <v-text-field v-model.number="disp.com_pins" label="COM pins (e.g. 18 = 0x12)" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
                     <v-select v-model="disp.reset_pin" :items="ioPins" label="Reset pin" density="compact" variant="outlined" hide-details clearable />
+                    <v-select v-model="disp.cs_pin" :items="ioPins" label="CS pin (SPI)" density="compact" variant="outlined" hide-details clearable />
+                    <v-select v-model="disp.dc_pin" :items="ioPins" label="DC pin (SPI)" density="compact" variant="outlined" hide-details clearable />
                     <v-text-field v-model.number="disp.contrast" label="Contrast (0-255)" placeholder="255" type="number" density="compact" variant="outlined" hide-details />
                     <v-select v-model.number="disp.rotation" :items="rotationItems" label="Rotation" density="compact" variant="outlined" hide-details />
                   </div>
@@ -257,11 +268,21 @@ const boardLabel = computed(() => boardType.value || '')
 const ioPins = computed(() => pinItems(boardType.value, 'io'))
 const adcPins = computed(() => pinItems(boardType.value, 'adc'))
 
-const sensorTypes = ['bme280', 'bmp280', 'dht22', 'ds18b20', 'sht31', 'bh1750', 'ina219', 'mpu6050']
+const sensorTypes = [
+  'bme280', 'bmp280', 'sht31', 'aht20', 'bh1750', 'scd4x', 'sgp30', 'ccs811',
+  'dht22', 'dht11', 'ds18b20', 'max6675',
+  'mpu6050', 'vl53l0x', 'ultrasonic',
+  'ina219', 'ads1115', 'analog', 'hx711',
+  'mhz19', 'pms5003',
+  'i2c_generic',
+]
 const displayTypes = [
   { title: 'SSD1306 (128×64 etc.)', value: 'ssd1306' },
   { title: 'SSD1306 72×40 — 0.42" OLED (U8g2)', value: 'ssd1306_72x40' },
   { title: 'SH1106', value: 'sh1106' },
+  { title: 'SH1107 128×128 OLED (U8g2)', value: 'sh1107' },
+  { title: 'SSD1309 128×64 OLED (U8g2)', value: 'ssd1309' },
+  { title: 'Nokia 5110 / PCD8544 — 84×48 (SPI)', value: 'nokia5110' },
 ]
 const rotationItems = [
   { title: '0°', value: 0 },

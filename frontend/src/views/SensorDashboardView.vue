@@ -65,9 +65,16 @@
                   <th class="text-left">Type</th>
                   <th class="text-left">Address</th>
                   <th class="text-left">Pin</th>
+                  <th class="text-left">2nd Pin</th>
+                  <th class="text-left">CS Pin</th>
                   <th class="text-left">Poll (ms)</th>
                   <th class="text-left">Temp Offset (C)</th>
                   <th class="text-left">Sea Level (hPa)</th>
+                  <th class="text-left">Scale</th>
+                  <th class="text-left">Offset</th>
+                  <th class="text-left">RX Pin</th>
+                  <th class="text-left">TX Pin</th>
+                  <th class="text-left">Baud</th>
                   <th class="text-left">Prefix</th>
                   <th class="text-left">Enabled</th>
                   <th class="text-left">Actions</th>
@@ -109,6 +116,28 @@
                       variant="plain"
                     />
                   </td>
+                  <td style="min-width:90px">
+                    <v-text-field
+                      v-model.number="sensor.clock_pin"
+                      :disabled="!usesClockPin(sensor.type)"
+                      type="number"
+                      placeholder="SCK / echo"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
+                  <td style="min-width:90px">
+                    <v-text-field
+                      v-model.number="sensor.cs_pin"
+                      :disabled="!usesCsPin(sensor.type)"
+                      type="number"
+                      placeholder="CS"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
                   <td style="min-width:110px">
                     <v-text-field
                       v-model.number="sensor.poll_interval_ms"
@@ -142,6 +171,63 @@
                       variant="plain"
                     />
                   </td>
+                  <td style="min-width:100px">
+                    <v-text-field
+                      v-model.number="sensor.scale"
+                      :disabled="!usesScale(sensor.type)"
+                      type="number"
+                      step="any"
+                      placeholder="1.0"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
+                  <td style="min-width:100px">
+                    <v-text-field
+                      v-model.number="sensor.offset"
+                      :disabled="!usesOffset(sensor.type)"
+                      type="number"
+                      step="any"
+                      placeholder="0.0"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
+                  <td style="min-width:80px">
+                    <v-text-field
+                      v-model.number="sensor.rx_pin"
+                      :disabled="!usesUart(sensor.type)"
+                      type="number"
+                      placeholder="RX"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
+                  <td style="min-width:80px">
+                    <v-text-field
+                      v-model.number="sensor.tx_pin"
+                      :disabled="!usesUart(sensor.type)"
+                      type="number"
+                      placeholder="TX"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
+                  <td style="min-width:100px">
+                    <v-text-field
+                      v-model.number="sensor.baud_rate"
+                      :disabled="!usesUart(sensor.type)"
+                      type="number"
+                      placeholder="9600"
+                      density="compact"
+                      hide-details
+                      variant="plain"
+                    />
+                  </td>
                   <td style="min-width:120px">
                     <v-text-field v-model="sensor.variable_prefix" density="compact" hide-details variant="plain" />
                   </td>
@@ -153,7 +239,7 @@
                   </td>
                 </tr>
                 <tr v-if="configSensors.length === 0">
-                  <td colspan="10" class="text-medium-emphasis">No sensors configured.</td>
+                  <td colspan="17" class="text-medium-emphasis">No sensors configured.</td>
                 </tr>
               </tbody>
             </v-table>
@@ -279,7 +365,20 @@ const search = ref('')
 const sensorList = ref([])
 const configSensors = ref([])
 
-const sensorTypes = ['bme280', 'bmp280', 'dht22', 'ds18b20', 'sht31', 'bh1750', 'ina219', 'mpu6050']
+const sensorTypes = [
+  // Environmental / I²C
+  'bme280', 'bmp280', 'sht31', 'aht20', 'bh1750', 'scd4x', 'sgp30', 'ccs811',
+  // Temperature (1-Wire / DHT / thermocouple)
+  'dht22', 'dht11', 'ds18b20', 'max6675',
+  // Motion / distance
+  'mpu6050', 'vl53l0x', 'ultrasonic',
+  // Power / ADC / load cell
+  'ina219', 'ads1115', 'analog', 'hx711',
+  // UART (ESP32 only)
+  'mhz19', 'pms5003',
+  // Fully custom I²C register map
+  'i2c_generic',
+]
 
 const METRIC_LABELS = {
   temperature_c:    'Temperature',
@@ -297,6 +396,21 @@ const METRIC_LABELS = {
   gyro_x:           'Gyro X',
   gyro_y:           'Gyro Y',
   gyro_z:           'Gyro Z',
+  co2_ppm:          'CO₂',
+  eco2_ppm:         'eCO₂',
+  tvoc_ppb:         'TVOC',
+  pm1_0:            'PM1.0',
+  pm2_5:            'PM2.5',
+  pm10:             'PM10',
+  distance_cm:      'Distance',
+  distance_mm:      'Distance',
+  value:            'Value',
+  raw:              'Raw',
+  weight:           'Weight',
+  ch0_v:            'Channel 0',
+  ch1_v:            'Channel 1',
+  ch2_v:            'Channel 2',
+  ch3_v:            'Channel 3',
 }
 
 const METRIC_ICONS = {
@@ -315,6 +429,21 @@ const METRIC_ICONS = {
   gyro_x:           'mdi-rotate-right',
   gyro_y:           'mdi-rotate-right',
   gyro_z:           'mdi-rotate-right',
+  co2_ppm:          'mdi-molecule-co2',
+  eco2_ppm:         'mdi-molecule-co2',
+  tvoc_ppb:         'mdi-air-filter',
+  pm1_0:            'mdi-grain',
+  pm2_5:            'mdi-grain',
+  pm10:             'mdi-grain',
+  distance_cm:      'mdi-arrow-expand-vertical',
+  distance_mm:      'mdi-arrow-expand-vertical',
+  value:            'mdi-sine-wave',
+  raw:              'mdi-counter',
+  weight:           'mdi-weight',
+  ch0_v:            'mdi-flash',
+  ch1_v:            'mdi-flash',
+  ch2_v:            'mdi-flash',
+  ch3_v:            'mdi-flash',
 }
 
 const METRIC_UNITS = {
@@ -333,6 +462,19 @@ const METRIC_UNITS = {
   gyro_x:           'rad/s',
   gyro_y:           'rad/s',
   gyro_z:           'rad/s',
+  co2_ppm:          'ppm',
+  eco2_ppm:         'ppm',
+  tvoc_ppb:         'ppb',
+  pm1_0:            'µg/m³',
+  pm2_5:            'µg/m³',
+  pm10:             'µg/m³',
+  distance_cm:      'cm',
+  distance_mm:      'mm',
+  weight:           '',
+  ch0_v:            'V',
+  ch1_v:            'V',
+  ch2_v:            'V',
+  ch3_v:            'V',
 }
 
 function labelForMetric(key) {
@@ -442,9 +584,17 @@ function addSensorConfig() {
     id: `sensor${configSensors.value.length + 1}`,
     type: 'bme280',
     address: 0x76,
+    pin: 0,
+    clock_pin: 0,
+    cs_pin: 0,
     poll_interval_ms: 5000,
     temperature_offset_c: 0,
     sea_level_pressure_hpa: 1013.25,
+    scale: 1.0,
+    offset: 0,
+    rx_pin: 0,
+    tx_pin: 0,
+    baud_rate: 9600,
     variable_prefix: '',
     enabled: true,
   })
@@ -454,20 +604,50 @@ function removeSensorConfig(index) {
   configSensors.value.splice(index, 1)
 }
 
+const lc = (type) => String(type || '').toLowerCase()
+
+// I²C devices configured by bus address.
 function usesAddress(type) {
-  return ['bme280', 'bmp280', 'sht31', 'bh1750', 'ina219', 'mpu6050'].includes(String(type || '').toLowerCase())
+  return ['bme280', 'bmp280', 'sht31', 'aht20', 'bh1750', 'ina219', 'mpu6050',
+          'sgp30', 'scd4x', 'ccs811', 'vl53l0x', 'ads1115', 'i2c_generic'].includes(lc(type))
 }
 
+// Primary GPIO: 1-Wire/DHT data, HX711 DT, MAX6675 SO, analog ADC, ultrasonic trig.
 function usesPin(type) {
-  return ['dht22', 'ds18b20'].includes(String(type || '').toLowerCase())
+  return ['dht22', 'dht11', 'ds18b20', 'hx711', 'max6675', 'analog', 'ultrasonic'].includes(lc(type))
+}
+
+// Second GPIO: HX711/MAX6675 clock (SCK), HC-SR04 echo.
+function usesClockPin(type) {
+  return ['hx711', 'max6675', 'ultrasonic'].includes(lc(type))
+}
+
+// Chip-select pin (MAX6675 thermocouple).
+function usesCsPin(type) {
+  return ['max6675'].includes(lc(type))
+}
+
+// Linear scale factor: HX711 counts→unit, analog gain.
+function usesScale(type) {
+  return ['hx711', 'analog'].includes(lc(type))
+}
+
+// Additive offset (analog: value = raw*scale + offset).
+function usesOffset(type) {
+  return ['analog'].includes(lc(type))
+}
+
+// UART sensors (ESP32 family only): rx/tx pins + baud rate.
+function usesUart(type) {
+  return ['mhz19', 'pms5003'].includes(lc(type))
 }
 
 function supportsTemperatureOffset(type) {
-  return ['bme280', 'bmp280', 'sht31'].includes(String(type || '').toLowerCase())
+  return ['bme280', 'bmp280', 'sht31', 'aht20'].includes(lc(type))
 }
 
 function supportsSeaLevelPressure(type) {
-  return ['bme280', 'bmp280'].includes(String(type || '').toLowerCase())
+  return ['bme280', 'bmp280'].includes(lc(type))
 }
 
 function formatHexAddress(value) {
@@ -500,6 +680,7 @@ async function saveSensorConfig() {
   errorMessage.value = ''
   statusMessage.value = null
   try {
+    const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback)
     const sensors = configSensors.value.map(s => ({
       ...s,
       id: String(s.id || '').trim(),
@@ -507,8 +688,15 @@ async function saveSensorConfig() {
       poll_interval_ms: Number(s.poll_interval_ms || 5000),
       temperature_offset_c: Number(s.temperature_offset_c || 0),
       sea_level_pressure_hpa: Number(s.sea_level_pressure_hpa || 1013.25),
-      address: Number.isFinite(Number(s.address)) ? Number(s.address) : 0x76,
-      pin: Number.isFinite(Number(s.pin)) ? Number(s.pin) : 0,
+      address: num(s.address, 0x76),
+      pin: num(s.pin, 0),
+      clock_pin: num(s.clock_pin, 0),
+      cs_pin: num(s.cs_pin, 0),
+      scale: num(s.scale, 1.0),
+      offset: num(s.offset, 0),
+      rx_pin: num(s.rx_pin, 0),
+      tx_pin: num(s.tx_pin, 0),
+      baud_rate: num(s.baud_rate, 9600),
       enabled: s.enabled !== false,
     })).filter(s => s.id && s.type)
 

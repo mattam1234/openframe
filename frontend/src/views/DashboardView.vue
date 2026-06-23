@@ -70,7 +70,20 @@
           </v-card-title>
           <v-card-text>
             <div v-if="screens.length" class="d-flex flex-wrap ga-4">
-              <ScreenPreview v-for="s in screens" :key="s.id" :screen="s" :scale="3" />
+              <div v-for="s in screens" :key="s.id" class="text-center">
+                <ScreenPreview :screen="s" :scale="3" />
+                <!-- F6: navigate this display's pages from the dashboard. The device
+                     owns the page order, so we just send next/prev. -->
+                <div class="d-flex align-center justify-center ga-1 mt-1">
+                  <v-btn icon="mdi-chevron-left" size="x-small" variant="text"
+                         @click="navScreen(s.id, 'prev')" />
+                  <span class="text-caption text-medium-emphasis text-truncate" style="max-width:120px">
+                    {{ s.title || s.page || '—' }}
+                  </span>
+                  <v-btn icon="mdi-chevron-right" size="x-small" variant="text"
+                         @click="navScreen(s.id, 'next')" />
+                </div>
+              </div>
             </div>
             <div v-else-if="screensLoaded" class="text-body-2 text-medium-emphasis">
               No active displays.
@@ -377,6 +390,14 @@ async function refreshScreens() {
   } finally {
     screensLoaded.value = true
   }
+}
+
+// F6: navigate a display's pages from the dashboard. The firmware owns the page
+// order (next/prev wrap), so we only send the direction; refresh shortly after to
+// reflect the new active page in the mirror.
+function navScreen(displayId, action) {
+  wsStore.send('page_navigation', { displayId, action })
+  setTimeout(refreshScreens, 300)
 }
 
 async function runSelfTest() {

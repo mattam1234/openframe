@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node tools/gzip-www.mjs",
+    "build:nogz": "vite build",
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",

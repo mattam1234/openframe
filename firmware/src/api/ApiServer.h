@@ -109,9 +109,21 @@ private:
     void broadcastFrame(const char* type, const JsonDocument& payload);
     void broadcastRawFrame(const char* type, const String& rawPayloadJson);
 
+    // True only when there's enough contiguous heap to safely allocate a WebSocket
+    // send buffer. AsyncWebSocket::textAll / client->text() allocate a buffer the
+    // size of the frame and THROW on failure — which aborts the whole device. Under
+    // memory pressure we'd rather silently drop a telemetry frame, so every WS send
+    // is gated on this. Floors are generous because the heap is fragmented, not just
+    // low (a small largest-block with plenty of free heap still fails a big alloc).
+    bool wsSendSafe() const;
+    static constexpr uint32_t WS_MIN_FREE_HEAP   = 24000;  // bytes
+    static constexpr uint32_t WS_MIN_ALLOC_BLOCK = 8000;   // bytes (largest contiguous)
+
     String buildStatusJson() const;
     String buildVariablesJson() const;
-    String buildLogsJson() const;
+    // maxCount > 0 limits the result to the most recent maxCount entries
+    // (used for the bounded WebSocket connect snapshot); 0 returns the full ring.
+    String buildLogsJson(size_t maxCount = 0) const;
     bool applyVariableUpdate(const JsonVariantConst& item, String& error) const;
 
     AsyncWebSocket _ws;

@@ -2,6 +2,7 @@
 #include <map>
 #include <math.h>
 #include "../core/PlatformCompat.h"
+#include "../managers/VariableManager.h"
 
 namespace {
 // Map an 8-bit level (0–255) to a PWM duty in [0, maxDuty]. With gamma on, applies
@@ -114,6 +115,14 @@ bool OutputManager::setAngle(const String& id, uint8_t angle) {
     const int index = findIndexById(id);
     if (index < 0) return false;
     return applyServo(static_cast<size_t>(index), angle);
+}
+
+bool OutputManager::getAnimation(const String& id, LedAnimation& animation, uint8_t& speed) const {
+    const int index = findIndexById(id);
+    if (index < 0 || _configs[index].type != OutputType::Ws2812) return false;
+    animation = _states[index].animation;
+    speed     = _states[index].animationSpeed;
+    return true;
 }
 
 bool OutputManager::setPosition(const String& id, int32_t steps) {
@@ -277,6 +286,7 @@ void OutputManager::setupOutput(size_t index) {
             }
             break;
     }
+    registerVariables(index);
 }
 
 bool OutputManager::applyDigital(size_t index, bool on) {
@@ -695,4 +705,139 @@ void OutputManager::emitOutputEvent(size_t index, const char* action) {
     String payload;
     serializeJson(doc, payload);
     EventBus::instance().publish(EventType::OutputStateChanged, cfg.id, payload);
+
+    pushVariables(index);   // F1: keep the output.<id>.* mirror variables in sync
 }
+
+// ── F1: live variable mirror ────────────────────────────────────────────────────
+#if OF_ENABLE_HW_VARIABLES
+
+void OutputManager::registerVariables(size_t index) {
+    auto& vm = VariableManager::instance();
+    const auto& cfg = _configs[index];
+    const String base  = "output." + cfg.id + ".";
+    const String label = cfg.id + " ";
+
+    auto subWritable = [this, index](const String& id) {
+        VariableManager::instance().subscribe(id, [this, index](const Variable& v) {
+            if (_suppressVarRouting) return;   // ignore our own mirror pushes
+            applyVariable(index, v);
+        });
+    };
+    auto defBool = [&](const char* prop) {
+        const String id = base + prop;
+        vm.define(id, VarType::Boolean, label + prop, /*persistent*/ false, /*readOnly*/ false);
+        subWritable(id);
+    };
+    auto defInt = [&](const char* prop, float mn, float mx, bool writable, const char* unit = "") {
+        const String id = base + prop;
+        vm.define(id, VarType::Integer, label + prop, false, /*readOnly*/ !writable);
+        vm.setMeta(id, mn, mx, unit);
+        if (writable) subWritable(id);
+    };
+
+    switch (cfg.type) {
+        case OutputType::Led:
+            defBool("on");
+            if (cfg.pwm) defInt("brightness", 0, 255, true);
+            break;
+        case OutputType::Rgb:
+            defBool("on");
+            defInt("brightness", 0, 255, true);
+            defInt("r", 0, 255, true); defInt("g", 0, 255, true); defInt("b", 0, 255, true);
+            break;
+        case OutputType::Ws2812: {
+            defBool("on");
+            defInt("brightness", 0, 255, true);
+            defInt("r", 0, 255, true); defInt("g", 0, 255, true); defInt("b", 0, 255, true);
+            defInt("speed", 1, 255, true);
+            defInt("led_count", 0, 65535, false);   // read-only
+            const String animId = base + "animation";
+            vm.define(animId, VarType::String, label + "animation", false, false);
+            vm.setOptions(animId, { "solid", "off", "blink", "breathe",
+                                    "rainbow", "chase", "colorwipe", "fire" });
+            subWritable(animId);
+            break;
+        }
+        case OutputType::Relay:
+            defBool("on");
+            break;
+        case OutputType::Buzzer:
+            defInt("freq", 0, 20000, true, "Hz");   // writing freq fires a short beep
+            break;
+        case OutputType::Servo:
+            defInt("angle", 0, 180, true, "deg");
+            break;
+        case OutputType::Stepper:
+            defInt("target",   -1000000, 1000000, true);
+            defInt("position", -1000000, 1000000, false);  // read-only
+            break;
+    }
+    pushVariables(index);
+}
+
+void OutputManager::pushVariables(size_t index) {
+    auto& vm = VariableManager::instance();
+    const auto& cfg = _configs[index];
+    const auto& st  = _states[index];
+    const String base = "output." + cfg.id + ".";
+
+    _suppressVarRouting = true;
+    switch (cfg.type) {
+        case OutputType::Led:
+            vm.setBool(base + "on", st.on);
+            if (cfg.pwm) vm.setInt(base + "brightness", st.brightness);
+            break;
+        case OutputType::Rgb:
+        case OutputType::Ws2812:
+            vm.setBool(base + "on", st.on);
+            vm.setInt(base + "brightness", st.brightness);
+            vm.setInt(base + "r", st.red);
+            vm.setInt(base + "g", st.green);
+            vm.setInt(base + "b", st.blue);
+            if (cfg.type == OutputType::Ws2812) {
+                vm.setInt(base + "speed", st.animationSpeed);
+                vm.setInt(base + "led_count", cfg.ledCount);
+                vm.setString(base + "animation", ledAnimationToString(st.animation));
+            }
+            break;
+        case OutputType::Relay:
+            vm.setBool(base + "on", st.on);
+            break;
+        case OutputType::Buzzer:
+            vm.setInt(base + "freq", st.buzzerFreq);
+            break;
+        case OutputType::Servo:
+            vm.setInt(base + "angle", st.angle);
+            break;
+        case OutputType::Stepper:
+            vm.setInt(base + "target", st.stepTarget);
+            vm.setInt(base + "position", st.stepPos);
+            break;
+    }
+    _suppressVarRouting = false;
+}
+
+void OutputManager::applyVariable(size_t index, const Variable& v) {
+    const auto& cfg = _configs[index];
+    const auto& st  = _states[index];
+    const int dot = v.id.lastIndexOf('.');
+    const String prop = (dot >= 0) ? v.id.substring(dot + 1) : v.id;
+
+    if      (prop == "on")         applyDigital(index, v.valueBool);
+    else if (prop == "brightness") applyBrightness(index, static_cast<uint8_t>(v.valueInt));
+    else if (prop == "r")          applyRgb(index, static_cast<uint8_t>(v.valueInt), st.green, st.blue);
+    else if (prop == "g")          applyRgb(index, st.red, static_cast<uint8_t>(v.valueInt), st.blue);
+    else if (prop == "b")          applyRgb(index, st.red, st.green, static_cast<uint8_t>(v.valueInt));
+    else if (prop == "speed")      setAnimation(cfg.id, st.animation, static_cast<uint8_t>(v.valueInt));
+    else if (prop == "animation")  setAnimation(cfg.id, ledAnimationFromString(v.valueString), st.animationSpeed);
+    else if (prop == "angle")      applyServo(index, static_cast<uint8_t>(v.valueInt));
+    else if (prop == "target")     { _states[index].stepTarget = v.valueInt; emitOutputEvent(index, "SetPosition"); }
+    else if (prop == "freq")       applyBuzzer(index, static_cast<uint16_t>(v.valueInt), 200);
+}
+
+#else  // OF_ENABLE_HW_VARIABLES — no-ops on constrained boards
+void OutputManager::registerVariables(size_t) {}
+void OutputManager::pushVariables(size_t) {}
+void OutputManager::applyVariable(size_t, const Variable&) {}
+#endif

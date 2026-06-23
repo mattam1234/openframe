@@ -35,6 +35,8 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "scene_restore")      return ActionType::SceneRestore;
     if (s == "ha_service_call")    return ActionType::HaServiceCall;
     if (s == "page_change")        return ActionType::PageChange;
+    if (s == "navigate_screen_next") return ActionType::NavigateScreenNext;
+    if (s == "navigate_screen_prev") return ActionType::NavigateScreenPrev;
     if (s == "notification")       return ActionType::Notification;
     if (s == "keyboard_shortcut")  return ActionType::KeyboardShortcut;
     if (s == "media_control")      return ActionType::MediaControl;
@@ -61,6 +63,8 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::SceneRestore:      return "scene_restore";
         case ActionType::HaServiceCall:     return "ha_service_call";
         case ActionType::PageChange:        return "page_change";
+        case ActionType::NavigateScreenNext: return "navigate_screen_next";
+        case ActionType::NavigateScreenPrev: return "navigate_screen_prev";
         case ActionType::Notification:      return "notification";
         case ActionType::KeyboardShortcut:  return "keyboard_shortcut";
         case ActionType::MediaControl:      return "media_control";
@@ -208,6 +212,8 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
             case ActionType::SceneRestore:      obj["value"] = s.value; break;
             case ActionType::HaServiceCall:     obj["ha_service"] = s.haService; obj["ha_entity_id"] = s.haEntityId; obj["body"] = s.body; break;
             case ActionType::PageChange:        obj["display_id"] = s.displayId; obj["page_id"] = s.pageId; break;
+            case ActionType::NavigateScreenNext:
+            case ActionType::NavigateScreenPrev: obj["display_id"] = s.displayId; break;
             case ActionType::Notification:      obj["message"] = s.message; break;
             case ActionType::KeyboardShortcut:  obj["keys"] = s.keysCombo; break;
             case ActionType::MediaControl:      obj["media_command"] = s.mediaCommand; break;
@@ -256,6 +262,8 @@ static String describeStep(const ActionStep& s) {
         case ActionType::SceneRestore: return "restore scene '" + s.value + "'";
         case ActionType::HaServiceCall: return "HA call " + s.haService + " → " + s.haEntityId;
         case ActionType::PageChange:   return "display " + s.displayId + " → page " + s.pageId;
+        case ActionType::NavigateScreenNext: return "display " + s.displayId + " → next screen";
+        case ActionType::NavigateScreenPrev: return "display " + s.displayId + " → previous screen";
         case ActionType::Notification: return "notify: " + s.message;
         case ActionType::KeyboardShortcut: return "keyboard " + s.keysCombo;
         case ActionType::MediaControl: return "media " + s.mediaCommand;
@@ -834,6 +842,22 @@ void ActionEngine::registerBuiltInExecutors() {
     runner.registerExecutor(ActionType::PageChange, [](const ActionStep& step, String& error) -> bool {
         if (!DisplayManager::instance().setActivePage(step.displayId, step.pageId)) {
             error = "Page change failed for display " + step.displayId + " page " + step.pageId;
+            return false;
+        }
+        return true;
+    });
+
+    runner.registerExecutor(ActionType::NavigateScreenNext, [](const ActionStep& step, String& error) -> bool {
+        if (!DisplayManager::instance().nextPage(step.displayId)) {
+            error = "Next-screen failed for display " + step.displayId;
+            return false;
+        }
+        return true;
+    });
+
+    runner.registerExecutor(ActionType::NavigateScreenPrev, [](const ActionStep& step, String& error) -> bool {
+        if (!DisplayManager::instance().previousPage(step.displayId)) {
+            error = "Previous-screen failed for display " + step.displayId;
             return false;
         }
         return true;

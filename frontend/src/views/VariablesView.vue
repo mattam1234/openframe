@@ -24,14 +24,14 @@
       </v-col>
     </v-row>
 
-    <!-- Local variables -->
-    <v-card class="mb-4" border flat>
+    <!-- Local variables, grouped by source (F3): Local / Sensors / Inputs / Outputs -->
+    <v-card v-for="g in localGroups" :key="g.key" class="mb-4" border flat>
       <v-card-title class="text-subtitle-1 d-flex align-center">
-        <v-icon class="mr-2" size="small" color="primary">mdi-chip</v-icon>
-        This node
-        <v-chip size="x-small" class="ml-2">{{ localVars.length }}</v-chip>
+        <v-icon class="mr-2" size="small" :color="g.color">{{ g.icon }}</v-icon>
+        {{ g.title }}
+        <v-chip size="x-small" class="ml-2">{{ g.rows.length }}</v-chip>
       </v-card-title>
-      <VarTable :rows="localVars" empty="No local variables." />
+      <VarTable :rows="g.rows" />
     </v-card>
 
     <!-- Mesh peers -->
@@ -44,7 +44,7 @@
       <VarTable :rows="node.rows" />
     </v-card>
 
-    <v-alert v-if="!localVars.length && !meshNodes.length" type="info" variant="tonal">
+    <v-alert v-if="!localGroups.length && !meshNodes.length" type="info" variant="tonal">
       No variables{{ search ? ' match the filter' : ' yet' }}. Mesh peers appear here once a gateway relays their values.
     </v-alert>
   </div>
@@ -72,9 +72,35 @@ function matches(v) {
 
 const filtered = computed(() => allVars.value.filter(matches))
 
-const localVars = computed(() =>
-  filtered.value.filter((v) => !v.id.startsWith('node/')).sort((a, b) => a.id.localeCompare(b.id)),
-)
+// F3 — categorise this node's variables by source. The firmware tags each variable
+// with `source` (sensor/input/output/local); fall back to the id prefix if absent.
+const SOURCE_GROUPS = [
+  { key: 'local',  title: 'This node', icon: 'mdi-chip',               color: 'primary' },
+  { key: 'sensor', title: 'Sensors',   icon: 'mdi-thermometer',        color: 'orange' },
+  { key: 'input',  title: 'Inputs',    icon: 'mdi-gesture-tap-button', color: 'green' },
+  { key: 'output', title: 'Outputs',   icon: 'mdi-led-on',             color: 'purple' },
+]
+
+function sourceOf(v) {
+  if (v.source) return v.source
+  if (v.id.startsWith('sensor.')) return 'sensor'
+  if (v.id.startsWith('input.')) return 'input'
+  if (v.id.startsWith('output.')) return 'output'
+  return 'local'
+}
+
+const localGroups = computed(() => {
+  const buckets = {}
+  for (const v of filtered.value) {
+    if (v.id.startsWith('node/')) continue
+    const s = sourceOf(v)
+    const key = ['sensor', 'input', 'output'].includes(s) ? s : 'local'
+    ;(buckets[key] ||= []).push(v)
+  }
+  return SOURCE_GROUPS
+    .map((g) => ({ ...g, rows: (buckets[g.key] || []).sort((a, b) => a.id.localeCompare(b.id)) }))
+    .filter((g) => g.rows.length)
+})
 
 // Group mesh vars (node/<srcId>/<name>) by source node, exposing the bare name.
 const meshNodes = computed(() => {
