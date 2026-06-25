@@ -179,6 +179,11 @@
 
       <!-- Displays -->
       <v-window-item value="displays">
+        <v-alert v-if="displaysSeeded" type="info" variant="tonal" density="compact" class="mb-3">
+          This board has a built-in panel, shown below with its default wiring. It's
+          working already — press <strong>Save</strong> to make the config editable and
+          persistent.
+        </v-alert>
         <div class="ld-grid">
           <v-card v-for="(disp, idx) in displays" :key="idx" class="ld-item ld-item--display" variant="flat">
             <div class="ld-item-head">
@@ -215,11 +220,17 @@
                     <v-select v-model="disp.reset_pin" :items="ioPins" label="Reset pin" density="compact" variant="outlined" hide-details clearable />
                     <v-select v-model="disp.cs_pin" :items="ioPins" label="CS pin (SPI)" density="compact" variant="outlined" hide-details clearable />
                     <v-select v-model="disp.dc_pin" :items="ioPins" label="DC pin (SPI)" density="compact" variant="outlined" hide-details clearable />
+                    <v-select v-model="disp.mosi_pin" :items="ioPins" label="MOSI pin (SPI, blank = default bus)" density="compact" variant="outlined" hide-details clearable />
+                    <v-select v-model="disp.sck_pin" :items="ioPins" label="SCK pin (SPI, blank = default bus)" density="compact" variant="outlined" hide-details clearable />
+                    <v-select v-model="disp.bl_pin" :items="ioPins" label="Backlight pin (SPI TFT)" density="compact" variant="outlined" hide-details clearable />
+                    <v-text-field v-model.number="disp.spi_frequency" label="SPI frequency (Hz)" placeholder="27000000" type="number" density="compact" variant="outlined" hide-details />
                     <v-text-field v-model.number="disp.contrast" label="Contrast (0-255)" placeholder="255" type="number" density="compact" variant="outlined" hide-details />
                     <v-select v-model.number="disp.rotation" :items="rotationItems" label="Rotation" density="compact" variant="outlined" hide-details />
                   </div>
                   <div class="text-caption text-medium-emphasis mt-1">
                     Leave offsets blank for auto. The 0.42" 72×40 panel auto-derives col offset 28 / COM pins 0x12 from its geometry.
+                    For SPI TFTs (ST7789/ILI9341), set CS/DC and the backlight pin; leave MOSI/SCK blank to use the board's default SPI bus.
+                    The 1.14" 240×135 ST7789 uses width 240, height 135, rotation 90°.
                   </div>
                 </v-expansion-panel-text>
               </v-expansion-panel>
@@ -257,6 +268,9 @@ const inputs = ref([])
 const outputs = ref([])
 const sensors = ref([])
 const displays = ref([])
+// True when the displays list came from the board's built-in panel default rather
+// than a saved config (see /api/displays `seeded`). Cleared once the user saves.
+const displaysSeeded = ref(false)
 
 // Per-section load success. A section that failed to load must not be saveable —
 // otherwise an empty form (from a failed GET, e.g. while the device reboots after
@@ -283,6 +297,9 @@ const displayTypes = [
   { title: 'SH1107 128×128 OLED (U8g2)', value: 'sh1107' },
   { title: 'SSD1309 128×64 OLED (U8g2)', value: 'ssd1309' },
   { title: 'Nokia 5110 / PCD8544 — 84×48 (SPI)', value: 'nokia5110' },
+  { title: 'ST7789 TFT — incl. 1.14" 240×135 (SPI)', value: 'st7789' },
+  { title: 'ILI9341 / ILI9342 TFT — 320×240 (SPI)', value: 'ili9341' },
+  { title: 'Nextion (UART)', value: 'nextion' },
 ]
 const rotationItems = [
   { title: '0°', value: 0 },
@@ -403,6 +420,7 @@ async function saveDisplays() {
   statusMessage.value = null
   try {
     await api.post('/api/displays', { displays: displays.value })
+    displaysSeeded.value = false  // now persisted — no longer a board default
     statusMessage.value = { type: 'success', text: 'Displays saved. Restart device to apply.' }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
@@ -444,6 +462,7 @@ async function refresh() {
           ? '0x' + disp.address.toString(16).toUpperCase()
           : (disp.address || '0x3C'),
       }))
+      displaysSeeded.value = !!d.seeded
       loaded.value.displays = true
     })
       .catch(() => { loaded.value.displays = false }),

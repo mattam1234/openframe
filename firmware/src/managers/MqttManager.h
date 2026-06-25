@@ -3,7 +3,10 @@
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <WiFiClient.h>
+#include "../OpenFrameConfig.h"
+#if OF_ENABLE_TLS
 #include <WiFiClientSecure.h>
+#endif
 #include <functional>
 #include <map>
 #include <vector>
@@ -69,11 +72,13 @@ private:
     void resubscribeAll();
 
     WiFiClient        _wifiClient;
-#if defined(ESP32)
+#if OF_ENABLE_TLS
+  #if defined(ESP32)
     WiFiClientSecure  _secureClient;
-#elif defined(ESP8266)
+  #elif defined(ESP8266)
     BearSSL::WiFiClientSecure _secureClient;
     BearSSL::X509List _caList;   // must outlive _secureClient
+  #endif
 #endif
     String           _caCert;    // PEM, loaded from OF_MQTT_CA_PATH
     bool             _tlsActive = false;

@@ -83,6 +83,44 @@ Encoders and keypads are configured in `inputs.json` (Filesystem browser) — se
 
 ---
 
+## Displays (Layout Designer → Displays)
+
+| Type | Bus | Notes |
+|------|-----|-------|
+| `ssd1306` / `sh1106` | I²C | 128×64 / 128×32 OLED |
+| `ssd1306_72x40` | I²C | 0.42" 72×40 OLED (U8g2; auto col-offset 28 / COM 0x12) |
+| `sh1107` / `ssd1309` | I²C | 128×128 / 128×64 OLED (U8g2) |
+| `nokia5110` | SPI | 84×48 PCD8544 LCD |
+| `st7789` | SPI | colour TFT incl. the 1.14" 240×135 IPS panel |
+| `ili9341` | SPI | 320×240 colour TFT (ILI9342-compatible) |
+| `nextion` | UART | smart display (own GUI) |
+
+**SPI TFT wiring**: set `cs_pin` + `dc_pin`, an optional `reset_pin`, and the
+**`bl_pin`** (backlight) — without the backlight pin driven the panel inits but
+stays black. Leave `mosi_pin`/`sck_pin` blank to use the board's default hardware
+SPI bus (fast); set them only when the panel is wired to other pins (the ESP32
+routes any GPIO to the SPI peripheral). For the 1.14" 240×135 ST7789 use
+`width` 240, `height` 135, `rotation` 90° — the driver re-derives the panel's RAM
+offsets from the native portrait geometry.
+
+**Integrated-panel boards auto-configure.** With *no* saved display config, these
+boards seed their built-in panel at boot (zero setup); saving any display in the
+UI overrides it:
+
+| Board | Panel | LCD pins (CS/DC/RST/MOSI/SCK/BL) |
+|-------|-------|----------------------------------|
+| `esp32s3geek` (Waveshare S3-GEEK) | 1.14" ST7789 240×135 | 10 / 8 / 9 / 11* / 12* / 7 |
+| `esp32s3box` (Espressif S3-BOX) | 2.4" ILI9341 320×240 | 5 / 4 / 48 / 6 / 7 / 45 |
+
+\* The GEEK's LCD is on the default SPI bus, so MOSI/SCK are left at the bus default.
+
+**microSD** (ESP32-S3-BOX only): a card is probed at boot on the board's default
+SPI bus (SCK 12 / MISO 13 / MOSI 11 / CS 10) and reported by **Dashboard → Run
+self-test** (`sd` section). Detection is best-effort — "no card" is a normal,
+passing state.
+
+---
+
 ## Choosing pins (quick rules)
 
 - Prefer plain GPIO for buttons/relays/LEDs.

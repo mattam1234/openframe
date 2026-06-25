@@ -1,7 +1,8 @@
 #include "OtaManager.h"
+#include "../OpenFrameConfig.h"
 
 #include <LittleFS.h>
-#if defined(ESP8266)
+#if defined(ESP8266) && OF_ENABLE_TLS
 #include <WiFiClientSecure.h>
 #endif
 
@@ -85,16 +86,25 @@ bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) 
     char url[128];
     snprintf(url, sizeof(url), GITHUB_RELEASES_API, repo.c_str());
 
+#if defined(ESP8266) && !OF_ENABLE_TLS
+    // The GitHub releases API is HTTPS-only and TLS is compiled out on this board
+    // (OF_ENABLE_TLS=0), so the auto update-check is unavailable here. Firmware can
+    // still be updated via local upload (/update) or a CMS push-OTA over HTTP.
+    (void)latestVersion;
+    (void)downloadUrl;
+    LOG_W(TAG, "GitHub update check unavailable: TLS not built in on this board");
+    return false;
+#else
     HTTPClient http;
-#if defined(ESP8266)
+  #if defined(ESP8266)
     // ESP8266 needs an explicit TLS client for the HTTPS GitHub API. There is no
     // on-device certificate store, so validation is skipped (setInsecure).
     WiFiClientSecure secureClient;
     secureClient.setInsecure();
     http.begin(secureClient, url);
-#else
+  #else
     http.begin(url);  // ESP32 HTTPClient sets up TLS transport internally
-#endif
+  #endif
     http.addHeader("User-Agent", "OpenFrame/" OF_VERSION_STRING);
     http.addHeader("Accept", "application/vnd.github+json");
 
@@ -138,6 +148,7 @@ bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) 
         LOG_I(TAG, "Firmware is up to date (" + current + ")");
     }
     return newer;
+#endif  // ESP8266 && !OF_ENABLE_TLS
 }
 
 // ── Private ───────────────────────────────────────────────────────────────────

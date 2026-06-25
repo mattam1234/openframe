@@ -104,6 +104,21 @@ import {
   mdiWifi,
   mdiWifiOff,
   mdiWifiRefresh,
+  mdiChartBar,
+  mdiStarCircle,
+  mdiRectangleOutline,
+  mdiMinus,
+  mdiCircle,
+  mdiCheckBold,
+  mdiCloseThick,
+  mdiArrowUpBold,
+  mdiArrowDownBold,
+  mdiBattery,
+  mdiHeart,
+  mdiHelpBox,
+  mdiImage,
+  mdiFitToPageOutline,
+  mdiChartLineVariant,
 } from '@mdi/js'
 import { aliases, mdi as mdiSvg } from 'vuetify/iconsets/mdi-svg'
 import 'vuetify/styles'
@@ -112,6 +127,21 @@ import App from './App.vue'
 import router from './router'
 
 const mdiIconMap = {
+  'mdi-chart-bar': mdiChartBar,
+  'mdi-star-circle': mdiStarCircle,
+  'mdi-rectangle-outline': mdiRectangleOutline,
+  'mdi-minus': mdiMinus,
+  'mdi-circle': mdiCircle,
+  'mdi-check-bold': mdiCheckBold,
+  'mdi-close-thick': mdiCloseThick,
+  'mdi-arrow-up-bold': mdiArrowUpBold,
+  'mdi-arrow-down-bold': mdiArrowDownBold,
+  'mdi-battery': mdiBattery,
+  'mdi-heart': mdiHeart,
+  'mdi-help-box': mdiHelpBox,
+  'mdi-image': mdiImage,
+  'mdi-fit-to-page-outline': mdiFitToPageOutline,
+  'mdi-chart-line-variant': mdiChartLineVariant,
   'mdi-access-point': mdiAccessPoint,
   'mdi-account-box-multiple': mdiAccountBoxMultiple,
   'mdi-air-filter': mdiAirFilter,

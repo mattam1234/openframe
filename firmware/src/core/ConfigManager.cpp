@@ -212,6 +212,13 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     auto ha                    = doc["ha"].to<JsonObject>();
     ha["enabled"]              = _config.ha.enabled;
     ha["discovery_prefix"]     = _config.ha.discoveryPrefix;
+    ha["import_enabled"]       = _config.ha.importEnabled;
+    ha["transport"]            = _config.ha.transport;
+    ha["import_prefix"]        = _config.ha.importPrefix;
+    ha["ws_host"]              = _config.ha.wsHost;
+    ha["ws_port"]              = _config.ha.wsPort;
+    ha["ws_token"]             = _config.ha.wsToken;
+    ha["ws_tls"]               = _config.ha.wsTls;
 
     auto ota                   = doc["ota"].to<JsonObject>();
     ota["enabled"]             = _config.ota.enabled;
@@ -315,6 +322,13 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
     if (doc["ha"].is<JsonObjectConst>()) {
         _config.ha.enabled         = doc["ha"]["enabled"]          | false;
         _config.ha.discoveryPrefix = doc["ha"]["discovery_prefix"] | String("homeassistant");
+        _config.ha.importEnabled   = doc["ha"]["import_enabled"]   | false;
+        _config.ha.transport       = doc["ha"]["transport"]        | String("mqtt");
+        _config.ha.importPrefix    = doc["ha"]["import_prefix"]    | String("homeassistant");
+        _config.ha.wsHost          = doc["ha"]["ws_host"]          | String("");
+        _config.ha.wsPort          = doc["ha"]["ws_port"]          | 8123;
+        _config.ha.wsToken         = doc["ha"]["ws_token"]         | String("");
+        _config.ha.wsTls           = doc["ha"]["ws_tls"]           | false;
     }
     if (doc["ota"].is<JsonObjectConst>()) {
         _config.ota.enabled    = doc["ota"]["enabled"]     | true;

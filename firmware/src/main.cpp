@@ -14,12 +14,14 @@
 #include "managers/GatewayManager.h"
 #include "managers/TimeManager.h"
 #include "managers/HaManager.h"
+#include "managers/HaBridgeManager.h"
 #include "managers/OtaManager.h"
 #include "hardware/InputManager.h"
 #include "hardware/OutputManager.h"
 #include "hardware/HidManager.h"
 #include "hardware/SensorManager.h"
 #include "hardware/DisplayManager.h"
+#include "hardware/SdCard.h"
 #include "hardware/TouchManager.h"
 #include "hardware/ModuleManager.h"
 #include "managers/ActionEngine.h"
@@ -91,7 +93,20 @@ void setup() {
     NodeLinkManager::instance().begin();
     GatewayManager::instance().begin();
     HaManager::instance().begin();
+    HaBridgeManager::instance().begin();
     OtaManager::instance().begin(webServer);
+
+    // ── Phase 2.5: Web server (before optional hardware) ──────────────────────
+    // Bring the API/UI up *before* the hardware subsystems below. The async web
+    // stack runs on its own task, so the web UI stays reachable even if a later
+    // hardware init (display framebuffer, SD mount, a flaky I²C sensor) hangs,
+    // crashes, or starves the heap — those would otherwise reboot the device
+    // before this point and leave the UI dead until safe mode kicks in. This is
+    // the "keep the device recoverable" idea from safe mode, applied on every boot.
+    NotificationManager::instance().begin();
+    ApiServer::instance().begin(webServer);
+    webServer.begin();
+    LOG_I(TAG, "Web server started on port 80");
 
     // ── Phase 3: Hardware & automation (skipped in safe mode) ─────────────────
     if (!safeMode) {
@@ -100,6 +115,17 @@ void setup() {
         HidManager::instance().begin();
         SensorManager::instance().begin();
         DisplayManager::instance().begin();
+
+        // microSD: the ESP32-S3-BOX has a card slot on the board's default SPI bus.
+        // Probe it once at boot (best-effort, non-fatal); state surfaces in the
+        // self-test. Other boards have no slot we drive, so don't touch the bus.
+#if OF_ENABLE_SD && defined(BOARD_NAME)
+        if (String(BOARD_NAME) == "esp32s3box") {
+            const bool sd = of_sd_begin(OF_BOX_SD_SCK, OF_BOX_SD_MISO, OF_BOX_SD_MOSI, OF_BOX_SD_CS);
+            LOG_I(TAG, sd ? "microSD card detected" : "microSD card not present");
+        }
+#endif
+
         TouchManager::instance().begin();
         ModuleManager::instance().begin();
         ActionEngine::instance().begin();
@@ -108,12 +134,6 @@ void setup() {
     } else {
         LOG_W(TAG, "Safe mode: hardware & automation subsystems disabled");
     }
-
-    NotificationManager::instance().begin();
-    ApiServer::instance().begin(webServer);
-
-    webServer.begin();
-    LOG_I(TAG, "Web server started on port 80");
 
     // Power management last: it starts the awake-window clock from here (#7).
     PowerManager::instance().begin();
@@ -130,6 +150,7 @@ void loop() {
     MqttManager::instance().loop();
     TelemetryManager::instance().loop();
     HaManager::instance().loop();
+    HaBridgeManager::instance().loop();
     CommandManager::instance().loop();
     NodeLinkManager::instance().loop();
     GatewayManager::instance().loop();

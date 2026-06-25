@@ -51,6 +51,29 @@ struct MqttConfig {
 struct HaConfig {
     bool   enabled         = false;
     String discoveryPrefix = "homeassistant";
+
+    // ── Import (HA → OpenFrame): read/control the wider HA ecosystem ──────────
+    // Master switch for the entity import + control bridge (see HaBridgeManager).
+    bool   importEnabled   = false;
+    // Transport used to read external HA state and call HA services:
+    //  • "mqtt"      — HA MQTT Statestream for state + the call_service convention
+    //                  for control (works on every board; needs HA-side setup).
+    //  • "websocket" — the HA WebSocket API with a long-lived token (turnkey control
+    //                  of any device/service; ESP32-family only — see OF_ENABLE_HA_WS).
+    //  • "auto"      — websocket when compiled in and a token is set, else mqtt.
+    String transport       = "mqtt";
+    // MQTT transport: the Statestream base_topic HA publishes entity states under.
+    // The bridge subscribes to "<importPrefix>/<domain>/<object_id>/state".
+    String importPrefix    = "homeassistant";
+    // WebSocket transport (Phase 3): HA host/port + long-lived access token. The
+    // token is a secret; /api/config is auth-gated (like mqtt.password), not masked.
+    String   wsHost;
+    uint16_t wsPort        = 8123;
+    String   wsToken;
+    // Use TLS (wss://) for the WebSocket. The access token is a long-lived secret;
+    // over plaintext ws:// the transport only sends it to loopback/LAN hosts and
+    // refuses public hosts (see HaWsTransport). Enable this for any remote HA.
+    bool     wsTls         = false;
 };
 
 struct OtaConfig {

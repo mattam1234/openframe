@@ -613,6 +613,27 @@
                     class="mt-2"
                   />
                 </template>
+                <template v-if="step.type === 'ha_service_call'">
+                  <v-combobox
+                    v-model="step.ha_service"
+                    :items="haServicePresets"
+                    label="Service"
+                    hint="domain.service, e.g. light.turn_on, switch.toggle, scene.turn_on"
+                    persistent-hint
+                    density="compact"
+                    class="mt-2"
+                  />
+                  <v-combobox
+                    v-model="step.ha_entity_id"
+                    :items="haEntityIds"
+                    label="Entity ID"
+                    hint="Target entity, e.g. light.living_room (imported entities are suggested)"
+                    persistent-hint
+                    density="compact"
+                    class="mt-2"
+                  />
+                  <v-text-field v-model="step.body" label="Service data (JSON, optional)" hint='Extra service_data, e.g. {"brightness":200} — supports {{variable}} templating' persistent-hint density="compact" class="mt-2" />
+                </template>
 
                 <!-- If: condition; runs steps up to the matching Else/End If only when true -->
                 <template v-if="step.type === 'if'">
@@ -844,6 +865,17 @@ const mediaCommands = [
   { value: 'volume_down', label: 'Volume down' },
   { value: 'mute', label: 'Mute' },
 ]
+// HA service presets for the ha_service_call step (free text also allowed).
+const haServicePresets = [
+  'light.turn_on', 'light.turn_off', 'light.toggle',
+  'switch.turn_on', 'switch.turn_off', 'switch.toggle',
+  'fan.turn_on', 'fan.turn_off',
+  'cover.open_cover', 'cover.close_cover',
+  'scene.turn_on', 'script.turn_on',
+  'climate.set_temperature',
+]
+// Entity-id suggestions, sourced from the imported HA entities (best-effort).
+const haEntityIds = ref([])
 // Condition operators (values must match firmware conditionOpFromString).
 const conditionOps = [
   { value: 'eq', label: '= equals' },
@@ -1147,7 +1179,16 @@ async function doDelete() {
   }
 }
 
+// Pull imported HA entity ids to suggest in the HA Service Call step (best-effort).
+async function loadHaEntities() {
+  try {
+    const res = await api.get('/api/ha/import')
+    haEntityIds.value = (res.entities || []).map(e => e.entity_id).filter(Boolean)
+  } catch { /* HA import not configured — leave suggestions empty */ }
+}
+
 onMounted(() => {
   refresh()
+  loadHaEntities()
 })
 </script>

@@ -103,6 +103,148 @@
       </v-col>
     </v-row>
 
+    <!-- Import: read & control the wider Home Assistant -->
+    <v-row class="mt-2">
+      <v-col cols="12" md="5">
+        <v-card>
+          <v-card-title>
+            <v-icon class="mr-2">mdi-import</v-icon>Import from Home Assistant
+          </v-card-title>
+          <v-card-subtitle>
+            Mirror HA entities into variables you can show on screens and use in actions.
+          </v-card-subtitle>
+          <v-card-text>
+            <v-switch
+              v-model="importForm.enabled"
+              color="primary"
+              label="Enable entity import"
+              hide-details
+              density="compact"
+              class="mb-2"
+            />
+            <v-select
+              v-model="importForm.transport"
+              :items="transportItems"
+              item-title="label"
+              item-value="value"
+              label="Transport"
+              density="compact"
+              :hint="transportHint"
+              persistent-hint
+              class="mb-2"
+            />
+            <v-text-field
+              v-if="importForm.transport === 'mqtt' || importForm.transport === 'auto'"
+              v-model="importForm.prefix"
+              label="Statestream prefix"
+              hint="HA mqtt_statestream base_topic (MQTT transport)"
+              persistent-hint
+              density="compact"
+              class="mb-2"
+            />
+            <template v-if="importForm.transport === 'websocket' || importForm.transport === 'auto'">
+              <v-text-field
+                v-model="importForm.wsHost"
+                label="HA host"
+                hint="Home Assistant host/IP for the WebSocket API (ESP32-S3 only)"
+                persistent-hint
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model.number="importForm.wsPort"
+                label="HA port"
+                type="number"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="importForm.wsToken"
+                label="Long-lived access token"
+                type="password"
+                hint="HA → Profile → Long-lived access tokens. Stored on the device."
+                persistent-hint
+                density="compact"
+                class="mb-2"
+              />
+              <v-switch
+                v-model="importForm.wsTls"
+                color="primary"
+                density="compact"
+                hide-details
+                inset
+                label="Use TLS (wss://)"
+              />
+              <p class="text-caption text-medium-emphasis mt-1 mb-0">
+                Required for a remote Home Assistant — the token is only sent in
+                plaintext to loopback/LAN hosts, otherwise the connection is refused.
+              </p>
+            </template>
+          </v-card-text>
+          <v-card-actions>
+            <v-btn :loading="savingSettings" color="primary" variant="tonal" prepend-icon="mdi-content-save" @click="saveImportSettings">
+              Save
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="7">
+        <v-card>
+          <v-card-title class="d-flex align-center justify-space-between">
+            Imported Entities
+            <v-btn size="small" variant="tonal" prepend-icon="mdi-plus" @click="addEntity">Add</v-btn>
+          </v-card-title>
+          <v-card-subtitle>
+            Each becomes variable <code>ha.&lt;name&gt;</code>. Mark writable on/off entities to control them.
+          </v-card-subtitle>
+          <v-card-text class="pa-0">
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th>Entity ID</th>
+                  <th>Variable</th>
+                  <th>Type</th>
+                  <th class="text-center">Writable</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(e, idx) in entities" :key="idx">
+                  <td>
+                    <v-text-field v-model="e.entity_id" placeholder="light.living_room" density="compact" variant="plain" hide-details />
+                  </td>
+                  <td>
+                    <v-text-field v-model="e.variable_id" :placeholder="defaultVarId(e.entity_id)" density="compact" variant="plain" hide-details />
+                  </td>
+                  <td>
+                    <v-select v-model="e.type" :items="typeItems" density="compact" variant="plain" hide-details style="min-width:96px" />
+                  </td>
+                  <td class="text-center">
+                    <v-checkbox v-model="e.writable" density="compact" hide-details class="d-inline-flex" />
+                  </td>
+                  <td>
+                    <v-btn icon="mdi-delete" size="x-small" variant="text" @click="entities.splice(idx, 1)" />
+                  </td>
+                </tr>
+                <tr v-if="entities.length === 0">
+                  <td colspan="5" class="text-medium-emphasis text-center py-4">
+                    No imported entities. Click “Add” to map an HA entity to a variable.
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card-text>
+          <v-card-actions>
+            <v-btn :loading="savingEntities" color="primary" variant="tonal" prepend-icon="mdi-content-save" @click="saveEntities">
+              Save &amp; restart
+            </v-btn>
+            <span class="text-caption text-medium-emphasis ml-2">Saving restarts the device to re-bind the bridge.</span>
+          </v-card-actions>
+        </v-card>
+      </v-col>
+    </v-row>
+
     <!-- Entity types overview -->
     <v-row class="mt-2">
       <v-col>
@@ -166,15 +308,109 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
+import api from '../api/client'
 
 const wsStore = useWebSocketStore()
 const deviceStore = useDeviceStore()
 const loading = ref(false)
 const statusMessage = ref(null)
 const haEvents = ref([])
+
+// ── Import (HA → variables) ──────────────────────────────────────────────────
+const importForm = reactive({ enabled: false, transport: 'mqtt', prefix: 'homeassistant', wsHost: '', wsPort: 8123, wsToken: '', wsTls: false })
+const entities = ref([])           // [{ entity_id, variable_id, type, writable }]
+const savingSettings = ref(false)
+const savingEntities = ref(false)
+
+const transportItems = [
+  { value: 'mqtt', label: 'MQTT (Statestream)' },
+  { value: 'websocket', label: 'WebSocket (HA API)' },
+  { value: 'auto', label: 'Auto' },
+]
+const typeItems = ['string', 'float', 'integer', 'boolean']
+const transportHint = computed(() => importForm.transport === 'mqtt'
+  ? 'Reads HA Statestream over MQTT; control needs an HA automation. Works on all boards.'
+  : 'WebSocket needs a long-lived token (Settings) — ESP32 family only; falls back to MQTT.')
+
+function defaultVarId(entityId) {
+  const dot = (entityId || '').indexOf('.')
+  return dot > 0 ? `ha.${entityId.slice(dot + 1)}` : 'ha.entity'
+}
+
+function addEntity() {
+  entities.value.push({ entity_id: '', variable_id: '', type: 'string', writable: false })
+}
+
+function applyImportConfig(config) {
+  importForm.enabled = config?.ha?.import_enabled ?? false
+  importForm.transport = config?.ha?.transport || 'mqtt'
+  importForm.prefix = config?.ha?.import_prefix || 'homeassistant'
+  importForm.wsHost = config?.ha?.ws_host || ''
+  importForm.wsPort = config?.ha?.ws_port ?? 8123
+  importForm.wsToken = config?.ha?.ws_token || ''
+  importForm.wsTls = config?.ha?.ws_tls ?? false
+}
+
+async function loadEntities() {
+  try {
+    const res = await api.get('/api/ha/import')
+    entities.value = (res.entities || []).map(e => ({
+      entity_id: e.entity_id || '',
+      variable_id: e.variable_id || '',
+      type: e.type || 'string',
+      writable: !!e.writable,
+    }))
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Failed to load imported entities' }
+  }
+}
+
+async function saveImportSettings() {
+  savingSettings.value = true
+  statusMessage.value = null
+  try {
+    const cfg = JSON.parse(JSON.stringify(deviceStore.config || {}))
+    cfg.ha = cfg.ha || {}
+    cfg.ha.import_enabled = importForm.enabled
+    cfg.ha.transport = importForm.transport
+    cfg.ha.import_prefix = importForm.prefix
+    cfg.ha.ws_host = importForm.wsHost
+    cfg.ha.ws_port = Number(importForm.wsPort) || 8123
+    cfg.ha.ws_token = importForm.wsToken
+    cfg.ha.ws_tls = importForm.wsTls
+    await deviceStore.saveConfig(cfg)
+    applyImportConfig(deviceStore.config)
+    statusMessage.value = { type: 'success', text: 'Import settings saved.' }
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Failed to save settings' }
+  } finally {
+    savingSettings.value = false
+  }
+}
+
+async function saveEntities() {
+  savingEntities.value = true
+  statusMessage.value = null
+  try {
+    const clean = entities.value
+      .map(e => ({
+        entity_id: String(e.entity_id || '').trim(),
+        variable_id: String(e.variable_id || '').trim() || defaultVarId(e.entity_id),
+        type: e.type || 'string',
+        writable: !!e.writable,
+      }))
+      .filter(e => e.entity_id.includes('.'))
+    const res = await api.post('/api/ha/import', { entities: clean })
+    statusMessage.value = { type: 'success', text: res.message || 'Saved. Restarting…' }
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Failed to save entities' }
+  } finally {
+    savingEntities.value = false
+  }
+}
 
 const health = computed(() => wsStore.health)
 const config = computed(() => deviceStore.config)
@@ -232,6 +468,8 @@ async function refresh() {
   statusMessage.value = null
   try {
     await deviceStore.fetchConfig()
+    applyImportConfig(deviceStore.config)
+    await loadEntities()
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Failed to load config' }
   } finally {

@@ -93,6 +93,30 @@ const fs = {
   rename: (from, to) => request('POST', '/api/fs/rename', { from, to }),
 }
 
+/**
+ * Display image helpers — upload/list/delete pre-converted OFIM images used by
+ * image/background widgets. Uploads send raw bytes (streamed to a file device-side).
+ */
+const images = {
+  list: () => request('GET', '/api/images'),
+
+  async upload(name, bytes) {
+    const res = await fetch(`${BASE}/api/images?name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/octet-stream' }),
+      body: bytes,
+    })
+    if (!res.ok) throw new Error(`upload ${name} → ${res.status}: ${await res.text()}`)
+    return res.json()
+  },
+
+  async remove(name) {
+    const res = await fetch(`${BASE}/api/images?name=${encodeURIComponent(name)}`, { method: 'DELETE', headers: authHeaders() })
+    if (!res.ok) throw new Error(`delete ${name} → ${res.status}: ${await res.text()}`)
+    return res.json()
+  },
+}
+
 export default {
   get:    (path)         => request('GET',    path),
   post:   (path, body)   => request('POST',   path, body),
@@ -100,4 +124,5 @@ export default {
   delete: (path)         => request('DELETE', path),
   patch:  (path, body)   => request('PATCH',  path, body),
   fs,
+  images,
 }

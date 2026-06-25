@@ -133,6 +133,16 @@ void MqttManager::configureTransport() {
     const auto& cfg = ConfigManager::instance().config().mqtt;
     _tlsActive = cfg.tls;
 
+#if !OF_ENABLE_TLS
+    // TLS is compiled out on this board (no BearSSL — see OF_ENABLE_TLS). Fall back
+    // to a plain connection and warn if the config asked for TLS.
+    if (cfg.tls) {
+        _tlsActive = false;
+        LOG_W(TAG, "MQTT TLS requested but not supported on this board — connecting in plaintext");
+    }
+    _client.setClient(_wifiClient);
+    return;
+#else
     if (!cfg.tls) {
         _client.setClient(_wifiClient);
         return;
@@ -140,14 +150,14 @@ void MqttManager::configureTransport() {
 
     const bool haveCa = StorageManager::instance().readRaw(OF_MQTT_CA_PATH, _caCert) && _caCert.length();
 
-#if defined(ESP32)
+  #if defined(ESP32)
     if (cfg.tlsInsecure) {
         _secureClient.setInsecure();
     } else if (haveCa) {
         _secureClient.setCACert(_caCert.c_str());
     }
     _client.setClient(_secureClient);
-#elif defined(ESP8266)
+  #elif defined(ESP8266)
     // BearSSL is RAM-hungry; cap the TLS buffers so it fits alongside the async
     // web server and the rest of the stack.
     _secureClient.setBufferSizes(1024, 1024);
@@ -158,13 +168,14 @@ void MqttManager::configureTransport() {
         _secureClient.setTrustAnchors(&_caList);
     }
     _client.setClient(_secureClient);
-#endif
+  #endif
 
     if (!cfg.tlsInsecure && !haveCa) {
         LOG_W(TAG, "TLS on but no CA at " OF_MQTT_CA_PATH " and not insecure — TLS handshake will fail. "
                    "Upload a CA via the file browser or enable tls_insecure.");
     }
     LOG_I(TAG, String("MQTT TLS enabled") + (cfg.tlsInsecure ? " (insecure — cert not validated)" : ""));
+#endif  // OF_ENABLE_TLS
 }
 
 void MqttManager::connect() {

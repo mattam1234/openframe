@@ -44,6 +44,7 @@
 #define OF_PROFILES_PATH "/profiles"
 #define OF_TEMPLATES_PATH "/templates"
 #define OF_DISPLAY_PAGES_PATH "/pages"
+#define OF_IMAGES_PATH "/images"
 #define OF_ACTIONS_PATH "/actions.json"
 #define OF_MACROS_PATH "/macros.json"
 #define OF_SCENES_PATH "/scenes.json"
@@ -54,6 +55,10 @@
 // Set of HA discovery topics published last boot, so we can clear (publish empty
 // retained payload) the ones for entities that no longer exist after a config edit.
 #define OF_HA_ENTITIES_PATH "/ha_entities.json"
+// List of Home Assistant entities imported into the variable bus (HA → OpenFrame):
+// each maps an HA entity_id to a live Variable that the display designer / actions
+// can read, and (when writable) control. See HaBridgeManager.
+#define OF_HA_IMPORT_PATH "/ha_import.json"
 #define OF_CONFIG_BACKUP_DIR "/cfgbak"
 #define OF_CONFIG_BACKUP_KEEP 5
 
@@ -105,6 +110,29 @@
         #define OF_ACTION_HISTORY_SIZE 100
     #else
         #define OF_ACTION_HISTORY_SIZE 1000
+    #endif
+#endif
+
+// Home Assistant entity import (HA → variable bus). Reads external HA entity state
+// into live Variables (bind them in the screen designer / read them in actions) and,
+// for writable entities, controls the HA device. The import set is user-curated and
+// bounded, so the extra variables are few — enabled on all boards. The MQTT transport
+// (HA Statestream + call_service) works everywhere; the richer WebSocket transport
+// (turnkey control via the HA API, no HA-side automations) is gated separately below.
+#ifndef OF_ENABLE_HA_IMPORT
+    #define OF_ENABLE_HA_IMPORT 1
+#endif
+// WebSocket transport to the HA API (long-lived token): a persistent client socket +
+// state_changed event firehose + larger JSON. Limited to the ESP32-S3 family — they
+// have PSRAM and the IRAM headroom for the WebSockets client, and they're the boards
+// with displays where you'd show HA info. The classic esp32dev is already IRAM-bound
+// (BLE-HID + WiFi + async web) and overflows with the WS client added, and the
+// constrained boards (C3/8266) lack the heap; all of them keep the MQTT fallback.
+#ifndef OF_ENABLE_HA_WS
+    #if defined(ESP32S3_BOARD)
+        #define OF_ENABLE_HA_WS 1
+    #else
+        #define OF_ENABLE_HA_WS 0
     #endif
 #endif
 
@@ -190,6 +218,57 @@
         #define OF_ENABLE_U8G2 1
     #else
         #define OF_ENABLE_U8G2 0
+    #endif
+#endif
+
+// microSD card support. Only the ESP32-S3-BOX ships a card slot we drive, but the
+// driver compiles in across the S3 family so the self-test can report SD state.
+// Mounting is attempted at boot for the box only (see main.cpp). The SD bus is the
+// board's default hardware-SPI pins (SCK12/MISO13/MOSI11/CS10 on the S3-BOX
+// variant), which is separate from the panel's own SPI bus (SCK7/MOSI6) — so SD
+// and the display don't contend. Override the pins per board if your unit differs.
+#ifndef OF_ENABLE_SD
+    #if defined(ESP32S3_BOARD)
+        #define OF_ENABLE_SD 1
+    #else
+        #define OF_ENABLE_SD 0
+    #endif
+#endif
+#ifndef OF_BOX_SD_SCK
+    #define OF_BOX_SD_SCK  12
+    #define OF_BOX_SD_MISO 13
+    #define OF_BOX_SD_MOSI 11
+    #define OF_BOX_SD_CS   10
+#endif
+
+// Display image widgets (background + sprite). Images are pre-converted on the host
+// to a tiny on-device format (OFIM: RGB565 for colour panels, 1-bit for mono), so
+// the firmware never decodes JPEG/PNG — it just blits. Enabled on the ESP32 family
+// (the ESP8266 is too flash/RAM-tight). The decoded frame is cached in PSRAM where
+// available. Override per board with -DOF_ENABLE_IMAGES=0/1.
+#ifndef OF_ENABLE_IMAGES
+    #if defined(ESP32)
+        #define OF_ENABLE_IMAGES 1
+    #else
+        #define OF_ENABLE_IMAGES 0
+    #endif
+#endif
+// Largest accepted image upload. A 320×240 RGB565 frame is ~150 KB; cap with margin.
+#ifndef OF_IMAGE_MAX_BYTES
+    #define OF_IMAGE_MAX_BYTES (200 * 1024)
+#endif
+
+// TLS / BearSSL. On the ESP8266 a single TLS handshake needs ~16-22 KB of heap —
+// most of the ~25 KB free at boot — so MQTT-over-TLS or an HTTPS update check can
+// OOM-crash the device, and BearSSL adds ~56 KB of flash. Gate it off there: the
+// ESP8266 falls back to plain MQTT (the norm for a LAN broker) and skips the HTTPS
+// GitHub release check (local upload + CMS push-OTA use plain HTTP and still work).
+// ESP32-family TLS lives in the SDK, so it stays on there. Override with -DOF_ENABLE_TLS.
+#ifndef OF_ENABLE_TLS
+    #if defined(ESP8266_BOARD)
+        #define OF_ENABLE_TLS 0
+    #else
+        #define OF_ENABLE_TLS 1
     #endif
 #endif
 

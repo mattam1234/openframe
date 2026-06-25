@@ -16,6 +16,7 @@
 #include "../hardware/DisplayManager.h"
 #include "../hardware/ModuleManager.h"
 #include "../hardware/HardwareInfo.h"
+#include "../hardware/SdCard.h"
 #include "../managers/ActionEngine.h"
 #include "../managers/MacroManager.h"
 #include "../managers/SceneManager.h"
@@ -485,6 +486,15 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().handleSensorsUpdate(request, body);
     });
 
+    // Home Assistant entity import (HA → variable bus). GET returns the imported set;
+    // POST replaces it and restarts to re-bind the bridge (like inputs/outputs).
+    server.on("/api/ha/import", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendHaImport(request);
+    });
+    registerJsonPost(server, "/api/ha/import", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleHaImportUpdate(request, body);
+    });
+
     // Sub-route before parent (see note above).
     server.on("/api/displays/pages", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendDisplayPages(request);
@@ -693,6 +703,22 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
                 freeTempStringBody(request);
             }
         });
+
+    // ── Display images (background + sprite widgets) ──────────────────────────
+    server.on("/api/images", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendImages(request);
+    });
+    server.on("/api/images", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().handleImageDelete(request);
+    });
+    // Streaming upload: the raw OFIM body is written straight to /images/<name> in
+    // chunks, never buffered whole — a full-screen colour frame is ~150 KB.
+    server.on("/api/images", HTTP_POST,
+        [](AsyncWebServerRequest*) {},
+        nullptr,
+        [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+            ApiServer::instance().handleImageUploadChunk(request, data, len, index, total);
+        });
 }
 
 void ApiServer::registerWebSocket(AsyncWebServer& server) {
@@ -827,6 +853,10 @@ void ApiServer::sendSelfTest(AsyncWebServerRequest* request) const {
         }
     }
     i2c["ok"] = true;  // an empty bus is valid; the scan completing is the pass
+
+    // microSD: report mount state on boards with a slot we drive (S3-BOX). "No
+    // card" is a valid, passing state — this surfaces whether one is present.
+    of_sd_fill_json(doc["sd"].to<JsonObject>());
 
     doc["ok"] = ramOk && flashOk && fsOk;
     sendJson(request, doc);
@@ -1706,6 +1736,15 @@ void ApiServer::sendSensors(AsyncWebServerRequest* request) const {
     sendJson(request, doc);
 }
 
+void ApiServer::sendHaImport(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    if (!StorageManager::instance().readJson(OF_HA_IMPORT_PATH, doc)) {
+        doc["entities"].to<JsonArray>();
+    }
+    doc["count"] = doc["entities"].is<JsonArrayConst>() ? doc["entities"].as<JsonArrayConst>().size() : 0;
+    sendJson(request, doc);
+}
+
 void ApiServer::sendScreens(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     DisplayManager::instance().fillScreensJson(doc["screens"].to<JsonArray>());
@@ -1715,18 +1754,53 @@ void ApiServer::sendScreens(AsyncWebServerRequest* request) const {
 
 void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    if (!StorageManager::instance().readJson(OF_DISPLAYS_PATH, doc)) {
+
+    // A board with an integrated panel (S3-GEEK/-BOX) seeds a built-in display in
+    // memory when no config is persisted — but displays.json still exists as an
+    // empty array, so a plain read returns nothing and the UI shows no display.
+    // Fall back to the live DisplayManager configs whenever the persisted list is
+    // missing OR empty, emitting the full field set so the seeded default is
+    // visible and editable (and saving it persists it verbatim).
+    const bool read = StorageManager::instance().readJson(OF_DISPLAYS_PATH, doc);
+    const bool hasPersisted = read && doc["displays"].is<JsonArrayConst>()
+                              && doc["displays"].as<JsonArrayConst>().size() > 0;
+
+    if (!hasPersisted) {
+        doc.clear();
         auto arr = doc["displays"].to<JsonArray>();
         for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
             auto obj = arr.add<JsonObject>();
-            obj["id"] = cfg.id;
-            obj["type"] = cfg.type;
+            obj["id"]      = cfg.id;
+            obj["type"]    = cfg.type;
             obj["enabled"] = cfg.enabled;
-            obj["width"] = cfg.width;
-            obj["height"] = cfg.height;
+            obj["width"]   = cfg.width;
+            obj["height"]  = cfg.height;
             obj["address"] = cfg.address;
+            obj["rotation"]            = cfg.rotation;
+            obj["refresh_interval_ms"] = cfg.refreshIntervalMs;
+            obj["contrast"]            = cfg.contrast;
+            obj["spi_frequency"]       = cfg.spiFrequency;
+            if (cfg.initialPageId.length()) obj["page"] = cfg.initialPageId;
+            // Emit only the pins that are actually wired (>= 0) so the UI's pin
+            // selectors show blank for unused fields rather than "-1".
+            if (cfg.resetPin >= 0)     obj["reset_pin"] = cfg.resetPin;
+            if (cfg.sdaPin >= 0)       obj["sda_pin"]   = cfg.sdaPin;
+            if (cfg.sclPin >= 0)       obj["scl_pin"]   = cfg.sclPin;
+            if (cfg.csPin >= 0)        obj["cs_pin"]    = cfg.csPin;
+            if (cfg.dcPin >= 0)        obj["dc_pin"]    = cfg.dcPin;
+            if (cfg.mosiPin >= 0)      obj["mosi_pin"]  = cfg.mosiPin;
+            if (cfg.sckPin >= 0)       obj["sck_pin"]   = cfg.sckPin;
+            if (cfg.backlightPin >= 0) obj["bl_pin"]    = cfg.backlightPin;
+            if (cfg.backlightActiveLow) obj["bl_active_low"] = true;
+            // Sub-window mapping (small OLEDs) — only when not auto.
+            if (cfg.colOffset != 0xFF)  obj["col_offset"]  = cfg.colOffset;
+            if (cfg.pageOffset != 0xFF) obj["page_offset"] = cfg.pageOffset;
+            if (cfg.comPins >= 0)       obj["com_pins"]    = cfg.comPins;
         }
+        // Flag so the UI can hint that this is an unsaved board default.
+        doc["seeded"] = true;
     }
+
     doc["count"] = doc["displays"].is<JsonArrayConst>() ? doc["displays"].as<JsonArrayConst>().size() : 0;
     sendJson(request, doc);
 }
@@ -1756,6 +1830,7 @@ void ApiServer::sendDisplayPages(AsyncWebServerRequest* request) const {
         page["id"] = id;
         page["title"] = pageDoc["title"] | id;
         page["displayId"] = pageDoc["display_id"] | String("");
+        if (!pageDoc["bg"].isNull()) page["bg"] = pageDoc["bg"];
 
         auto widgets = page["widgets"].to<JsonArray>();
         if (pageDoc["widgets"].is<JsonArrayConst>()) {
@@ -1772,12 +1847,104 @@ void ApiServer::sendDisplayPages(AsyncWebServerRequest* request) const {
                 out["suffix"] = item["suffix"] | String("");
                 out["decimals"] = item["decimals"] | 1;
                 out["maxChars"] = item["max_chars"] | 0;
+                // Rich-widget geometry/style (camelCase back to the designer).
+                if (!item["w"].isNull())      out["w"]      = item["w"].as<int>();
+                if (!item["h"].isNull())      out["h"]      = item["h"].as<int>();
+                if (!item["align"].isNull())  out["align"]  = item["align"].as<int>();
+                if (!item["color"].isNull())  out["color"]  = item["color"];
+                if (!item["bg"].isNull())     out["bg"]     = item["bg"];
+                if (!item["filled"].isNull()) out["filled"] = item["filled"].as<bool>();
+                if (!item["min"].isNull())    out["min"]    = item["min"].as<float>();
+                if (!item["max"].isNull())    out["max"]    = item["max"].as<float>();
             }
         }
     }
 
     doc["count"] = arr.size();
     sendJson(request, doc);
+}
+
+// Keep image file names to a safe basename: alnum + . _ - only, no path separators,
+// length-capped. Empty result means "reject".
+static String sanitizeImageName(const String& in) {
+    String out;
+    for (size_t i = 0; i < in.length() && out.length() < 48; ++i) {
+        const char c = in[i];
+        if (isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-') out += c;
+    }
+    if (out == "." || out == "..") return String("");
+    return out;
+}
+
+void ApiServer::sendImages(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    auto arr = doc["images"].to<JsonArray>();
+#if OF_ENABLE_IMAGES
+    for (const auto& e : StorageManager::instance().listEntries(OF_IMAGES_PATH)) {
+        if (e.isDir) continue;
+        auto o = arr.add<JsonObject>();
+        o["name"] = e.name;
+        o["size"] = e.size;
+    }
+    doc["supported"] = true;
+#else
+    doc["supported"] = false;
+#endif
+    doc["count"] = arr.size();
+    sendJson(request, doc);
+}
+
+void ApiServer::handleImageDelete(AsyncWebServerRequest* request) {
+    if (!requireAuth(request)) return;
+    const String name = sanitizeImageName(request->hasParam("name") ? request->getParam("name")->value() : String(""));
+    if (!name.length()) { sendError(request, 400, "Missing/invalid name"); return; }
+    const bool ok = StorageManager::instance().remove(String(OF_IMAGES_PATH) + "/" + name);
+    DisplayManager::instance().evictImage(name);
+    JsonDocument res;
+    res["ok"] = ok;
+    sendJson(request, res);
+}
+
+void ApiServer::handleImageUploadChunk(AsyncWebServerRequest* request, uint8_t* data,
+                                       size_t len, size_t index, size_t total) {
+#if OF_ENABLE_IMAGES
+    if (total > OF_IMAGE_MAX_BYTES) {
+        if (index + len >= total) sendError(request, 413, "Image too large");
+        return;
+    }
+    if (index == 0) {
+        if (!requireAuth(request)) return;
+        const String name = sanitizeImageName(request->hasParam("name") ? request->getParam("name")->value() : String(""));
+        if (!name.length()) { sendError(request, 400, "Missing/invalid name"); return; }
+        StorageManager::instance().mkdirs(OF_IMAGES_PATH);
+        File* f = new File(LittleFS.open(String(OF_IMAGES_PATH) + "/" + name, "w"));
+        if (!f || !*f) { delete f; sendError(request, 500, "Could not open image for writing"); return; }
+        request->_tempObject = f;
+        // Close + free a partially-written file if the connection drops mid-upload;
+        // loadImage() rejects truncated files by header/size validation.
+        request->onDisconnect([request]() {
+            File* tf = static_cast<File*>(request->_tempObject);
+            if (tf) { tf->close(); delete tf; request->_tempObject = nullptr; }
+        });
+    }
+    File* f = static_cast<File*>(request->_tempObject);
+    if (!f) return;
+    if (len) f->write(data, len);
+    if (index + len == total) {
+        const String name = sanitizeImageName(request->hasParam("name") ? request->getParam("name")->value() : String(""));
+        f->close();
+        delete f;
+        request->_tempObject = nullptr;
+        DisplayManager::instance().evictImage(name);  // show the new image without a reboot
+        JsonDocument res;
+        res["ok"] = true;
+        res["name"] = name;
+        sendJson(request, res);
+    }
+#else
+    (void)data; (void)len;
+    if (index + len >= total) sendError(request, 501, "Images not supported on this board");
+#endif
 }
 
 void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -1997,6 +2164,44 @@ void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String
     scheduleRestart();
 }
 
+void ApiServer::handleHaImportUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument source;
+    if (deserializeJson(source, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+    // Require the array so a malformed request can't silently wipe the import set.
+    if (!source["entities"].is<JsonArrayConst>()) {
+        sendError(request, 400, "Missing 'entities' array");
+        return;
+    }
+
+    JsonDocument toSave;
+    auto entities = toSave["entities"].to<JsonArray>();
+    for (JsonObjectConst item : source["entities"].as<JsonArrayConst>()) {
+        const String entityId = item["entity_id"] | String("");
+        // entity_id must be "<domain>.<object_id>"; skip anything malformed.
+        if (entityId.indexOf('.') <= 0) continue;
+        auto out = entities.add<JsonObject>();
+        out["entity_id"]   = entityId;
+        out["variable_id"] = item["variable_id"] | String("");
+        out["type"]        = item["type"] | String("string");  // integer|float|boolean|string
+        out["writable"]    = item["writable"] | false;
+    }
+
+    if (!StorageManager::instance().writeJson(OF_HA_IMPORT_PATH, toSave)) {
+        sendError(request, 500, "Failed to save HA import");
+        return;
+    }
+
+    JsonDocument response;
+    response["ok"] = true;
+    response["restartRequired"] = true;
+    response["message"] = "HA import saved. Restarting to apply.";
+    sendJson(request, response);
+    scheduleRestart();
+}
+
 void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body) {
     JsonDocument source;
     if (deserializeJson(source, body)) {
@@ -2053,6 +2258,11 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
             if (item["mosi_pin"].is<int>()) out["mosi_pin"] = item["mosi_pin"].as<int>();
             if (item["sck_pin"].is<int>()) out["sck_pin"] = item["sck_pin"].as<int>();
             if (item["spi_frequency"].is<int>()) out["spi_frequency"] = item["spi_frequency"].as<int>();
+            // Backlight pin for integrated TFT panels (S3-GEEK/-BOX) — without it
+            // the panel inits but stays dark. Only persist when present so an
+            // omitted field means "no backlight pin / always-on".
+            if (item["bl_pin"].is<int>()) out["bl_pin"] = item["bl_pin"].as<int>();
+            if (item["bl_active_low"].is<bool>()) out["bl_active_low"] = item["bl_active_low"].as<bool>();
             if (item["rx_pin"].is<int>()) out["rx_pin"] = item["rx_pin"].as<int>();
             if (item["tx_pin"].is<int>()) out["tx_pin"] = item["tx_pin"].as<int>();
             if (item["baud_rate"].is<int>()) out["baud_rate"] = item["baud_rate"].as<int>();
@@ -2076,6 +2286,8 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
             pageDoc["id"] = pageId;
             pageDoc["title"] = item["title"] | pageId;
             pageDoc["display_id"] = item["displayId"] | String("");
+            // Page background colour (colour panels) — hex string "#RRGGBB".
+            if (!item["bg"].isNull()) pageDoc["bg"] = item["bg"];
 
             auto widgets = pageDoc["widgets"].to<JsonArray>();
             if (item["widgets"].is<JsonArrayConst>()) {
@@ -2092,6 +2304,18 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
                     out["suffix"] = w["suffix"] | String("");
                     out["decimals"] = w["decimals"] | 1;
                     out["max_chars"] = w["maxChars"] | 0;
+
+                    // Geometry/style for the richer widget types (rect/line/circle/bar/
+                    // led/icon) and per-widget colour + alignment. Persist only when
+                    // present so simple text pages stay compact and round-trip cleanly.
+                    if (w["w"].is<int>())        out["w"]      = w["w"].as<int>();
+                    if (w["h"].is<int>())        out["h"]      = w["h"].as<int>();
+                    if (w["align"].is<int>())    out["align"]  = w["align"].as<int>();
+                    if (!w["color"].isNull())    out["color"]  = w["color"];   // "#RRGGBB"
+                    if (!w["bg"].isNull())       out["bg"]     = w["bg"];
+                    if (w["filled"].is<bool>())  out["filled"] = w["filled"].as<bool>();
+                    if (!w["min"].isNull())      out["min"]    = w["min"].as<float>();
+                    if (!w["max"].isNull())      out["max"]    = w["max"].as<float>();
                 }
             }
 

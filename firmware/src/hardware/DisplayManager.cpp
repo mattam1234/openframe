@@ -1,6 +1,9 @@
 #include "DisplayManager.h"
 #include "../OpenFrameConfig.h"
 #include "../core/PlatformCompat.h"  // of_i2c_begin — owns the shared I²C bus pins
+#include "../managers/TimeManager.h"  // DateTime widget formatting
+#include <time.h>
+#include <math.h>
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -52,6 +55,161 @@ int16_t readInt16(const JsonVariantConst& value, int16_t defaultValue) {
     }
     return value | defaultValue;
 }
+
+// Widget colours arrive as "#RRGGBB" (UI) or a raw RGB565 int; accept both.
+uint16_t readColor(const JsonVariantConst& value, uint16_t fallback) {
+    if (value.is<const char*>()) return of_rgb565_from_hex(value.as<const char*>(), fallback);
+    if (value.is<int>())         return static_cast<uint16_t>(value.as<int>());
+    return fallback;
+}
+
+DisplayWidgetType widgetTypeFromString(const String& s) {
+    if (s == "value")    return DisplayWidgetType::Value;
+    if (s == "datetime") return DisplayWidgetType::DateTime;
+    if (s == "rect")     return DisplayWidgetType::Rect;
+    if (s == "line")     return DisplayWidgetType::Line;
+    if (s == "circle")   return DisplayWidgetType::Circle;
+    if (s == "bar")      return DisplayWidgetType::Bar;
+    if (s == "led")      return DisplayWidgetType::Led;
+    if (s == "icon")      return DisplayWidgetType::Icon;
+    if (s == "image")     return DisplayWidgetType::Image;
+    if (s == "gauge")     return DisplayWidgetType::Gauge;
+    if (s == "sparkline") return DisplayWidgetType::Sparkline;
+    return DisplayWidgetType::Text;
+}
+
+// Format a broken-down time with a strftime-style spec, WITHOUT pulling in newlib's
+// strftime(): on the ESP32 the linker fragment places strftime/strptime/mktime in
+// IRAM (~6 KB), which overflows the IRAM-saturated classic esp32dev. This handles
+// the tokens a clock/date widget needs and passes the rest through. localtime_r is
+// kept (already linked elsewhere, and it doesn't land in IRAM).
+String formatLocalTime(const struct tm& t, const String& fmt) {
+    static const char* const WDAY3[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    static const char* const MON3[12] = {"Jan","Feb","Mar","Apr","May","Jun",
+                                         "Jul","Aug","Sep","Oct","Nov","Dec"};
+    auto pad2 = [](String& s, int v) { if (v < 10) s += '0'; s += String(v); };
+    String out;
+    for (size_t i = 0; i < fmt.length(); ++i) {
+        const char c = fmt[i];
+        if (c != '%' || i + 1 >= fmt.length()) { out += c; continue; }
+        switch (fmt[++i]) {
+            case 'H': pad2(out, t.tm_hour); break;
+            case 'I': { int h = t.tm_hour % 12; if (!h) h = 12; pad2(out, h); } break;
+            case 'M': pad2(out, t.tm_min); break;
+            case 'S': pad2(out, t.tm_sec); break;
+            case 'p': out += (t.tm_hour < 12 ? "AM" : "PM"); break;
+            case 'd': pad2(out, t.tm_mday); break;
+            case 'm': pad2(out, t.tm_mon + 1); break;
+            case 'Y': out += String(t.tm_year + 1900); break;
+            case 'y': pad2(out, (t.tm_year + 1900) % 100); break;
+            case 'a': out += WDAY3[((t.tm_wday % 7) + 7) % 7]; break;
+            case 'b': out += MON3[((t.tm_mon % 12) + 12) % 12]; break;
+            case '%': out += '%'; break;
+            default:  out += '%'; out += fmt[i]; break;
+        }
+    }
+    return out;
+}
+
+const char* widgetTypeToString(DisplayWidgetType t) {
+    switch (t) {
+        case DisplayWidgetType::Value:    return "value";
+        case DisplayWidgetType::DateTime: return "datetime";
+        case DisplayWidgetType::Rect:     return "rect";
+        case DisplayWidgetType::Line:     return "line";
+        case DisplayWidgetType::Circle:   return "circle";
+        case DisplayWidgetType::Bar:      return "bar";
+        case DisplayWidgetType::Led:      return "led";
+        case DisplayWidgetType::Icon:      return "icon";
+        case DisplayWidgetType::Image:     return "image";
+        case DisplayWidgetType::Gauge:     return "gauge";
+        case DisplayWidgetType::Sparkline: return "sparkline";
+        default:                           return "text";
+    }
+}
+
+// ── Shared GFX drawing ───────────────────────────────────────────────────────
+// Every Adafruit-based panel (SSD1306, SH1106, ILI9341, ST7789, and the PSRAM
+// canvas) derives from Adafruit_GFX, so the widget primitives are implemented once
+// here and reused by all of them. Monochrome panels pass mono=true: any non-black
+// colour collapses to "on" (1) and black to "off" (0); colour panels pass RGB565
+// through unchanged. This is what lets one widget model drive both display families.
+namespace gfxdraw {
+inline uint16_t mapColor(uint16_t c, bool mono) { return mono ? (c ? 1 : 0) : c; }
+
+inline void text(Adafruit_GFX* g, int16_t x, int16_t y, const String& t,
+                 const DisplayStyle& s, bool mono) {
+    g->setTextSize(s.size > 0 ? s.size : 1);
+    g->setTextWrap(false);
+    const uint16_t fg = mapColor(s.color, mono);
+    if (s.hasBg) g->setTextColor(fg, mapColor(s.bgColor, mono));
+    else         g->setTextColor(fg);
+    g->setCursor(x, y);
+    g->print(t);
+}
+inline void line(Adafruit_GFX* g, int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                 uint16_t c, bool mono) {
+    g->drawLine(x0, y0, x1, y1, mapColor(c, mono));
+}
+inline void rect(Adafruit_GFX* g, int16_t x, int16_t y, int16_t w, int16_t h,
+                 uint16_t c, bool filled, bool mono) {
+    const uint16_t cc = mapColor(c, mono);
+    if (filled) g->fillRect(x, y, w, h, cc);
+    else        g->drawRect(x, y, w, h, cc);
+}
+inline void circle(Adafruit_GFX* g, int16_t x, int16_t y, int16_t r,
+                   uint16_t c, bool filled, bool mono) {
+    const uint16_t cc = mapColor(c, mono);
+    if (filled) g->fillCircle(x, y, r, cc);
+    else        g->drawCircle(x, y, r, cc);
+}
+// Luminance of an RGB565 pixel (0..255), for thresholding a colour image onto mono.
+inline uint8_t lum565(uint16_t p) {
+    const uint8_t r = (p >> 11) & 0x1F, gg = (p >> 5) & 0x3F, b = p & 0x1F;
+    return static_cast<uint8_t>((r * 527 + gg * 259 + b * 1025) >> 9);  // ~0.30/0.59/0.11
+}
+inline void imageRGB565(Adafruit_GFX* g, int16_t x, int16_t y, const uint16_t* px,
+                        int16_t w, int16_t h, bool mono) {
+    if (!mono) { g->drawRGBBitmap(x, y, const_cast<uint16_t*>(px), w, h); return; }
+    for (int16_t j = 0; j < h; ++j)
+        for (int16_t i = 0; i < w; ++i)
+            g->drawPixel(x + i, y + j, lum565(px[j * w + i]) >= 128 ? 1 : 0);
+}
+inline void imageMono(Adafruit_GFX* g, int16_t x, int16_t y, const uint8_t* bits,
+                      int16_t w, int16_t h, uint16_t c, bool mono) {
+    // Adafruit drawBitmap: MSB-first, rows byte-padded — matches our OFIM packing.
+    g->drawBitmap(x, y, const_cast<uint8_t*>(bits), w, h, mapColor(c, mono));
+}
+}  // namespace gfxdraw
+
+#if OF_ENABLE_TFT
+// Drive a TFT backlight GPIO to its "on" level. Integrated-panel boards
+// (ESP32-S3-GEEK/-BOX) gate the panel LED off a pin; without this the controller
+// initialises but the display stays dark — the usual "screen does nothing" report.
+void enableBacklight(int8_t pin, bool activeLow) {
+    if (pin < 0) return;
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, activeLow ? LOW : HIGH);
+}
+
+// Bind the shared hardware-SPI bus to a TFT's pins. On the ESP32 family any GPIO
+// can route to the SPI peripheral via the IO-mux/GPIO-matrix, so an integrated
+// panel on non-default pins (e.g. the S3-GEEK's SCK12/MOSI11, the S3-BOX's
+// SCK7/MOSI6) still runs at full hardware-SPI speed — far faster than the Adafruit
+// software-SPI constructor. Returns true when it rebound the bus (so the caller
+// uses the hardware-SPI ctor); false leaves the library to use default pins.
+bool bindTftHwSpi(const DisplayConfig& config) {
+#if defined(OF_PLATFORM_ESP32)
+    if (config.mosiPin >= 0 && config.sckPin >= 0) {
+        // miso = -1: these panels are write-only (no read-back line wired).
+        SPI.begin(config.sckPin, -1, config.mosiPin,
+                  config.csPin >= 0 ? config.csPin : -1);
+        return true;
+    }
+#endif
+    return false;
+}
+#endif  // OF_ENABLE_TFT
 
 // ── OLED: SSD1306 ────────────────────────────────────────────────────────────
 
@@ -112,6 +270,25 @@ public:
         _display->print(text);
     }
 
+    void drawTextStyled(int16_t x, int16_t y, const String& text, const DisplayStyle& s) override {
+        if (_display) gfxdraw::text(_display.get(), x, y, text, s, /*mono=*/true);
+    }
+    void drawLineShape(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) override {
+        if (_display) gfxdraw::line(_display.get(), x0, y0, x1, y1, c, true);
+    }
+    void drawRectShape(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) override {
+        if (_display) gfxdraw::rect(_display.get(), x, y, w, h, c, filled, true);
+    }
+    void drawCircleShape(int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) override {
+        if (_display) gfxdraw::circle(_display.get(), x, y, r, c, filled, true);
+    }
+    void drawImageRGB565(int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) override {
+        if (_display) gfxdraw::imageRGB565(_display.get(), x, y, px, w, h, true);
+    }
+    void drawImage1bit(int16_t x, int16_t y, const uint8_t* b, int16_t w, int16_t h, uint16_t c) override {
+        if (_display) gfxdraw::imageMono(_display.get(), x, y, b, w, h, c, true);
+    }
+
     void present() override {
         if (!_display) return;
         // No offset → the library's own column addressing is correct; use it.
@@ -163,6 +340,62 @@ private:
 
 // ── OLED: SSD1306 72x40 via U8g2 ─────────────────────────────────────────────
 #if OF_ENABLE_U8G2
+// ── Shared U8g2 drawing ──────────────────────────────────────────────────────
+// U8g2 panels are monochrome, so widget colours map to draw-colour 1 (on) for any
+// non-black colour and 0 (off) for black — the same model the Adafruit mono panels
+// use. All concrete U8g2 types derive from the U8G2 base, so these helpers serve
+// every U8g2 provider. Coordinates are top-left (setFontPosTop) to match the rest.
+namespace u8g2draw {
+inline void text(U8G2* u, int16_t x, int16_t y, const String& t, const DisplayStyle& s) {
+    u->setFont(s.size >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
+    u->setFontPosTop();
+    if (s.hasBg) {
+        const int fh = s.size >= 2 ? 20 : 8;
+        const int fw = u->getStrWidth(t.c_str());
+        u->setDrawColor(s.bgColor ? 1 : 0);
+        u->drawBox(x, y, fw > 0 ? fw : 1, fh);
+    }
+    u->setDrawColor(s.color ? 1 : 0);
+    u->drawStr(x, y, t.c_str());
+    u->setDrawColor(1);
+}
+inline void line(U8G2* u, int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) {
+    u->setDrawColor(c ? 1 : 0); u->drawLine(x0, y0, x1, y1); u->setDrawColor(1);
+}
+inline void rect(U8G2* u, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) {
+    u->setDrawColor(c ? 1 : 0);
+    if (filled) u->drawBox(x, y, w, h); else u->drawFrame(x, y, w, h);
+    u->setDrawColor(1);
+}
+inline void circle(U8G2* u, int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) {
+    u->setDrawColor(c ? 1 : 0);
+    if (filled) u->drawDisc(x, y, r); else u->drawCircle(x, y, r);
+    u->setDrawColor(1);
+}
+inline void imageRGB565(U8G2* u, int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) {
+    for (int16_t j = 0; j < h; ++j)
+        for (int16_t i = 0; i < w; ++i) {
+            const uint16_t p = px[j * w + i];
+            const uint8_t r = (p >> 11) & 0x1F, g = (p >> 5) & 0x3F, b = p & 0x1F;
+            const uint8_t l = static_cast<uint8_t>((r * 527 + g * 259 + b * 1025) >> 9);
+            u->setDrawColor(l >= 128 ? 1 : 0);
+            u->drawPixel(x + i, y + j);
+        }
+    u->setDrawColor(1);
+}
+inline void imageMono(U8G2* u, int16_t x, int16_t y, const uint8_t* bits,
+                      int16_t w, int16_t h, uint16_t c) {
+    // MSB-first, rows byte-padded (OFIM packing) — draw set bits in `c`'s on/off.
+    const int16_t bytesPerRow = (w + 7) / 8;
+    u->setDrawColor(c ? 1 : 0);
+    for (int16_t j = 0; j < h; ++j)
+        for (int16_t i = 0; i < w; ++i)
+            if (bits[j * bytesPerRow + (i >> 3)] & (0x80 >> (i & 7)))
+                u->drawPixel(x + i, y + j);
+    u->setDrawColor(1);
+}
+}  // namespace u8g2draw
+
 // The cheap 0.42" 72x40 "ER" panels (common on ESP32-C3 "egg" boards) need a
 // specific init sequence the Adafruit library's manual sub-window/COM-pin remap
 // doesn't reproduce — they stay blank. U8g2 ships a tested profile for exactly
@@ -218,6 +451,25 @@ public:
         _u8g2->setFont(textSize >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
         _u8g2->setFontPosTop();
         _u8g2->drawStr(x, y, text.c_str());
+    }
+
+    void drawTextStyled(int16_t x, int16_t y, const String& t, const DisplayStyle& s) override {
+        if (_u8g2) u8g2draw::text(_u8g2.get(), x, y, t, s);
+    }
+    void drawLineShape(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) override {
+        if (_u8g2) u8g2draw::line(_u8g2.get(), x0, y0, x1, y1, c);
+    }
+    void drawRectShape(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) override {
+        if (_u8g2) u8g2draw::rect(_u8g2.get(), x, y, w, h, c, filled);
+    }
+    void drawCircleShape(int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) override {
+        if (_u8g2) u8g2draw::circle(_u8g2.get(), x, y, r, c, filled);
+    }
+    void drawImageRGB565(int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) override {
+        if (_u8g2) u8g2draw::imageRGB565(_u8g2.get(), x, y, px, w, h);
+    }
+    void drawImage1bit(int16_t x, int16_t y, const uint8_t* b, int16_t w, int16_t h, uint16_t c) override {
+        if (_u8g2) u8g2draw::imageMono(_u8g2.get(), x, y, b, w, h, c);
     }
 
     void present() override {
@@ -278,6 +530,25 @@ public:
         _u8g2->drawStr(x, y, text.c_str());
     }
 
+    void drawTextStyled(int16_t x, int16_t y, const String& t, const DisplayStyle& s) override {
+        if (_u8g2) u8g2draw::text(_u8g2.get(), x, y, t, s);
+    }
+    void drawLineShape(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) override {
+        if (_u8g2) u8g2draw::line(_u8g2.get(), x0, y0, x1, y1, c);
+    }
+    void drawRectShape(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) override {
+        if (_u8g2) u8g2draw::rect(_u8g2.get(), x, y, w, h, c, filled);
+    }
+    void drawCircleShape(int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) override {
+        if (_u8g2) u8g2draw::circle(_u8g2.get(), x, y, r, c, filled);
+    }
+    void drawImageRGB565(int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) override {
+        if (_u8g2) u8g2draw::imageRGB565(_u8g2.get(), x, y, px, w, h);
+    }
+    void drawImage1bit(int16_t x, int16_t y, const uint8_t* b, int16_t w, int16_t h, uint16_t c) override {
+        if (_u8g2) u8g2draw::imageMono(_u8g2.get(), x, y, b, w, h, c);
+    }
+
     void present() override { if (_u8g2) _u8g2->sendBuffer(); }
     String describe() const override { return _desc; }
 
@@ -326,6 +597,25 @@ public:
         _u8g2->drawStr(x, y, text.c_str());
     }
 
+    void drawTextStyled(int16_t x, int16_t y, const String& t, const DisplayStyle& s) override {
+        if (_u8g2) u8g2draw::text(_u8g2.get(), x, y, t, s);
+    }
+    void drawLineShape(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) override {
+        if (_u8g2) u8g2draw::line(_u8g2.get(), x0, y0, x1, y1, c);
+    }
+    void drawRectShape(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) override {
+        if (_u8g2) u8g2draw::rect(_u8g2.get(), x, y, w, h, c, filled);
+    }
+    void drawCircleShape(int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) override {
+        if (_u8g2) u8g2draw::circle(_u8g2.get(), x, y, r, c, filled);
+    }
+    void drawImageRGB565(int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) override {
+        if (_u8g2) u8g2draw::imageRGB565(_u8g2.get(), x, y, px, w, h);
+    }
+    void drawImage1bit(int16_t x, int16_t y, const uint8_t* b, int16_t w, int16_t h, uint16_t c) override {
+        if (_u8g2) u8g2draw::imageMono(_u8g2.get(), x, y, b, w, h, c);
+    }
+
     void present() override { if (_u8g2) _u8g2->sendBuffer(); }
     String describe() const override { return "Nokia5110 84x48 (PCD8544)"; }
 
@@ -371,6 +661,25 @@ public:
         _display->print(text);
     }
 
+    void drawTextStyled(int16_t x, int16_t y, const String& text, const DisplayStyle& s) override {
+        if (_display) gfxdraw::text(_display.get(), x, y, text, s, /*mono=*/true);
+    }
+    void drawLineShape(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) override {
+        if (_display) gfxdraw::line(_display.get(), x0, y0, x1, y1, c, true);
+    }
+    void drawRectShape(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) override {
+        if (_display) gfxdraw::rect(_display.get(), x, y, w, h, c, filled, true);
+    }
+    void drawCircleShape(int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) override {
+        if (_display) gfxdraw::circle(_display.get(), x, y, r, c, filled, true);
+    }
+    void drawImageRGB565(int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) override {
+        if (_display) gfxdraw::imageRGB565(_display.get(), x, y, px, w, h, true);
+    }
+    void drawImage1bit(int16_t x, int16_t y, const uint8_t* b, int16_t w, int16_t h, uint16_t c) override {
+        if (_display) gfxdraw::imageMono(_display.get(), x, y, b, w, h, c, true);
+    }
+
     void present() override {
         if (_display) _display->display();
     }
@@ -384,10 +693,145 @@ private:
     std::unique_ptr<Adafruit_SH1106G>  _display;
 };
 
-// ── TFT: ILI9341 ─────────────────────────────────────────────────────────────
+// ── TFT: shared off-screen-canvas rendering ──────────────────────────────────
 #if OF_ENABLE_TFT
 
-class Ili9341DisplayProvider final : public DisplayProvider {
+// A 16-bit GFX canvas whose framebuffer lives in PSRAM rather than the internal
+// DRAM that Adafruit's GFXcanvas16 (plain malloc) would consume. A full-screen TFT
+// buffer is 64-150 KB; keeping it out of internal DRAM leaves that scarce region
+// for the AsyncTCP task stack and other internal-only allocations, so bringing up
+// the panel can't starve the web server. Falls back to internal heap when there is
+// no PSRAM (small panels still work); getBuffer() is null if even that fails, which
+// the provider treats as "draw direct". Only rotation 0 is used (the panel applies
+// rotation), so drawPixel stays simple.
+class PsramCanvas16 : public Adafruit_GFX {
+public:
+    PsramCanvas16(uint16_t w, uint16_t h) : Adafruit_GFX(w, h) {
+        _len = static_cast<uint32_t>(w) * static_cast<uint32_t>(h);
+        const size_t bytes = _len * sizeof(uint16_t);
+#if defined(OF_PLATFORM_ESP32)
+        _buffer = static_cast<uint16_t*>(ps_malloc(bytes));   // PSRAM; null if absent
+#endif
+        if (!_buffer) _buffer = static_cast<uint16_t*>(malloc(bytes));  // internal fallback
+    }
+    ~PsramCanvas16() override { if (_buffer) free(_buffer); }
+
+    uint16_t* getBuffer() const { return _buffer; }
+
+    void drawPixel(int16_t x, int16_t y, uint16_t color) override {
+        if (!_buffer) return;
+        if (x < 0 || y < 0 || x >= width() || y >= height()) return;
+        _buffer[static_cast<uint32_t>(y) * WIDTH + static_cast<uint32_t>(x)] = color;
+    }
+
+    void fillScreen(uint16_t color) override {
+        if (!_buffer) return;
+        // memset works when both bytes match (black 0x0000 / white 0xFFFF — our two
+        // colours), which is the fast per-frame clear path.
+        const uint8_t hi = color >> 8, lo = color & 0xFF;
+        if (hi == lo) {
+            memset(_buffer, lo, _len * sizeof(uint16_t));
+        } else {
+            for (uint32_t i = 0; i < _len; ++i) _buffer[i] = color;
+        }
+    }
+
+private:
+    uint16_t* _buffer = nullptr;
+    uint32_t  _len    = 0;
+};
+
+// SPI TFTs render directly to the glass, so the per-frame clear()→fillScreen(BLACK)
+// →redraw-text cycle blanks the whole panel black and back every refresh — visible
+// flicker (OLEDs avoid this because they're framebuffer-backed: clear is in RAM and
+// pushed once). This base gives the TFTs the same model: each frame is drawn into an
+// in-RAM 16-bit canvas, then blitted to the panel in a single windowed write
+// (drawRGBBitmap), overwriting the glass in place with no black intermediate. If the
+// canvas can't be allocated (low heap / no PSRAM) it transparently falls back to
+// drawing straight to the panel (functional, just flickery).
+class TftCanvasProvider : public DisplayProvider {
+public:
+    void clear() override {
+        if (_canvas) {
+            _canvas->fillScreen(0x0000);
+        } else if (_gfx) {
+            _gfx->fillScreen(0x0000);
+            _gfx->setTextColor(0xFFFF);
+            _gfx->setTextWrap(false);
+        }
+    }
+
+    bool isColor() const override { return true; }
+
+    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
+        Adafruit_GFX* g = target();
+        if (!g) return;
+        g->setTextSize(textSize > 0 ? textSize : 1);
+        g->setTextColor(0xFFFF);
+        g->setCursor(x, y);
+        g->print(text);
+    }
+
+    void drawTextStyled(int16_t x, int16_t y, const String& text, const DisplayStyle& s) override {
+        if (Adafruit_GFX* g = target()) gfxdraw::text(g, x, y, text, s, /*mono=*/false);
+    }
+    void drawLineShape(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t c) override {
+        if (Adafruit_GFX* g = target()) gfxdraw::line(g, x0, y0, x1, y1, c, false);
+    }
+    void drawRectShape(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c, bool filled) override {
+        if (Adafruit_GFX* g = target()) gfxdraw::rect(g, x, y, w, h, c, filled, false);
+    }
+    void drawCircleShape(int16_t x, int16_t y, int16_t r, uint16_t c, bool filled) override {
+        if (Adafruit_GFX* g = target()) gfxdraw::circle(g, x, y, r, c, filled, false);
+    }
+    void drawImageRGB565(int16_t x, int16_t y, const uint16_t* px, int16_t w, int16_t h) override {
+        if (Adafruit_GFX* g = target()) gfxdraw::imageRGB565(g, x, y, px, w, h, false);
+    }
+    void drawImage1bit(int16_t x, int16_t y, const uint8_t* b, int16_t w, int16_t h, uint16_t c) override {
+        if (Adafruit_GFX* g = target()) gfxdraw::imageMono(g, x, y, b, w, h, c, false);
+    }
+
+    void present() override {
+        // One windowed blit of the finished RGB565 frame. drawRGBBitmap sends each
+        // native uint16_t MSB-first, the same convention drawPixel/fillRect use, so
+        // colours are correct.
+        if (_canvas && _gfx) {
+            _gfx->drawRGBBitmap(0, 0, _canvas->getBuffer(),
+                                static_cast<int16_t>(_w), static_cast<int16_t>(_h));
+        }
+    }
+
+protected:
+    Adafruit_GFX* target() { return _canvas ? static_cast<Adafruit_GFX*>(_canvas.get()) : _gfx; }
+
+    // Called by the subclass once the panel is initialised, with the live panel and
+    // its rotated (effective) dimensions. Allocation failure leaves _canvas null and
+    // the provider draws straight to the panel.
+    void initCanvas(Adafruit_GFX* panel, uint16_t w, uint16_t h) {
+        _gfx = panel;
+        _w = w;
+        _h = h;
+        _canvas.reset(new PsramCanvas16(w, h));
+        if (!_canvas || !_canvas->getBuffer()) {
+            _canvas.reset();
+            LOG_W("DisplayMgr", "TFT canvas alloc failed (" + String(w) + "x" + String(h)
+                                + ") — drawing direct (may flicker)");
+            return;
+        }
+        _canvas->setTextWrap(false);
+        _canvas->fillScreen(0x0000);
+    }
+
+    DisplayConfig                  _config;
+    Adafruit_GFX*                  _gfx = nullptr;
+    std::unique_ptr<PsramCanvas16> _canvas;
+    uint16_t                      _w = 0;
+    uint16_t                      _h = 0;
+};
+
+// ── TFT: ILI9341 ─────────────────────────────────────────────────────────────
+
+class Ili9341DisplayProvider final : public TftCanvasProvider {
 public:
     bool begin(const DisplayConfig& config, String& error) override {
         _config = config;
@@ -397,7 +841,13 @@ public:
             return false;
         }
 
-        if (config.mosiPin >= 0 && config.sckPin >= 0) {
+        // On the ESP32, route the panel's pins through the hardware-SPI peripheral
+        // (fast) instead of the Adafruit software-SPI constructor. On the ESP8266,
+        // where pins can't be remapped, fall back to software SPI when custom pins
+        // are given.
+        if (bindTftHwSpi(config)) {
+            _display.reset(new Adafruit_ILI9341(config.csPin, config.dcPin, config.resetPin));
+        } else if (config.mosiPin >= 0 && config.sckPin >= 0) {
             _display.reset(new Adafruit_ILI9341(
                 config.csPin, config.dcPin, config.mosiPin,
                 config.sckPin, config.resetPin));
@@ -410,37 +860,26 @@ public:
         _display->fillScreen(ILI9341_BLACK);
         _display->setTextColor(ILI9341_WHITE);
         _display->setTextWrap(false);
+        enableBacklight(config.backlightPin, config.backlightActiveLow);
+
+        // Render through an off-screen canvas (config.width/height are the rotated,
+        // effective dimensions) so per-frame redraws don't flicker the panel.
+        initCanvas(_display.get(), config.width, config.height);
         return true;
     }
 
-    void clear() override {
-        if (!_display) return;
-        _display->fillScreen(ILI9341_BLACK);
-        _display->setTextColor(ILI9341_WHITE);
-        _display->setTextWrap(false);
-    }
-
-    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
-        if (!_display) return;
-        _display->setTextSize(textSize > 0 ? textSize : 1);
-        _display->setCursor(x, y);
-        _display->print(text);
-    }
-
-    void present() override {}  // ILI9341 renders immediately
-
     String describe() const override {
-        return "ILI9341 " + String(_config.width) + "x" + String(_config.height);
+        return "ILI9341 " + String(_config.width) + "x" + String(_config.height)
+               + (_canvas ? "" : " (direct)");
     }
 
 private:
-    DisplayConfig                        _config;
     std::unique_ptr<Adafruit_ILI9341>   _display;
 };
 
 // ── TFT: ST7789 ──────────────────────────────────────────────────────────────
 
-class St7789DisplayProvider final : public DisplayProvider {
+class St7789DisplayProvider final : public TftCanvasProvider {
 public:
     bool begin(const DisplayConfig& config, String& error) override {
         _config = config;
@@ -450,7 +889,9 @@ public:
             return false;
         }
 
-        if (config.mosiPin >= 0 && config.sckPin >= 0) {
+        if (bindTftHwSpi(config)) {
+            _display.reset(new Adafruit_ST7789(config.csPin, config.dcPin, config.resetPin));
+        } else if (config.mosiPin >= 0 && config.sckPin >= 0) {
             _display.reset(new Adafruit_ST7789(
                 config.csPin, config.dcPin, config.mosiPin,
                 config.sckPin, config.resetPin));
@@ -458,36 +899,35 @@ public:
             _display.reset(new Adafruit_ST7789(config.csPin, config.dcPin, config.resetPin));
         }
 
-        _display->init(config.width, config.height, SPI_MODE2);
+        // The Adafruit driver picks a panel's GDDRAM offsets from the dimensions
+        // passed to init() — and it expects the *native portrait* dimensions, then
+        // applies the landscape mapping itself in setRotation(). The 1.14" 240x135
+        // panel (ESP32-S3-GEEK) is natively 135x240; if we hand init() the rotated
+        // landscape geometry the offsets land wrong and the image is shifted off
+        // screen. So for an odd (landscape) rotation, swap back to portrait for
+        // init() while keeping config.width/height as the effective layout geometry.
+        uint16_t initW = config.width;
+        uint16_t initH = config.height;
+        if (config.rotation & 1) { initW = config.height; initH = config.width; }
+        _display->init(initW, initH, SPI_MODE2);
         _display->setRotation(config.rotation & 0x03);
         _display->fillScreen(ST77XX_BLACK);
         _display->setTextColor(ST77XX_WHITE);
         _display->setTextWrap(false);
+        enableBacklight(config.backlightPin, config.backlightActiveLow);
+
+        // Render through an off-screen canvas (config.width/height are the rotated,
+        // effective dimensions) so per-frame redraws don't flicker the panel.
+        initCanvas(_display.get(), config.width, config.height);
         return true;
     }
 
-    void clear() override {
-        if (!_display) return;
-        _display->fillScreen(ST77XX_BLACK);
-        _display->setTextColor(ST77XX_WHITE);
-        _display->setTextWrap(false);
-    }
-
-    void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
-        if (!_display) return;
-        _display->setTextSize(textSize > 0 ? textSize : 1);
-        _display->setCursor(x, y);
-        _display->print(text);
-    }
-
-    void present() override {}  // ST7789 renders immediately
-
     String describe() const override {
-        return "ST7789 " + String(_config.width) + "x" + String(_config.height);
+        return "ST7789 " + String(_config.width) + "x" + String(_config.height)
+               + (_canvas ? "" : " (direct)");
     }
 
 private:
-    DisplayConfig                      _config;
     std::unique_ptr<Adafruit_ST7789>  _display;
 };
 #endif  // OF_ENABLE_TFT
@@ -512,6 +952,10 @@ private:
 
 class NextionDisplayProvider final : public DisplayProvider {
 public:
+    // Nextion owns its own GUI: it's driven by named-component updates, not pixel
+    // drawing, so the manager sends it text/value widgets only and skips graphics.
+    bool addressed() const override { return true; }
+
     bool begin(const DisplayConfig& config, String& error) override {
         _config = config;
 
@@ -650,6 +1094,70 @@ private:
     uint8_t                         _rxLen     = 0;
 };
 
+// ── Board-default display wiring ─────────────────────────────────────────────
+// Boards that ship an integrated panel light up with zero configuration: when no
+// displays.json config exists, the firmware seeds the vendor's fixed wiring here.
+// Saving any display in the web UI takes over (this only runs on an empty config).
+bool appendBoardDefaultDisplays(std::vector<DisplayConfig>& configs) {
+#if OF_ENABLE_TFT && defined(BOARD_NAME)
+    const String board = BOARD_NAME;
+
+    // Waveshare ESP32-S3-GEEK: 1.14" ST7789 240x135 IPS. SCK12/MOSI11 are this
+    // board's default hardware-SPI pins, so leave mosi/sck at -1 to use the fast
+    // 3-wire hardware-SPI path. Native panel is 135x240 portrait; rotation=1
+    // presents it as 240x135 landscape. Backlight on GPIO7.
+    if (board == "esp32s3geek") {
+        DisplayConfig cfg;
+        cfg.id           = "lcd";
+        cfg.type         = "st7789";
+        cfg.width        = 240;   // effective (landscape) geometry for layouts/preview
+        cfg.height       = 135;
+        cfg.rotation     = 1;
+        cfg.csPin        = 10;
+        cfg.dcPin        = 8;
+        cfg.resetPin     = 9;
+        cfg.backlightPin = 7;
+        cfg.spiFrequency = 40000000;  // ST7789 runs happily at 40 MHz
+        configs.push_back(cfg);
+        return true;
+    }
+
+    // Espressif ESP32-S3-BOX: 2.4" 320x240 panel (ILI9342C — ILI9341-compatible)
+    // on its own SPI bus (SCK7/MOSI6), distinct from the board's default SPI. Pin
+    // numbers come from the Arduino core's board variant (TFT_* macros) where
+    // available, so they track the authoritative wiring.
+    if (board == "esp32s3box") {
+        DisplayConfig cfg;
+        cfg.id           = "lcd";
+        cfg.type         = "ili9341";
+        cfg.width        = 320;
+        cfg.height       = 240;
+        cfg.rotation     = 1;
+#if defined(TFT_CS) && defined(TFT_DC) && defined(TFT_RST) && defined(TFT_MOSI) && defined(TFT_CLK) && defined(TFT_BL)
+        cfg.csPin        = TFT_CS;
+        cfg.dcPin        = TFT_DC;
+        cfg.resetPin     = TFT_RST;
+        cfg.mosiPin      = TFT_MOSI;
+        cfg.sckPin       = TFT_CLK;
+        cfg.backlightPin = TFT_BL;
+#else
+        cfg.csPin        = 5;
+        cfg.dcPin        = 4;
+        cfg.resetPin     = 48;
+        cfg.mosiPin      = 6;
+        cfg.sckPin       = 7;
+        cfg.backlightPin = 45;
+#endif
+        cfg.spiFrequency = 40000000;
+        configs.push_back(cfg);
+        return true;
+    }
+#else
+    (void)configs;
+#endif
+    return false;
+}
+
 }  // namespace
 
 // ── DisplayManager ────────────────────────────────────────────────────────────
@@ -664,6 +1172,12 @@ bool DisplayManager::begin() {
 
     if (!loadConfig()) {
         LOG_W(TAG, "Using empty display configuration");
+    }
+    // Zero persisted displays → fall back to the board's built-in panel wiring so
+    // integrated-screen boards (S3-GEEK/-BOX) come up with a working display out of
+    // the box. Any display saved from the UI replaces this (loadConfig is non-empty).
+    if (_configs.empty() && appendBoardDefaultDisplays(_configs)) {
+        LOG_I(TAG, "Seeded built-in display for " + String(BOARD_NAME));
     }
     loadPages();
     startConfiguredDisplays();
@@ -894,6 +1408,8 @@ bool DisplayManager::loadConfig() {
         cfg.mosiPin           = static_cast<int8_t>(readInt16(item["mosi_pin"], -1));
         cfg.sckPin            = static_cast<int8_t>(readInt16(item["sck_pin"], -1));
         cfg.spiFrequency      = item["spi_frequency"] | static_cast<uint32_t>(27000000);
+        cfg.backlightPin      = static_cast<int8_t>(readInt16(item["bl_pin"], -1));
+        cfg.backlightActiveLow = item["bl_active_low"] | false;
 
         // UART Nextion fields
         cfg.rxPin             = static_cast<int8_t>(readInt16(item["rx_pin"], -1));
@@ -948,22 +1464,30 @@ bool DisplayManager::loadPages() {
         page.displayId = doc["display_id"] | String("");
         page.title     = doc["title"] | page.id;
         page.id = ensureUniqueId(page.id);
+        if (!doc["bg"].isNull()) { page.bgColor = readColor(doc["bg"], 0x0000); page.hasBg = true; }
 
         if (doc["widgets"].is<JsonArray>()) {
             for (JsonObjectConst item : doc["widgets"].as<JsonArrayConst>()) {
                 DisplayWidget widget;
-                const String type = item["type"] | String("text");
+                widget.type       = widgetTypeFromString(item["type"] | String("text"));
                 widget.id         = item["id"] | String("");
-                widget.type       = type == "value" ? DisplayWidgetType::Value : DisplayWidgetType::Text;
                 widget.x          = readInt16(item["x"], 0);
                 widget.y          = readInt16(item["y"], 0);
+                widget.w          = readInt16(item["w"], 0);
+                widget.h          = readInt16(item["h"], 0);
                 widget.textSize   = readUint8(item["text_size"], 1);
+                widget.align      = static_cast<TextAlign>(readUint8(item["align"], 0) % 3);
                 widget.text       = item["text"] | String("");
                 widget.variableId = item["variable"] | String("");
                 widget.prefix     = item["prefix"] | String("");
                 widget.suffix     = item["suffix"] | String("");
                 widget.decimals   = readUint8(item["decimals"], 1);
                 widget.maxChars   = readUint8(item["max_chars"], 0);
+                widget.color      = readColor(item["color"], 0xFFFF);
+                if (!item["bg"].isNull()) { widget.bgColor = readColor(item["bg"], 0x0000); widget.hasBg = true; }
+                widget.filled     = item["filled"] | false;
+                widget.minVal     = item["min"] | 0.0f;
+                widget.maxVal     = item["max"] | 100.0f;
                 page.widgets.push_back(widget);
             }
         }
@@ -976,6 +1500,8 @@ bool DisplayManager::loadPages() {
 
 void DisplayManager::startConfiguredDisplays() {
     _displays.clear();
+    clearImageCache();   // free decoded frames; pages may now reference different images
+    _sparkHistory.clear();  // discard rolling history; widgets may have changed
 
     for (const auto& cfg : _configs) {
         if (!cfg.enabled) continue;
@@ -1043,12 +1569,27 @@ void DisplayManager::renderDisplay(DisplayInstance& display, uint32_t nowMs) {
 
     display.provider->clear();
     if (page) {
+        // Page background (colour panels; mono fills a box, usually left off).
+        if (page->hasBg) {
+            display.provider->drawRectShape(0, 0, display.config.width, display.config.height,
+                                            page->bgColor, /*filled=*/true);
+        }
+        const bool addressed = display.provider->addressed();
         for (const auto& widget : page->widgets) {
-            String text = resolveWidgetText(widget);
-            if (widget.maxChars > 0 && text.length() > widget.maxChars) {
-                text = text.substring(0, widget.maxChars);
+            if (addressed) {
+                // Nextion drives named components — send only text-bearing widgets.
+                if (widget.type == DisplayWidgetType::Text
+                    || widget.type == DisplayWidgetType::Value
+                    || widget.type == DisplayWidgetType::DateTime) {
+                    String text = resolveWidgetText(widget);
+                    if (widget.maxChars > 0 && text.length() > widget.maxChars) {
+                        text = text.substring(0, widget.maxChars);
+                    }
+                    display.provider->drawWidget(widget.id, widget.x, widget.y, text, widget.textSize);
+                }
+                continue;
             }
-            display.provider->drawWidget(widget.id, widget.x, widget.y, text, widget.textSize);
+            renderWidget(*display.provider, widget, display.config.width, display.config.height);
         }
     }
     display.provider->present();
@@ -1114,6 +1655,14 @@ String DisplayManager::resolveWidgetText(const DisplayWidget& widget) const {
         return widget.text;
     }
 
+    if (widget.type == DisplayWidgetType::DateTime) {
+        const time_t now = static_cast<time_t>(TimeManager::instance().epoch());
+        struct tm tmv;
+        localtime_r(&now, &tmv);
+        const String fmt = widget.text.length() ? widget.text : String("%H:%M:%S");
+        return widget.prefix + formatLocalTime(tmv, fmt) + widget.suffix;
+    }
+
     String value;
     const Variable* var = VariableManager::instance().get(widget.variableId);
     if (var) {
@@ -1134,6 +1683,306 @@ String DisplayManager::resolveWidgetText(const DisplayWidget& widget) const {
     }
 
     return widget.prefix + value + widget.suffix;
+}
+
+// Numeric value of a widget's bound variable (for Bar/Led). Strings parse as float;
+// booleans are 0/1; missing variable is 0.
+float DisplayManager::resolveWidgetValue(const DisplayWidget& widget) const {
+    const Variable* var = VariableManager::instance().get(widget.variableId);
+    if (!var) return 0.0f;
+    switch (var->type) {
+        case VarType::Integer: return static_cast<float>(var->valueInt);
+        case VarType::Float:   return var->valueFloat;
+        case VarType::Boolean: return var->valueBool ? 1.0f : 0.0f;
+        case VarType::String:  return var->valueString.toFloat();
+    }
+    return 0.0f;
+}
+
+// Interpret one widget into provider primitive calls. Runs only for pixel surfaces
+// (OLED + TFT); addressed displays (Nextion) are handled separately.
+void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
+                                  uint16_t dispW, uint16_t dispH) const {
+    (void)dispW; (void)dispH;
+    switch (w.type) {
+        case DisplayWidgetType::Text:
+        case DisplayWidgetType::Value:
+        case DisplayWidgetType::DateTime: {
+            String text = resolveWidgetText(w);
+            if (w.maxChars > 0 && text.length() > w.maxChars) text = text.substring(0, w.maxChars);
+            // Alignment: approximate the GFX advance (6 px × size per char) so center/
+            // right anchor at w.x; matches the web preview's metric.
+            int16_t x = w.x;
+            if (w.align != TextAlign::Left) {
+                const int16_t tw = static_cast<int16_t>(text.length()) * 6
+                                   * (w.textSize ? w.textSize : 1);
+                x = (w.align == TextAlign::Center) ? static_cast<int16_t>(w.x - tw / 2)
+                                                   : static_cast<int16_t>(w.x - tw);
+            }
+            DisplayStyle s;
+            s.color = w.color; s.bgColor = w.bgColor; s.hasBg = w.hasBg;
+            s.size  = w.textSize ? w.textSize : 1;
+            p.drawTextStyled(x, w.y, text, s);
+            break;
+        }
+        case DisplayWidgetType::Rect:
+            p.drawRectShape(w.x, w.y, w.w > 0 ? w.w : 10, w.h > 0 ? w.h : 10, w.color, w.filled);
+            break;
+        case DisplayWidgetType::Line:
+            p.drawLineShape(w.x, w.y, static_cast<int16_t>(w.x + w.w),
+                            static_cast<int16_t>(w.y + w.h), w.color);
+            break;
+        case DisplayWidgetType::Circle:
+            p.drawCircleShape(w.x, w.y, w.w > 0 ? w.w : 6, w.color, w.filled);
+            break;
+        case DisplayWidgetType::Bar: {
+            const int16_t bw = w.w > 0 ? w.w : 40;
+            const int16_t bh = w.h > 0 ? w.h : 8;
+            if (w.hasBg) p.drawRectShape(w.x, w.y, bw, bh, w.bgColor, true);  // track
+            p.drawRectShape(w.x, w.y, bw, bh, w.color, false);               // border
+            float frac = (w.maxVal != w.minVal)
+                ? (resolveWidgetValue(w) - w.minVal) / (w.maxVal - w.minVal) : 0.0f;
+            if (frac < 0) frac = 0;
+            if (frac > 1) frac = 1;
+            if (bw >= bh) {                                                   // horizontal
+                const int16_t fillW = static_cast<int16_t>((bw - 2) * frac);
+                if (fillW > 0) p.drawRectShape(w.x + 1, w.y + 1, fillW, bh - 2, w.color, true);
+            } else {                                                          // vertical (bottom-up)
+                const int16_t fillH = static_cast<int16_t>((bh - 2) * frac);
+                if (fillH > 0)
+                    p.drawRectShape(w.x + 1, static_cast<int16_t>(w.y + bh - 1 - fillH),
+                                    bw - 2, fillH, w.color, true);
+            }
+            break;
+        }
+        case DisplayWidgetType::Led: {
+            const int16_t r = w.w > 0 ? w.w : 5;
+            const bool on = w.variableId.length() ? (resolveWidgetValue(w) != 0.0f) : true;
+            const uint16_t col = on ? w.color : (w.hasBg ? w.bgColor : 0x0000);
+            p.drawCircleShape(static_cast<int16_t>(w.x + r), static_cast<int16_t>(w.y + r), r, col, true);
+            if (!on) p.drawCircleShape(static_cast<int16_t>(w.x + r), static_cast<int16_t>(w.y + r),
+                                       r, w.color, false);  // outline when off
+            break;
+        }
+        case DisplayWidgetType::Icon:
+            renderIcon(p, w);
+            break;
+        case DisplayWidgetType::Image:
+            renderImage(p, w);
+            break;
+        case DisplayWidgetType::Gauge:
+            renderGauge(p, w);
+            break;
+        case DisplayWidgetType::Sparkline:
+            renderSparkline(p, w);
+            break;
+    }
+}
+
+// A small built-in icon set drawn from primitives, so it renders identically on
+// mono and colour panels with no font/bitmap assets. Unknown names draw a box.
+void DisplayManager::renderIcon(DisplayProvider& p, const DisplayWidget& w) const {
+    const int16_t x = w.x, y = w.y;
+    const int16_t s = w.w > 0 ? w.w : 10;   // bounding box side
+    const uint16_t c = w.color;
+    const String& n = w.text;
+    if (n == "dot") {
+        p.drawCircleShape(x + s / 2, y + s / 2, s / 2, c, true);
+    } else if (n == "circle") {
+        p.drawCircleShape(x + s / 2, y + s / 2, s / 2, c, false);
+    } else if (n == "check") {
+        p.drawLineShape(x, y + s / 2, x + s / 3, y + s, c);
+        p.drawLineShape(x + s / 3, y + s, x + s, y, c);
+    } else if (n == "cross") {
+        p.drawLineShape(x, y, x + s, y + s, c);
+        p.drawLineShape(x + s, y, x, y + s, c);
+    } else if (n == "arrow_up") {
+        p.drawLineShape(x + s / 2, y, x, y + s, c);
+        p.drawLineShape(x + s / 2, y, x + s, y + s, c);
+        p.drawLineShape(x, y + s, x + s, y + s, c);
+    } else if (n == "arrow_down") {
+        p.drawLineShape(x, y, x + s, y, c);
+        p.drawLineShape(x, y, x + s / 2, y + s, c);
+        p.drawLineShape(x + s, y, x + s / 2, y + s, c);
+    } else if (n == "battery") {
+        p.drawRectShape(x, y + s / 4, s, s / 2, c, false);
+        p.drawRectShape(static_cast<int16_t>(x + s), y + s / 3, 2, s / 4, c, true);          // nub
+        p.drawRectShape(x + 2, y + s / 4 + 2, (s - 4) * 3 / 4, s / 2 - 4, c, true);          // ~75% fill
+    } else if (n == "thermometer") {
+        p.drawRectShape(x + s / 2 - 1, y, 3, static_cast<int16_t>(s - s / 4), c, false);
+        p.drawCircleShape(x + s / 2, static_cast<int16_t>(y + s - s / 4), s / 4, c, true);
+    } else if (n == "heart") {
+        const int16_t r = s / 4;
+        p.drawCircleShape(x + r, y + r, r, c, true);
+        p.drawCircleShape(static_cast<int16_t>(x + s - r), y + r, r, c, true);
+        p.drawLineShape(x, y + r, x + s / 2, y + s, c);
+        p.drawLineShape(x + s, y + r, x + s / 2, y + s, c);
+    } else if (n == "wifi") {
+        p.drawCircleShape(x + s / 2, y + s, 2, c, true);
+        p.drawCircleShape(x + s / 2, y + s, s / 2, c, false);
+        p.drawCircleShape(x + s / 2, y + s, s, c, false);
+    } else {
+        p.drawRectShape(x, y, s, s, c, false);  // unknown → placeholder box
+    }
+}
+
+// Blit an Image widget from the PSRAM-cached frame. A missing/invalid image draws an
+// outline placeholder so it's visible in the designer and on the glass.
+void DisplayManager::renderImage(DisplayProvider& p, const DisplayWidget& w) const {
+#if OF_ENABLE_IMAGES
+    const CachedImage* img = loadImage(w.text);
+    if (!img || !img->valid || !img->data) {
+        p.drawRectShape(w.x, w.y, w.w > 0 ? w.w : 16, w.h > 0 ? w.h : 16, w.color, false);
+        return;
+    }
+    if (img->fmt == 0) {
+        p.drawImageRGB565(w.x, w.y, reinterpret_cast<const uint16_t*>(img->data), img->w, img->h);
+    } else {
+        p.drawImage1bit(w.x, w.y, img->data, img->w, img->h, w.color);
+    }
+#else
+    p.drawRectShape(w.x, w.y, w.w > 0 ? w.w : 16, w.h > 0 ? w.h : 16, w.color, false);
+#endif
+}
+
+// Lazily load + cache an OFIM image. The cache holds failures too (valid=false), so a
+// broken reference doesn't re-read flash every frame. Pixel buffer lives in PSRAM.
+const DisplayManager::CachedImage* DisplayManager::loadImage(const String& name) const {
+#if OF_ENABLE_IMAGES
+    if (!name.length()) return nullptr;
+    auto it = _imageCache.find(name);
+    if (it != _imageCache.end()) return &it->second;
+
+    CachedImage ci;
+    const String path = name.startsWith("/") ? name : (String(OF_IMAGES_PATH) + "/" + name);
+    File f = LittleFS.open(path, "r");
+    if (f) {
+        // OFIM header: 'O','F','I',ver(1),fmt,wLE(2),hLE(2),reserved(1) = 10 bytes.
+        uint8_t hdr[10];
+        if (f.read(hdr, sizeof(hdr)) == sizeof(hdr)
+            && hdr[0] == 'O' && hdr[1] == 'F' && hdr[2] == 'I' && hdr[3] == 1) {
+            const uint8_t  fmt = hdr[4];
+            const uint16_t iw  = static_cast<uint16_t>(hdr[5] | (hdr[6] << 8));
+            const uint16_t ih  = static_cast<uint16_t>(hdr[7] | (hdr[8] << 8));
+            const size_t expected = (fmt == 0) ? static_cast<size_t>(iw) * ih * 2
+                                               : static_cast<size_t>((iw + 7) / 8) * ih;
+            const size_t avail = f.size() >= sizeof(hdr) ? f.size() - sizeof(hdr) : 0;
+            if (iw && ih && expected && avail >= expected && expected <= OF_IMAGE_MAX_BYTES) {
+                uint8_t* buf = nullptr;
+            #if defined(OF_PLATFORM_ESP32)
+                buf = static_cast<uint8_t*>(ps_malloc(expected));
+            #endif
+                if (!buf) buf = static_cast<uint8_t*>(malloc(expected));
+                if (buf && f.read(buf, expected) == expected) {
+                    ci.w = iw; ci.h = ih; ci.fmt = fmt;
+                    ci.data = buf; ci.len = expected; ci.valid = true;
+                } else if (buf) {
+                    free(buf);
+                }
+            }
+        }
+        f.close();
+    }
+    if (!ci.valid) LOG_W(TAG, "Image '" + name + "' unavailable/invalid");
+    auto res = _imageCache.emplace(name, ci);
+    return &res.first->second;
+#else
+    (void)name;
+    return nullptr;
+#endif
+}
+
+void DisplayManager::clearImageCache() {
+    for (auto& kv : _imageCache) {
+        if (kv.second.data) free(kv.second.data);
+    }
+    _imageCache.clear();
+}
+
+void DisplayManager::evictImage(const String& name) {
+    auto it = _imageCache.find(name);
+    if (it == _imageCache.end()) return;
+    if (it->second.data) free(it->second.data);
+    _imageCache.erase(it);
+    for (auto& d : _displays) d.dirty = true;  // force a redraw with the new file
+}
+
+// Filled-arc gauge: a 270° arc (gap at the bottom) whose first `frac` is drawn in the
+// foreground colour and the remainder in the background/track colour, with the value
+// shown in the centre. Built from short line segments so it renders on every panel.
+void DisplayManager::renderGauge(DisplayProvider& p, const DisplayWidget& w) const {
+    const int16_t r  = w.w > 0 ? w.w : 20;
+    const int16_t cx = static_cast<int16_t>(w.x + r);
+    const int16_t cy = static_cast<int16_t>(w.y + r);
+    const float startDeg = 135.0f, sweepDeg = 270.0f;   // gap centred at the bottom
+    float frac = (w.maxVal != w.minVal)
+        ? (resolveWidgetValue(w) - w.minVal) / (w.maxVal - w.minVal) : 0.0f;
+    if (frac < 0) frac = 0;
+    if (frac > 1) frac = 1;
+
+    const int segs = 36;
+    const float toRad = 3.14159265f / 180.0f;
+    auto px = [&](float deg, int rr) { return static_cast<int16_t>(cx + rr * cosf(deg * toRad)); };
+    auto py = [&](float deg, int rr) { return static_cast<int16_t>(cy + rr * sinf(deg * toRad)); };
+
+    for (int i = 0; i < segs; ++i) {
+        const float a0 = startDeg + sweepDeg * (i / (float)segs);
+        const float a1 = startDeg + sweepDeg * ((i + 1) / (float)segs);
+        const bool filled = ((i + 0.5f) / segs) <= frac;
+        const uint16_t col = filled ? w.color : (w.hasBg ? w.bgColor : 0x0000);
+        if (!filled && !w.hasBg) continue;               // mono: leave the track empty
+        // 2-px-thick arc (radius r and r-1).
+        p.drawLineShape(px(a0, r),     py(a0, r),     px(a1, r),     py(a1, r),     col);
+        p.drawLineShape(px(a0, r - 1), py(a0, r - 1), px(a1, r - 1), py(a1, r - 1), col);
+    }
+
+    // Centre value text.
+    String val = String(resolveWidgetValue(w), (unsigned int)w.decimals);
+    val = w.prefix + val + w.suffix;
+    const uint8_t size = w.textSize ? w.textSize : 1;
+    const int16_t tw = static_cast<int16_t>(val.length()) * 6 * size;
+    DisplayStyle s;
+    s.color = w.color; s.size = size;
+    p.drawTextStyled(static_cast<int16_t>(cx - tw / 2), static_cast<int16_t>(cy - 4 * size), val, s);
+}
+
+// Mini line chart of a variable's recent history. Samples the bound variable at most
+// once per SPARK_SAMPLE_MS while on screen, keeps the last `width` points, and draws a
+// polyline auto-scaled to the data's min/max.
+void DisplayManager::renderSparkline(DisplayProvider& p, const DisplayWidget& w) const {
+    static constexpr uint32_t SPARK_SAMPLE_MS = 1000;
+    const int16_t bw = w.w > 0 ? w.w : 40;
+    const int16_t bh = w.h > 0 ? w.h : 16;
+
+    SparkHistory& hist = _sparkHistory[w.id + "|" + w.variableId];
+    const uint32_t nowMs = millis();
+    if (hist.points.empty() || (nowMs - hist.lastSampleMs) >= SPARK_SAMPLE_MS) {
+        hist.points.push_back(resolveWidgetValue(w));
+        hist.lastSampleMs = nowMs;
+        while (hist.points.size() > static_cast<size_t>(bw)) hist.points.erase(hist.points.begin());
+    }
+
+    // Optional frame/track when a background colour is set.
+    if (w.hasBg) p.drawRectShape(w.x, w.y, bw, bh, w.bgColor, false);
+
+    const size_t n = hist.points.size();
+    if (n < 2) return;
+
+    float vmin = hist.points[0], vmax = hist.points[0];
+    for (float v : hist.points) { if (v < vmin) vmin = v; if (v > vmax) vmax = v; }
+    float span = vmax - vmin;
+    if (span < 1e-6f) span = 1.0f;                       // flat series → centre line
+
+    auto mapY = [&](float v) {
+        return static_cast<int16_t>(w.y + bh - 1 - (v - vmin) / span * (bh - 1));
+    };
+    auto mapX = [&](size_t i) {
+        return static_cast<int16_t>(w.x + (n > 1 ? i * (bw - 1) / (n - 1) : 0));
+    };
+    for (size_t i = 1; i < n; ++i) {
+        p.drawLineShape(mapX(i - 1), mapY(hist.points[i - 1]),
+                        mapX(i),     mapY(hist.points[i]), w.color);
+    }
 }
 
 void DisplayManager::publishPageChange(const DisplayInstance& display, const DisplayPage& page) const {
@@ -1164,6 +2013,8 @@ void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
         screen["type"]   = display.config.type;
         screen["width"]  = display.config.width;
         screen["height"] = display.config.height;
+        // Whether this surface renders colour, so the preview matches the glass.
+        screen["color"]  = display.provider ? display.provider->isColor() : false;
 
         const DisplayPage* page = findPageForDisplay(display.config, display.currentPageId);
         if (!page) page = firstPageForDisplay(display.config);
@@ -1173,17 +2024,44 @@ void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
         if (page) {
             screen["page"]  = page->id;
             screen["title"] = page->title;
+            if (page->hasBg) screen["bg"] = of_hex_from_rgb565(page->bgColor);
             for (const auto& widget : page->widgets) {
                 if (widgetBudget == 0) { screen["truncated"] = true; truncated = true; break; }
-                String text = resolveWidgetText(widget);
-                if (widget.maxChars > 0 && text.length() > widget.maxChars) {
-                    text = text.substring(0, widget.maxChars);
-                }
                 JsonObject w = widgets.add<JsonObject>();
-                w["x"]    = widget.x;
-                w["y"]    = widget.y;
-                w["size"] = widget.textSize;
-                w["text"] = text;
+                w["x"]     = widget.x;
+                w["y"]     = widget.y;
+                w["color"] = of_hex_from_rgb565(widget.color);
+                if (widget.hasBg) w["bg"] = of_hex_from_rgb565(widget.bgColor);
+
+                const bool textLike = widget.type == DisplayWidgetType::Text
+                                   || widget.type == DisplayWidgetType::Value
+                                   || widget.type == DisplayWidgetType::DateTime;
+                if (textLike) {
+                    String text = resolveWidgetText(widget);
+                    if (widget.maxChars > 0 && text.length() > widget.maxChars) {
+                        text = text.substring(0, widget.maxChars);
+                    }
+                    w["text"] = text;
+                    w["size"] = widget.textSize;
+                    if (widget.align != TextAlign::Left) w["align"] = static_cast<uint8_t>(widget.align);
+                } else {
+                    w["type"] = widgetTypeToString(widget.type);
+                    if (widget.w) w["w"] = widget.w;
+                    if (widget.h) w["h"] = widget.h;
+                    if (widget.filled) w["filled"] = true;
+                    if (widget.type == DisplayWidgetType::Icon) {
+                        w["icon"] = widget.text;
+                    } else if (widget.type == DisplayWidgetType::Image) {
+                        w["src"] = widget.text;
+                    } else if (widget.type == DisplayWidgetType::Bar
+                            || widget.type == DisplayWidgetType::Led
+                            || widget.type == DisplayWidgetType::Gauge
+                            || widget.type == DisplayWidgetType::Sparkline) {
+                        w["val"] = resolveWidgetValue(widget);
+                        w["min"] = widget.minVal;
+                        w["max"] = widget.maxVal;
+                    }
+                }
                 --widgetBudget;
             }
         }

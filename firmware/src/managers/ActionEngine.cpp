@@ -7,6 +7,7 @@
 #include "../hardware/OutputManager.h"
 #include "../hardware/HidManager.h"
 #include "../managers/HaManager.h"
+#include "../managers/HaBridgeManager.h"
 #include "../managers/MqttManager.h"
 #include "../managers/NodeLink.h"
 #include "../managers/SceneManager.h"
@@ -821,6 +822,26 @@ void ActionEngine::registerBuiltInExecutors() {
             error = "HA service required";
             return false;
         }
+        // Prefer the HA bridge when it's running: over the WebSocket transport this
+        // calls the service turnkey (no HA automation needed), and over MQTT it uses
+        // the very same call_service convention as the fallback below. haService is
+        // "<domain>.<service>" (e.g. "light.turn_on").
+        const int dot = step.haService.indexOf('.');
+        const String domain  = dot > 0 ? step.haService.substring(0, dot) : step.haService;
+        const String service = dot > 0 ? step.haService.substring(dot + 1) : String("");
+        const String data    = step.body.length() ? expandTemplate(step.body) : String("");
+
+        if (HaBridgeManager::instance().isStarted()) {
+            if (HaBridgeManager::instance().callService(domain, service, step.haEntityId, data)) {
+                return true;
+            }
+            // Bridge active but couldn't deliver (e.g. WS not yet authenticated).
+            error = "HA service call not delivered";
+            return false;
+        }
+
+        // No bridge: fall back to the legacy MQTT call_service convention (requires
+        // an HA-side automation to route it). Needs HA discovery / MQTT enabled.
         if (!HaManager::instance().isEnabled()) {
             error = "HA not enabled";
             return false;
@@ -828,9 +849,9 @@ void ActionEngine::registerBuiltInExecutors() {
         const String topic = "homeassistant/call_service/" + step.haService;
         JsonDocument doc;
         doc["entity_id"] = step.haEntityId;
-        if (step.body.length()) {
+        if (data.length()) {
             JsonDocument bodyDoc;
-            deserializeJson(bodyDoc, expandTemplate(step.body));
+            deserializeJson(bodyDoc, data);
             doc["service_data"].set(bodyDoc);
         }
         String payload;

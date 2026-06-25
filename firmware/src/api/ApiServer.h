@@ -37,8 +37,13 @@ private:
     void sendOutputs(AsyncWebServerRequest* request) const;
     void sendOutputsState(AsyncWebServerRequest* request) const;
     void sendSensors(AsyncWebServerRequest* request) const;
+    void sendHaImport(AsyncWebServerRequest* request) const;
     void sendDisplays(AsyncWebServerRequest* request) const;
     void sendDisplayPages(AsyncWebServerRequest* request) const;
+    void sendImages(AsyncWebServerRequest* request) const;
+    void handleImageDelete(AsyncWebServerRequest* request);
+    void handleImageUploadChunk(AsyncWebServerRequest* request, uint8_t* data,
+                                size_t len, size_t index, size_t total);
     void sendActions(AsyncWebServerRequest* request) const;
     void sendMacros(AsyncWebServerRequest* request) const;
     void sendScenes(AsyncWebServerRequest* request) const;
@@ -75,6 +80,7 @@ private:
     void handleOutputsUpdate(AsyncWebServerRequest* request, const String& body);
     void handleOutputsControl(AsyncWebServerRequest* request, const String& body);
     void handleSensorsUpdate(AsyncWebServerRequest* request, const String& body);
+    void handleHaImportUpdate(AsyncWebServerRequest* request, const String& body);
     void handleHardwareAdopt(AsyncWebServerRequest* request, const String& body);
     void handleDisplaysUpdate(AsyncWebServerRequest* request, const String& body);
     void handleActionsUpdate(AsyncWebServerRequest* request, const String& body);
