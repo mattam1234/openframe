@@ -16,14 +16,14 @@
     "test": "node --import tsx --test --test-concurrency=1 test/registry.test.ts test/alerts.test.ts test/templates.test.ts test/history.test.ts test/logs.test.ts test/firmware-store.test.ts test/notifier.test.ts test/rate-limit.test.ts test/provision.test.ts test/auth.test.ts test/audit.test.ts test/jobs.test.ts test/integration.test.ts"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^5.2.1",
     "mqtt": "^5.10.1",
     "multer": "^1.4.5-lts.1",
     "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.2",
     "@types/qrcode": "^1.5.5",
