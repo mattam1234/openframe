@@ -9,8 +9,10 @@
  * Each device publishes a retained "online" birth + retained JSON /status
  * heartbeat every few seconds (matching the firmware TelemetryManager contract),
  * with metrics that drift over time so charts/alerts have something to show.
- * It also answers /cmd by echoing an ack on /cmd/result, so remote actions and
- * bulk pushes resolve in the UI. Ctrl-C publishes "offline" (LWT-style) and exits.
+ * It also answers /cmd by echoing an ack on /cmd/result (apply_config acks carry
+ * restartRequired per the firmware's hot-apply contract), and emits an
+ * occasional Warning+ line on /log so the device-log panel has traffic.
+ * Ctrl-C publishes "offline" (LWT-style) and exits.
  */
 import mqtt from 'mqtt';
 
@@ -67,8 +69,24 @@ function publishHeartbeat(d: SimDevice): void {
     uptimeMs: Date.now() - d.bootMs,
     cpuLoadPercent: 5 + (Date.now() / 1000 % 30 | 0),
     activeProfileId: '',
+    // Build-time feature flags, roughly matching the constrained-board gating.
+    features: { weather: d.board !== 'ESP8266', push: true, tls: d.board !== 'ESP8266' },
   };
   client.publish(statusTopic(d.id), JSON.stringify(hb), { qos: 1, retain: true });
+}
+
+// Warning+ log lines, matching the firmware's <base>/<id>/log mirror (#83).
+const LOG_LINES: Array<{ level: string; tag: string; msg: string }> = [
+  { level: 'warning', tag: 'WiFi',    msg: 'RSSI low (-82 dBm), roaming candidates: 0' },
+  { level: 'warning', tag: 'Weather', msg: 'Open-Meteo returned HTTP 429' },
+  { level: 'error',   tag: 'Push',    msg: 'Push via ntfy failed: HTTP 502' },
+  { level: 'warning', tag: 'Sensors', msg: "Sensor 'bme280' read failed: I2C timeout" },
+  { level: 'warning', tag: 'MQTT',    msg: 'MQTT connect failed: Connection timeout (rc=-4) — retry in 8s' },
+];
+
+function publishLog(d: SimDevice): void {
+  const line = LOG_LINES[Math.floor(Math.random() * LOG_LINES.length)];
+  client.publish(`${BASE}/${d.id}/log`, JSON.stringify({ ts: Date.now(), ...line }), { qos: 0 });
 }
 
 client.on('connect', () => {
@@ -88,12 +106,22 @@ client.on('connect', () => {
     const id = parts[1];
     try {
       const cmd = JSON.parse(payload.toString('utf8'));
-      client.publish(`${BASE}/${id}/cmd/result`, JSON.stringify({ id: cmd.id, type: cmd.type, ok: true }), { qos: 1 });
+      const ack: Record<string, unknown> = { id: cmd.id, type: cmd.type, ok: true };
+      if (cmd.type === 'apply_config') {
+        // Mirror the firmware's hot-apply contract: pushes touching only the
+        // mqtt/time/notify/weather sections apply live; anything else "reboots".
+        const HOT = new Set(['mqtt', 'time', 'notify', 'weather']);
+        const keys = Object.keys((cmd.payload as Record<string, unknown>) ?? {});
+        ack.restartRequired = !keys.length || !keys.every((k) => HOT.has(k));
+      }
+      client.publish(`${BASE}/${id}/cmd/result`, JSON.stringify(ack), { qos: 1 });
       console.log(`[sim] ${id} acked '${cmd.type}'`);
     } catch { /* ignore */ }
   });
 
   setInterval(() => { for (const d of devices) publishHeartbeat(d); }, HEARTBEAT_MS);
+  // One random device grumbles every ~15 s so the log panel has traffic.
+  setInterval(() => publishLog(devices[Math.floor(Math.random() * devices.length)]), 15_000);
 });
 
 client.on('error', (e) => console.error('[sim] mqtt error:', e.message));

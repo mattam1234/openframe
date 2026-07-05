@@ -13,7 +13,7 @@
     "simulate": "tsx tools/simulate.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"tools/**/*.ts\"",
-    "test": "node --import tsx --test --test-concurrency=1 test/registry.test.ts test/alerts.test.ts test/templates.test.ts test/history.test.ts test/firmware-store.test.ts test/notifier.test.ts test/rate-limit.test.ts test/provision.test.ts test/auth.test.ts test/audit.test.ts test/jobs.test.ts test/integration.test.ts"
+    "test": "node --import tsx --test --test-concurrency=1 test/registry.test.ts test/alerts.test.ts test/templates.test.ts test/history.test.ts test/logs.test.ts test/firmware-store.test.ts test/notifier.test.ts test/rate-limit.test.ts test/provision.test.ts test/auth.test.ts test/audit.test.ts test/jobs.test.ts test/integration.test.ts"
   },
   "dependencies": {
     "express": "^4.19.2",

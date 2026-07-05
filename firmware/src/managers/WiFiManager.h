@@ -44,8 +44,11 @@ public:
     // Force switch to AP mode (e.g. after repeated STA failures)
     void startAP();
 
-    // Attempt STA connection using stored credentials
-    void startSTA();
+    // Attempt STA connection using stored credentials. `probe` marks a background
+    // retry from fallback-AP mode: the device is already offline there, so a
+    // failed probe must not re-fire the WifiDisconnected event — events are for
+    // state transitions only. A successful probe restores STA fully.
+    void startSTA(bool probe = false);
 
     // Scan nearby WiFi networks for UI selection.
     void scanNearbyNetworks(JsonDocument& doc);
@@ -68,9 +71,30 @@ private:
     bool      _connected    = false;
     uint8_t   _retryCount   = 0;
     uint32_t  _lastAttempt  = 0;
+    // Fallback-AP STA-probe state: when a captive-portal client was last seen
+    // associated (checked at most once per second), and how many consecutive
+    // probes failed (drives the probe-interval back-off).
+    uint32_t  _lastApClientMs      = 0;
+    uint32_t  _lastApClientCheckMs = 0;
+    uint8_t   _probeFailures       = 0;
 
     static constexpr uint8_t  MAX_RETRIES         = 5;
-    static constexpr uint32_t RETRY_INTERVAL_MS   = 10000;  // 10 s between attempts
+    // Reconnect waits grow exponentially from RETRY_INTERVAL_MS and are capped
+    // at RETRY_MAX_INTERVAL_MS (10 s → 20 s → 40 s → 60 s → 60 s), so a flapping
+    // AP isn't hammered but a brief outage still recovers quickly.
+    static constexpr uint32_t RETRY_INTERVAL_MS     = 10000;
+    static constexpr uint32_t RETRY_MAX_INTERVAL_MS = 60000;
+    // While parked in fallback-AP mode with saved credentials, probe for the
+    // configured network this often (the probe drops the AP for up to ~10 s).
+    // After AP_STA_BACKOFF_AFTER consecutive failures the interval backs off —
+    // the network is likely gone for a while, so stop blocking the loop every
+    // 5 minutes for a probe that keeps failing.
+    static constexpr uint32_t AP_STA_RETRY_INTERVAL_MS   = 300000;   // 5 min
+    static constexpr uint32_t AP_STA_BACKOFF_INTERVAL_MS = 900000;   // 15 min
+    static constexpr uint8_t  AP_STA_BACKOFF_AFTER       = 3;
+    // Only probe when the AP has been client-free this long — a probe yanks the
+    // captive portal from under a phone that may have merely idled off the AP.
+    static constexpr uint32_t AP_CLIENT_QUIET_MS         = 120000;   // 2 min
     static constexpr uint8_t  DNS_PORT             = 53;
     static constexpr const char* TAG               = "WiFi";
 };

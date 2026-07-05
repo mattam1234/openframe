@@ -299,7 +299,7 @@
               <v-col cols="12" sm="4">
                 <v-select
                   v-model="editingAction.trigger.schedule_mode"
-                  :items="[{ value: 'interval', title: 'Every N seconds' }, { value: 'daily', title: 'Daily at time' }]"
+                  :items="[{ value: 'interval', title: 'Every N seconds' }, { value: 'daily', title: 'Daily at time' }, { value: 'sunrise', title: 'Sunrise' }, { value: 'sunset', title: 'Sunset' }]"
                   label="Mode"
                   density="compact"
                   hide-details
@@ -310,8 +310,17 @@
                   v-if="editingAction.trigger.schedule_mode === 'daily'"
                   v-model="editingAction.trigger.daily_time"
                   type="time"
-                  label="Time (UTC)"
-                  hint="Needs NTP/cluster time"
+                  label="Time"
+                  hint="Local time (device TZ) — needs NTP/cluster time"
+                  persistent-hint
+                  density="compact"
+                />
+                <v-text-field
+                  v-else-if="isSunMode"
+                  v-model.number="editingAction.trigger.offset_min"
+                  type="number"
+                  label="Offset (minutes)"
+                  hint="± minutes from the event — requires device location in Settings → Time"
                   persistent-hint
                   density="compact"
                 />
@@ -324,6 +333,22 @@
                   density="compact"
                   hide-details
                 />
+              </v-col>
+              <!-- Day-of-week filter (daily/sunrise/sunset): a lit chip = fires that day -->
+              <v-col v-if="isDailyLikeMode" cols="12">
+                <div class="text-caption text-medium-emphasis mb-1">Days of week</div>
+                <div class="d-flex flex-wrap ga-1">
+                  <v-chip
+                    v-for="(dayLabel, dayIdx) in dowLabels"
+                    :key="dayLabel"
+                    size="small"
+                    :color="dowBit(dayIdx) ? 'primary' : undefined"
+                    :variant="dowBit(dayIdx) ? 'flat' : 'outlined'"
+                    @click="toggleDow(dayIdx)"
+                  >
+                    {{ dayLabel }}
+                  </v-chip>
+                </div>
               </v-col>
             </template>
             <template v-if="editingAction.trigger.source === 'input'">
@@ -574,11 +599,42 @@
                     :no-data-text="'No displays configured'"
                   />
                 </template>
+                <!-- Display brightness: override a display's brightness (-1 = clear override) -->
+                <template v-if="step.type === 'display_brightness'">
+                  <v-select
+                    v-model="step.display_id"
+                    :items="displaysList"
+                    label="Display"
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                    :no-data-text="'No displays configured'"
+                  />
+                  <v-checkbox
+                    :model-value="step.brightness === -1"
+                    label="Clear override (back to configured brightness)"
+                    density="compact"
+                    hide-details
+                    class="mt-1"
+                    @update:model-value="v => { step.brightness = v ? -1 : 128 }"
+                  />
+                  <v-slider
+                    v-if="step.brightness !== -1"
+                    v-model="step.brightness"
+                    :min="0" :max="255" :step="1"
+                    label="Brightness"
+                    thumb-label
+                    density="compact"
+                    hide-details
+                    class="mt-2"
+                  />
+                </template>
                 <v-text-field v-if="step.type === 'notification'" v-model="step.message" label="Message" hint="Supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                 <template v-if="step.type === 'http_request'">
                   <v-text-field v-model="step.url" label="URL" hint="Webhook URL — supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                   <v-select v-model="step.method" :items="['GET','POST','PUT','DELETE']" label="Method" density="compact" />
                   <v-text-field v-model="step.body" label="Body" hint="JSON payload — supports {{variable}} templating" persistent-hint density="compact" />
+                  <v-textarea v-model="step.headers" label="Headers (optional)" rows="2" auto-grow hint="One 'Name: Value' per line — supports {{variable}} templating" persistent-hint density="compact" class="mt-2" />
                 </template>
                 <template v-if="step.type === 'remote_action'">
                   <v-text-field v-model="step.node_id" label="Target node ID" hint="Device ID of the node to trigger" persistent-hint density="compact" class="mt-2" />
@@ -769,6 +825,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import api from '../api/client'
+import { secondsToHhmm, hhmmToSeconds } from '../lib/timeFormat'
 import { useWebSocketStore } from '../stores/websocket'
 
 const wsStore = useWebSocketStore()
@@ -820,6 +877,7 @@ const actionStepTypes = [
   { value: 'page_change', label: 'Page Change' },
   { value: 'navigate_screen_next', label: 'Next Screen' },
   { value: 'navigate_screen_prev', label: 'Previous Screen' },
+  { value: 'display_brightness', label: 'Display Brightness', icon: 'mdi-brightness-5' },
   { value: 'notification', label: 'Notification' },
   { value: 'delay', label: 'Delay' },
   { value: 'wait_until', label: 'Wait Until (variable)' },
@@ -901,21 +959,25 @@ function setStepColor(step, hex) {
 const newTrigger = () => ({
   source: 'manual', input_id: '', event: 'Press',
   schedule_mode: 'interval', interval_sec: 60, daily_time: '08:00',
+  offset_min: 0, dow_mask: 127,
   debounce_ms: 0, cooldown_ms: 0,
 })
 
-// HH:MM (UTC) <-> seconds-since-midnight helpers for the daily schedule.
-const secondsToHhmm = (secs) => {
-  if (secs === undefined || secs === null || secs < 0) return '08:00'
-  const h = Math.floor(secs / 3600)
-  const m = Math.floor((secs % 3600) / 60)
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+// ── Schedule helpers (daily / sunrise / sunset) ───────────────────────────────
+const isSunMode = computed(() =>
+  ['sunrise', 'sunset'].includes(editingAction.value.trigger?.schedule_mode))
+const isDailyLikeMode = computed(() =>
+  ['daily', 'sunrise', 'sunset'].includes(editingAction.value.trigger?.schedule_mode))
+// Day-of-week filter bitmask: bit0=Sunday .. bit6=Saturday, 127 = every day.
+const dowLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const dowBit = (idx) => ((editingAction.value.trigger?.dow_mask ?? 127) & (1 << idx)) !== 0
+function toggleDow(idx) {
+  const t = editingAction.value.trigger
+  t.dow_mask = (t.dow_mask ?? 127) ^ (1 << idx)
 }
-const hhmmToSeconds = (hhmm) => {
-  const [h, m] = String(hhmm || '').split(':').map((n) => parseInt(n, 10))
-  if (Number.isNaN(h) || Number.isNaN(m)) return -1
-  return h * 3600 + m * 60
-}
+
+// HH:MM (UTC) <-> seconds-since-midnight for the daily schedule comes from the
+// shared lib (secondsToHhmm / hhmmToSeconds imported above).
 const editingAction = ref({ id: '', name: '', enabled: true, trigger: newTrigger(), conditions: [], steps: [], _existing: false })
 const editingMacro = ref({ id: '', name: '', enabled: true, actionsText: '', params: [], _existing: false })
 
@@ -986,7 +1048,7 @@ function removeCondition(idx) {
 }
 
 function addStep() {
-  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid', frequency: 2000, duration_ms: 200, angle: 90, position: 0, keys: '', media_command: 'play_pause', op: 'eq', repeat_count: 1 })
+  editingAction.value.steps.push({ type: 'output_control', command: 'digital', on: true, speed: 128, animation: 'solid', frequency: 2000, duration_ms: 200, angle: 90, position: 0, brightness: 128, keys: '', media_command: 'play_pause', op: 'eq', repeat_count: 1 })
 }
 
 function removeStep(idx) {
@@ -1005,11 +1067,16 @@ async function saveAction() {
         cooldown_ms: Math.max(0, parseInt(t.cooldown_ms, 10) || 0),
       }
     } else if (t.source === 'schedule') {
+      const mode = t.schedule_mode || 'interval'
+      const sunMode = mode === 'sunrise' || mode === 'sunset'
+      const mask = parseInt(t.dow_mask, 10)
       trigger = {
         source: 'schedule',
-        schedule_mode: t.schedule_mode || 'interval',
+        schedule_mode: mode,
         interval_sec: Math.max(1, parseInt(t.interval_sec, 10) || 0),
-        daily_seconds: t.schedule_mode === 'daily' ? hhmmToSeconds(t.daily_time) : -1,
+        daily_seconds: mode === 'daily' ? hhmmToSeconds(t.daily_time) : -1,
+        offset_min: sunMode ? (parseInt(t.offset_min, 10) || 0) : 0,
+        dow_mask: (mode === 'daily' || sunMode) ? (Number.isNaN(mask) ? 127 : (mask & 127)) : 127,
       }
     } else {
       trigger = { source: 'manual', input_id: '', event: '' }

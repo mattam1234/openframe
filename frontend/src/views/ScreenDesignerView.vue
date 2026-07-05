@@ -35,10 +35,10 @@
       {{ statusMessage.text }}
     </v-alert>
 
-    <!-- Page tabs -->
+    <!-- Page tabs (ordered per each display's page_order) -->
     <div v-if="pages.length" class="sd-pagebar mb-3">
       <v-chip
-        v-for="page in pages"
+        v-for="page in orderedPages"
         :key="page.id"
         :color="selectedPage && selectedPage.id === page.id ? 'primary' : undefined"
         :variant="selectedPage && selectedPage.id === page.id ? 'flat' : 'tonal'"
@@ -48,6 +48,19 @@
       >
         <v-icon start size="14">mdi-television</v-icon>
         {{ page.title || page.id }}
+        <!-- Reorder affordance on the active chip — writes the display's page_order. -->
+        <template v-if="selectedPage && selectedPage.id === page.id">
+          <v-btn
+            icon="mdi-chevron-left" size="x-small" density="compact" variant="text" class="ml-1"
+            :disabled="savingOrder || !canMovePage(-1)" aria-label="Move page earlier in rotation"
+            @click.stop="movePage(-1)"
+          />
+          <v-btn
+            icon="mdi-chevron-right" size="x-small" density="compact" variant="text"
+            :disabled="savingOrder || !canMovePage(1)" aria-label="Move page later in rotation"
+            @click.stop="movePage(1)"
+          />
+        </template>
       </v-chip>
     </div>
 
@@ -91,6 +104,13 @@
             {{ activeDisplay.width }}×{{ activeDisplay.height }} · {{ displayLabel }}
           </span>
           <v-spacer />
+          <v-btn icon="mdi-undo" size="x-small" variant="text" :disabled="!canUndo" aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" @click="undo" />
+          <v-btn icon="mdi-redo" size="x-small" variant="text" :disabled="!canRedo" aria-label="Redo (Ctrl+Shift+Z)" title="Redo (Ctrl+Shift+Z)" @click="redo" />
+          <v-divider vertical class="mx-1 my-1" />
+          <v-btn icon="mdi-content-copy" size="x-small" variant="text" :disabled="!selectedWidget" aria-label="Copy widget (Ctrl+C)" title="Copy widget (Ctrl+C)" @click="copySelected" />
+          <v-btn icon="mdi-import" size="x-small" variant="text" :disabled="!clipboard" aria-label="Paste widget (Ctrl+V)" title="Paste widget (Ctrl+V)" @click="pasteClipboard" />
+          <v-btn icon="mdi-content-duplicate" size="x-small" variant="text" :disabled="!selectedWidget" aria-label="Duplicate widget (Ctrl+D)" title="Duplicate widget (Ctrl+D)" @click="duplicateSelected" />
+          <v-divider vertical class="mx-1 my-1" />
           <v-btn icon="mdi-magnify-minus-outline" size="x-small" variant="text" aria-label="Zoom out" @click="zoom(-1)" />
           <span class="text-caption mx-1">{{ scale }}×</span>
           <v-btn icon="mdi-magnify-plus-outline" size="x-small" variant="text" aria-label="Zoom in" @click="zoom(1)" />
@@ -132,18 +152,25 @@
               <div v-else-if="widget.type === 'image'" class="sd-img-ph"><v-icon size="small">mdi-image</v-icon></div>
               <svg v-else-if="widget.type === 'gauge'" class="sd-svg" :viewBox="`0 0 ${gaugeSize(widget)} ${gaugeSize(widget)}`">
                 <path :d="gaugeArc(widget, 1)" :stroke="gaugeTrack(widget)" fill="none" stroke-width="2" stroke-linecap="round" />
-                <path :d="gaugeArc(widget, 0.66)" :stroke="previewColor(widget.color)" fill="none" stroke-width="2" stroke-linecap="round" />
+                <path :d="gaugeArc(widget, gaugeFrac(widget))" :stroke="previewColor(widget.color)" fill="none" stroke-width="2" stroke-linecap="round" />
                 <text :x="gaugeSize(widget) / 2" :y="gaugeSize(widget) / 2 + 2" text-anchor="middle" :fill="previewColor(widget.color)" font-size="6">{{ gaugeLabel(widget) }}</text>
               </svg>
               <svg v-else-if="widget.type === 'sparkline'" class="sd-svg" :viewBox="`0 0 ${widget.w || 60} ${widget.h || 20}`" preserveAspectRatio="none">
                 <polyline :points="sparkSample(widget)" :stroke="previewColor(widget.color)" fill="none" stroke-width="1" vector-effect="non-scaling-stroke" />
               </svg>
+              <!-- Corner resize handle for widgets with an on-panel box (drag = resize). -->
+              <span
+                v-if="selectedWidgetIdx === idx && isResizable(widget)"
+                class="sd-resize-handle"
+                aria-hidden="true"
+                @pointerdown.stop.prevent="onResizePointerDown($event, idx)"
+              />
             </div>
           </div>
         </div>
         <p class="sd-hint text-caption text-medium-emphasis">
-          Drag widgets, or focus one and nudge with the arrow keys (Delete removes it).
-          Saving restarts the device to apply the layout.
+          Drag widgets (corner handle resizes), nudge with the arrow keys (Shift = snap step, Delete removes).
+          Ctrl+Z/Y undo·redo, Ctrl+C/V/D copy·paste·duplicate. Changes apply live — no device restart needed.
         </p>
       </section>
 
@@ -153,14 +180,34 @@
         <div v-if="selectedWidget" class="sd-inspect-block">
           <div class="sd-rail-head sd-rail-head--row">
             <span>Widget</span>
-            <v-btn
-              icon="mdi-delete-outline"
-              size="x-small"
-              variant="text"
-              color="error"
-              aria-label="Delete widget"
-              @click="removeWidget(selectedWidgetIdx)"
-            />
+            <span>
+              <v-btn
+                icon="mdi-arrange-send-backward"
+                size="x-small"
+                variant="text"
+                :disabled="selectedWidgetIdx === 0"
+                aria-label="Send backward"
+                title="Send backward"
+                @click="moveWidgetLayer(-1)"
+              />
+              <v-btn
+                icon="mdi-arrange-bring-forward"
+                size="x-small"
+                variant="text"
+                :disabled="selectedWidgetIdx === selectedPage.widgets.length - 1"
+                aria-label="Bring forward"
+                title="Bring forward"
+                @click="moveWidgetLayer(1)"
+              />
+              <v-btn
+                icon="mdi-delete-outline"
+                size="x-small"
+                variant="text"
+                color="error"
+                aria-label="Delete widget"
+                @click="removeWidget(selectedWidgetIdx)"
+              />
+            </span>
           </div>
           <v-select
             v-model="selectedWidget.type"
@@ -186,10 +233,28 @@
             <p class="text-caption text-medium-emphasis mb-3">e.g. <code>%H:%M</code>, <code>%d/%m</code>, <code>%a %H:%M</code></p>
           </template>
 
-          <!-- Variable-bound (value / bar / led) -->
+          <!-- Variable-bound (value / bar / led) — searchable, grouped by source,
+               with the live value beside each item. Still a combobox so custom
+               (not-yet-defined) variable ids can be typed freely. -->
           <template v-else-if="['value', 'bar', 'led', 'gauge', 'sparkline'].includes(selectedWidget.type)">
-            <v-combobox v-model="selectedWidget.variableId" :items="variableIds" label="Variable"
-              density="compact" variant="outlined" hide-details class="mb-3" />
+            <v-combobox
+              v-model="selectedWidget.variableId"
+              v-model:search="variableSearch"
+              :items="groupedVariableItems"
+              no-filter
+              label="Variable"
+              :menu-props="{ maxHeight: 320 }"
+              density="compact" variant="outlined" hide-details class="mb-3"
+            >
+              <template #item="{ item, props: itemProps }">
+                <v-list-subheader v-if="item.raw.type === 'subheader'">{{ item.raw.title }}</v-list-subheader>
+                <v-list-item v-else v-bind="itemProps" :title="item.raw.title">
+                  <template #append>
+                    <span class="text-caption text-medium-emphasis ml-3">{{ item.raw.live }}</span>
+                  </template>
+                </v-list-item>
+              </template>
+            </v-combobox>
             <template v-if="['value', 'gauge'].includes(selectedWidget.type)">
               <div v-if="selectedWidget.type === 'value'" class="d-flex ga-2 mb-3">
                 <v-text-field v-model="selectedWidget.prefix" label="Prefix" density="compact" variant="outlined" hide-details />
@@ -224,7 +289,7 @@
             <v-btn block variant="tonal" color="deep-purple" prepend-icon="mdi-upload" :loading="uploadingImage" class="mb-2" @click="pickImageFile">
               {{ selectedWidget.text ? 'Replace image' : 'Upload image' }}
             </v-btn>
-            <input ref="imageFileInput" type="file" accept="image/*" hidden @change="onImageFileChosen" />
+            <input ref="imageFileInput" type="file" accept="image/*" hidden aria-label="Image file" @change="onImageFileChosen" />
             <v-select v-if="imageItems.length" v-model="selectedWidget.text" :items="imageItems" label="Image file"
               density="compact" variant="outlined" hide-details clearable class="mb-2" />
             <v-btn block size="small" variant="text" prepend-icon="mdi-fit-to-page-outline" class="mb-1" @click="fitImageToScreen">
@@ -269,10 +334,10 @@
           />
 
           <!-- Colour -->
-          <div class="sd-color-row mb-2">
-            <label class="sd-color-label">Colour</label>
-            <input type="color" v-model="selectedWidget.color" class="sd-color-input" aria-label="Widget colour" />
-          </div>
+          <label class="sd-color-row mb-2" for="sd-widget-colour">
+            <span class="sd-color-label">Colour</span>
+            <input id="sd-widget-colour" type="color" v-model="selectedWidget.color" class="sd-color-input" />
+          </label>
           <div class="sd-color-row mb-1">
             <v-switch :model-value="selectedWidget.bg != null" density="compact" color="primary" hide-details inset
               label="Background" @update:model-value="toggleWidgetBg" />
@@ -332,16 +397,22 @@
         Go to Layout Designer
       </v-btn>
     </div>
+
+    <v-snackbar v-model="snackbar" color="success" :timeout="3000">
+      {{ snackbarText }}
+    </v-snackbar>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import api from '../api/client'
 import {
   GFX_CHAR_W, GFX_CHAR_H, fitScale, pointerToDevicePx, clampWidgetPos,
+  clampWidgetSize, moveItem, variableGroupOf, sortPages,
 } from '../lib/screenEditor'
 import { fileToOfim } from '../lib/imageConvert'
+import { useWebSocketStore } from '../stores/websocket'
 
 // Widget catalogue — shared by the content library (drag source) and the inspector
 // type selector. Each renders on both OLED (monochrome: colour maps to on/off) and
@@ -394,6 +465,16 @@ const gridStep = ref(1)
 const scale = ref(4)
 const canvasEl = ref(null)
 const widgetEls = ref([])
+
+// Live variable values (variable_snapshot / variable_change frames) — the app
+// shell opens the socket, so this is just a read-through to the shared store.
+const wsStore = useWebSocketStore()
+
+const clipboard = ref(null)         // in-memory widget clipboard (deep clone)
+const variableSearch = ref('')      // combobox search text for the variable picker
+const savingOrder = ref(false)      // page_order write in flight
+const snackbar = ref(false)
+const snackbarText = ref('')
 
 const activeDisplay = computed(() =>
   displayList.value.find((d) => d.id === selectedPage.value?.displayId) || { width: 128, height: 64 },
@@ -477,6 +558,82 @@ function previewColor(c) {
   return (c && c.toLowerCase() !== '#000000') ? '#cfe8ff' : '#070b10'
 }
 
+// ── Live preview values ──────────────────────────────────────────────────────
+// Variable-bound widgets render the real value from the websocket store when the
+// socket is up and the variable exists; otherwise they fall back to the static
+// design-time samples (sparkline history stays a stylised sample either way).
+function liveVarOf(widget) {
+  const id = widget?.variableId
+  if (!id || !wsStore.connected) return null
+  const v = wsStore.variables[id]
+  return v && v.value !== undefined && v.value !== null ? v : null
+}
+function liveNumberOf(widget) {
+  const v = liveVarOf(widget)
+  if (!v) return null
+  const n = typeof v.value === 'boolean' ? (v.value ? 1 : 0) : Number(v.value)
+  return Number.isFinite(n) ? n : null
+}
+// Fraction of a min…max range (defaults 0…100), clamped to 0…1. A missing value
+// sits at the bottom of the range.
+function fracOf(value, min, max) {
+  const lo = min ?? 0, hi = max ?? 100
+  return Math.max(0, Math.min(1, ((value ?? lo) - lo) / ((hi - lo) || 1)))
+}
+// Fraction of the widget's min…max range for bar/gauge fills (null = no live value).
+function liveFracOf(widget) {
+  const n = liveNumberOf(widget)
+  return n == null ? null : fracOf(n, widget.min, widget.max)
+}
+function formatLiveValue(value, decimals) {
+  if (typeof value === 'boolean') return value ? 'on' : 'off'
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && (decimals == null) ? String(value) : value.toFixed(decimals ?? 1)
+  }
+  return String(value)
+}
+
+// ── Searchable, grouped variable picker ──────────────────────────────────────
+// Union of the REST snapshot (variableIds) and the live store, bucketed by the
+// firmware's `source` tag (with id-prefix fallbacks for weather./node.), filtered
+// by the combobox search text, with subheader sentinel rows between groups.
+const VAR_GROUPS = [
+  { key: 'local',   title: 'Local' },
+  { key: 'sensor',  title: 'Sensors' },
+  { key: 'input',   title: 'Inputs' },
+  { key: 'output',  title: 'Outputs' },
+  { key: 'weather', title: 'Weather' },
+  { key: 'node',    title: 'Node' },
+]
+const groupedVariableItems = computed(() => {
+  const q = (variableSearch.value || '').toLowerCase().trim()
+  const byId = new Map()
+  for (const id of variableIds.value) byId.set(id, wsStore.variables[id] || { id })
+  for (const [id, v] of Object.entries(wsStore.variables)) if (!byId.has(id)) byId.set(id, v)
+
+  const buckets = {}
+  for (const [id, v] of byId) {
+    if (q && !`${id} ${v.label || ''}`.toLowerCase().includes(q)) continue
+    const g = variableGroupOf(id, v.source)
+    ;(buckets[g] ||= []).push(v.id ? v : { ...v, id })
+  }
+
+  const items = []
+  for (const group of VAR_GROUPS) {
+    const rows = (buckets[group.key] || []).sort((a, b) => a.id.localeCompare(b.id))
+    if (!rows.length) continue
+    // Disabled so keyboard navigation skips the group header sentinel rows.
+    items.push({ type: 'subheader', title: group.title, props: { disabled: true } })
+    for (const v of rows) {
+      const live = v.value !== undefined && v.value !== null && wsStore.connected
+        ? `${formatLiveValue(v.value, null)}${v.unit ? ` ${v.unit}` : ''}`
+        : ''
+      items.push({ title: v.id, value: v.id, live })
+    }
+  }
+  return items
+})
+
 const panelStyle = computed(() => ({
   width: `${activeDisplay.value.width * scale.value}px`,
   height: `${activeDisplay.value.height * scale.value}px`,
@@ -501,7 +658,14 @@ function widgetStyle(widget) {
     }
     case 'led': {
       const d = (widget.w || 6) * 2 * s
-      return { ...base, width: `${d}px`, height: `${d}px`, borderRadius: '50%', background: col }
+      // Live value drives on/off: off renders as an outline dot. No live value →
+      // keep the static "on" look so the widget stays visible while designing.
+      const n = liveNumberOf(widget)
+      const off = n != null && n === 0
+      return off
+        ? { ...base, width: `${d}px`, height: `${d}px`, borderRadius: '50%',
+            background: 'transparent', border: `${Math.max(1, s)}px solid ${col}` }
+        : { ...base, width: `${d}px`, height: `${d}px`, borderRadius: '50%', background: col }
     }
     case 'line': {
       const w = Math.abs(widget.w || 0) * s
@@ -534,8 +698,9 @@ function widgetStyle(widget) {
 }
 
 // Inner fill of a bar widget (variable level → coloured fill over the track).
+// Prefers the live value; falls back to the static sample when unknown.
 function barFillStyle(widget) {
-  const frac = Math.max(0, Math.min(1, ((widget._val ?? widget.min) - widget.min) / ((widget.max - widget.min) || 1)))
+  const frac = liveFracOf(widget) ?? fracOf(widget._val, widget.min, widget.max)
   const col = previewColor(widget.color)
   const horizontal = (widget.w || 40) >= (widget.h || 8)
   return horizontal
@@ -544,9 +709,10 @@ function barFillStyle(widget) {
 }
 
 // ── Gauge / sparkline editor previews ────────────────────────────────────────
-// The editor has no live value, so the gauge shows a representative 66% fill and the
-// sparkline a stylised sample wave — enough to read the widget's shape and colour.
+// The gauge fills from the live value when one is available, else a representative
+// 66%; the sparkline stays a stylised sample wave (no history in the editor).
 function gaugeSize(widget) { return (widget.w || 24) * 2 }
+function gaugeFrac(widget) { return liveFracOf(widget) ?? 0.66 }
 function gaugeTrack(widget) {
   return widget.bg != null ? previewColor(widget.bg) : 'rgba(207,232,255,0.18)'
 }
@@ -562,6 +728,8 @@ function gaugeArc(widget, frac) {
   return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`
 }
 function gaugeLabel(widget) {
+  const n = liveNumberOf(widget)
+  if (n != null) return String(Math.round(n))
   const min = widget.min ?? 0, max = widget.max ?? 100
   return String(Math.round(min + 0.66 * (max - min)))
 }
@@ -579,7 +747,10 @@ function sparkSample(widget) {
 function widgetPreviewText(widget) {
   if (widget.type === 'text') return widget.text || 'Text'
   if (widget.type === 'datetime') return widget.text || '%H:%M:%S'
-  const inner = widget.variableId ? `{${widget.variableId}}` : '{value}'
+  // Value widgets show the live reading when available, else the {placeholder}.
+  const live = liveVarOf(widget)
+  const inner = live ? formatLiveValue(live.value, widget.decimals)
+    : widget.variableId ? `{${widget.variableId}}` : '{value}'
   return `${widget.prefix || ''}${inner}${widget.suffix || ''}`
 }
 
@@ -655,24 +826,29 @@ function widgetAriaLabel(widget) {
   return `${what} at ${widget.x}, ${widget.y}. Arrow keys move, Delete removes.`
 }
 
-// Arrow keys nudge the focused widget by the snap step; Delete/Backspace removes.
+// Arrow keys nudge the focused widget by 1px (Shift = the snap step);
+// Delete/Backspace removes. Ctrl-combos bubble up to the global shortcut handler.
 function onWidgetKeydown(event, idx) {
   const widget = selectedPage.value.widgets[idx]
-  if (!widget) return
-  const step = gridStep.value
+  if (!widget || event.ctrlKey || event.metaKey) return
   const moves = {
-    ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
+    ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
   }
   if (moves[event.key]) {
     event.preventDefault()
+    const step = event.shiftKey ? gridStep.value : 1
     const [dx, dy] = moves[event.key]
-    const { x, y } = clampWidgetPos((widget.x || 0) + dx, (widget.y || 0) + dy, activeDisplay.value)
-    widget.x = x
-    widget.y = y
+    nudgeWidget(widget, dx * step, dy * step)
   } else if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault()
     removeWidget(idx)
   }
+}
+
+function nudgeWidget(widget, dx, dy) {
+  const { x, y } = clampWidgetPos((widget.x || 0) + dx, (widget.y || 0) + dy, activeDisplay.value)
+  widget.x = x
+  widget.y = y
 }
 
 // ── Reposition an existing widget by dragging it ─────────────────────────────
@@ -691,6 +867,16 @@ function onWidgetPointerDown(event, idx) {
 }
 
 function onWidgetPointerMove(event) {
+  if (resizeState) {
+    const widget = selectedPage.value.widgets[resizeState.idx]
+    if (!widget) return
+    const rect = canvasEl.value.getBoundingClientRect()
+    // Raw pointer position in device px — clampWidgetSize does the snap/bounds.
+    const px = (event.clientX - rect.left) / scale.value
+    const py = (event.clientY - rect.top) / scale.value
+    applyResize(widget, px, py)
+    return
+  }
   if (!dragState) return
   const widget = selectedPage.value.widgets[dragState.idx]
   // Re-read the rect each frame — caching it at pointer-down makes the widget
@@ -705,6 +891,38 @@ function onWidgetPointerMove(event) {
 
 function onWidgetPointerUp() {
   dragState = null
+  resizeState = null
+}
+
+// ── Resize by dragging the corner handle ─────────────────────────────────────
+// Same pointer math and snap step as move-drag, clamped by clampWidgetSize so the
+// widget stays on the panel. Gauges resize their radius; lines their ΔX/ΔY endpoint.
+const RESIZABLE_TYPES = ['rect', 'bar', 'image', 'sparkline', 'line', 'gauge']
+const isResizable = (w) => RESIZABLE_TYPES.includes(w?.type)
+let resizeState = null
+
+function onResizePointerDown(event, idx) {
+  selectedWidgetIdx.value = idx
+  resizeState = { idx }
+  event.target.setPointerCapture?.(event.pointerId)
+}
+
+function applyResize(widget, px, py) {
+  const disp = activeDisplay.value
+  const step = gridStep.value
+  const x = widget.x || 0, y = widget.y || 0
+  if (widget.type === 'gauge') {
+    // The gauge box is (2·radius)² from its top-left — resize via the diameter.
+    const d = clampWidgetSize(px - x, py - y, x, y, disp, step, { w: 2, h: 2 })
+    widget.w = Math.max(1, Math.round(Math.min(d.w, d.h) / 2))
+    return
+  }
+  // Line w/h are endpoint deltas and may be 0 (the handle keeps them ≥ 0; type
+  // negative deltas in the inspector for up/left lines).
+  const min = widget.type === 'line' ? { w: 0, h: 0 } : { w: 1, h: 1 }
+  const { w, h } = clampWidgetSize(px - x, py - y, x, y, disp, step, min)
+  widget.w = w
+  widget.h = h
 }
 
 // Clicking empty panel space deselects.
@@ -725,11 +943,197 @@ function zoom(delta) {
   scale.value = Math.min(8, Math.max(2, scale.value + delta))
 }
 
+// ── Undo / redo ──────────────────────────────────────────────────────────────
+// The history is a stack of JSON snapshots of the edited page. A deep watcher
+// (debounced 400 ms) commits after any mutation — drags, nudges and rapid prop
+// typing coalesce into one entry. Undo/redo re-apply a snapshot; the follow-up
+// watcher commit then compares equal and skips, so applying history never loops.
+const HISTORY_CAP = 50
+const history = ref([])
+const historyIdx = ref(-1)
+let historyTimer = null
+
+const canUndo = computed(() => historyIdx.value > 0)
+const canRedo = computed(() => historyIdx.value < history.value.length - 1)
+
+function resetHistory() {
+  clearTimeout(historyTimer)
+  historyTimer = null
+  history.value = selectedPage.value ? [JSON.stringify(selectedPage.value)] : []
+  historyIdx.value = history.value.length - 1
+}
+
+function commitHistory() {
+  clearTimeout(historyTimer)
+  historyTimer = null
+  if (!selectedPage.value) return
+  const snap = JSON.stringify(selectedPage.value)
+  if (snap === history.value[historyIdx.value]) return
+  history.value.splice(historyIdx.value + 1)  // a new edit invalidates the redo tail
+  history.value.push(snap)
+  if (history.value.length > HISTORY_CAP) history.value.splice(0, history.value.length - HISTORY_CAP)
+  historyIdx.value = history.value.length - 1
+}
+
+watch(selectedPage, () => {
+  clearTimeout(historyTimer)
+  historyTimer = setTimeout(commitHistory, 400)
+}, { deep: true })
+
+function applyHistory(idx) {
+  clearTimeout(historyTimer)
+  historyTimer = null
+  historyIdx.value = idx
+  const page = JSON.parse(history.value[idx])
+  selectedPage.value = page
+  if (selectedWidgetIdx.value != null && selectedWidgetIdx.value >= page.widgets.length) {
+    selectedWidgetIdx.value = null
+  }
+}
+
+function undo() {
+  commitHistory()  // flush a pending debounce so Ctrl+Z right after an edit undoes that edit
+  if (canUndo.value) applyHistory(historyIdx.value - 1)
+}
+
+function redo() {
+  commitHistory()
+  if (canRedo.value) applyHistory(historyIdx.value + 1)
+}
+
+// ── Duplicate / copy / paste / z-order ───────────────────────────────────────
+const cloneWidget = (w) => JSON.parse(JSON.stringify(w))
+
+function uniqueWidgetId() {
+  const ids = new Set(selectedPage.value.widgets.map((w) => w.id))
+  let n = selectedPage.value.widgets.length + 1
+  while (ids.has(`w${n}`)) n++
+  return `w${n}`
+}
+
+// Insert a clone offset +4px (clamped) and select it.
+function addWidgetClone(src) {
+  if (!selectedPage.value) return
+  const w = cloneWidget(src)
+  w.id = uniqueWidgetId()
+  const pos = clampWidgetPos((w.x || 0) + 4, (w.y || 0) + 4, activeDisplay.value)
+  w.x = pos.x
+  w.y = pos.y
+  selectedPage.value.widgets.push(w)
+  selectedWidgetIdx.value = selectedPage.value.widgets.length - 1
+}
+
+function duplicateSelected() {
+  if (selectedWidget.value) addWidgetClone(selectedWidget.value)
+}
+
+function copySelected() {
+  if (selectedWidget.value) clipboard.value = cloneWidget(selectedWidget.value)
+}
+
+function pasteClipboard() {
+  if (!clipboard.value || !selectedPage.value) return
+  addWidgetClone(clipboard.value)
+  // Re-arm the clipboard at the pasted position so repeated pastes cascade.
+  clipboard.value = cloneWidget(selectedWidget.value)
+}
+
+// Z-order = array order (later paints on top). Move the selected widget one slot.
+function moveWidgetLayer(delta) {
+  const idx = selectedWidgetIdx.value
+  if (idx == null || !selectedPage.value) return
+  if (moveItem(selectedPage.value.widgets, idx, idx + delta)) selectedWidgetIdx.value = idx + delta
+}
+
+// ── Global keyboard shortcuts ────────────────────────────────────────────────
+// Skipped while typing in a field, and when a focused widget's own keydown
+// handler already consumed the event (it preventDefault()s first).
+function isEditableTarget(t) {
+  return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+}
+
+// Delete/Backspace and arrow nudges only act when focus is "on the canvas":
+// the page body (nothing focused) or an element inside the panel. Otherwise a
+// focused toolbar button (or slider) would have its keys hijacked.
+function isStageTarget(t) {
+  return t === document.body || (!!canvasEl.value && canvasEl.value.contains(t))
+}
+
+function onGlobalKeydown(event) {
+  if (!selectedPage.value || event.defaultPrevented || isEditableTarget(event.target)) return
+  const ctrl = event.ctrlKey || event.metaKey
+  const key = event.key.toLowerCase()
+  if (ctrl && key === 'z' && !event.shiftKey) { event.preventDefault(); undo(); return }
+  if (ctrl && ((key === 'z' && event.shiftKey) || key === 'y')) { event.preventDefault(); redo(); return }
+  if (ctrl && key === 'd') { event.preventDefault(); duplicateSelected(); return }
+  if (ctrl && key === 'c' && selectedWidget.value) { event.preventDefault(); copySelected(); return }
+  if (ctrl && key === 'v' && clipboard.value) { event.preventDefault(); pasteClipboard(); return }
+  if (ctrl || !selectedWidget.value || !isStageTarget(event.target)) return
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault()
+    removeWidget(selectedWidgetIdx.value)
+    return
+  }
+  const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
+  if (moves[event.key]) {
+    event.preventDefault()
+    const step = event.shiftKey ? gridStep.value : 1
+    nudgeWidget(selectedWidget.value, moves[event.key][0] * step, moves[event.key][1] * step)
+  }
+}
+
 // ── Page CRUD ────────────────────────────────────────────────────────────────
 function selectPage(page) {
   selectedPage.value = JSON.parse(JSON.stringify(page))
   selectedWidgetIdx.value = null
   scale.value = fitScale(activeDisplay.value.width)
+  resetHistory()
+}
+
+// ── Page ordering (display page_order) ───────────────────────────────────────
+// The chips follow each display's canonical page_order; moving the active page
+// left/right reorders within its display and persists via the displays config.
+const orderedPages = computed(() => sortPages(pages.value, displayList.value))
+
+function siblingPageIds() {
+  if (!selectedPage.value) return []
+  return orderedPages.value
+    .filter((p) => p.displayId === selectedPage.value.displayId)
+    .map((p) => p.id)
+}
+
+function canMovePage(delta) {
+  const ids = siblingPageIds()
+  const from = ids.indexOf(selectedPage.value?.id)
+  return from >= 0 && from + delta >= 0 && from + delta < ids.length
+}
+
+async function movePage(delta) {
+  const page = selectedPage.value
+  if (!page || !canMovePage(delta)) return
+  const ids = siblingPageIds()
+  moveItem(ids, ids.indexOf(page.id), ids.indexOf(page.id) + delta)
+  savingOrder.value = true
+  statusMessage.value = null
+  try {
+    // Re-fetch the displays config and patch only page_order — POST /api/displays
+    // replaces the whole file, so send back everything the device just gave us.
+    const data = await api.get('/api/displays')
+    const displays = data.displays || []
+    const target = displays.find((d) => d.id === page.displayId)
+    if (!target) throw new Error(`Display "${page.displayId}" not found on the device`)
+    target.page_order = ids
+    const res = await api.post('/api/displays', { displays })
+    displayList.value = displays  // re-sorts the chips via orderedPages
+    snackbarText.value = res?.restartRequired
+      ? 'Page order saved. Restarting to apply.'
+      : (res?.message ? 'Page order saved and applied.' : 'Page order saved.')
+    snackbar.value = true
+  } catch (err) {
+    statusMessage.value = { type: 'error', text: err.message || 'Failed to save page order' }
+  } finally {
+    savingOrder.value = false
+  }
 }
 
 function openNewPage() {
@@ -759,12 +1163,18 @@ async function savePage() {
   saving.value = true
   statusMessage.value = null
   try {
-    await api.post('/api/displays', { pages: [selectedPage.value] })
+    const res = await api.post('/api/displays', { pages: [selectedPage.value] })
     const clone = JSON.parse(JSON.stringify(selectedPage.value))
     const existing = pages.value.findIndex((p) => p.id === selectedPage.value.id)
     if (existing >= 0) pages.value[existing] = clone
     else pages.value.push(clone)
-    statusMessage.value = { type: 'success', text: `Saved “${selectedPage.value.title || selectedPage.value.id}”. The device is restarting to apply it.` }
+    const name = selectedPage.value.title || selectedPage.value.id
+    // Display/page changes apply live now (restartRequired=false) — show what the
+    // device reported and don't imply a reboot unless it actually asked for one.
+    statusMessage.value = {
+      type: 'success',
+      text: res?.restartRequired ? `Saved “${name}”. Restarting to apply.` : (res?.message || `Saved “${name}” — applied.`),
+    }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -811,11 +1221,14 @@ onMounted(() => {
   refresh()
   window.addEventListener('pointermove', onWidgetPointerMove)
   window.addEventListener('pointerup', onWidgetPointerUp)
+  window.addEventListener('keydown', onGlobalKeydown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('pointermove', onWidgetPointerMove)
   window.removeEventListener('pointerup', onWidgetPointerUp)
+  window.removeEventListener('keydown', onGlobalKeydown)
+  clearTimeout(historyTimer)
 })
 </script>
 
@@ -932,6 +1345,23 @@ onUnmounted(() => {
 .sd-widget--selected {
   outline: 1px dashed rgba(96, 165, 250, 0.9);
   outline-offset: 2px;
+  /* Let the corner resize handle poke past the widget box (shapes normally clip). */
+  overflow: visible;
+}
+
+/* Corner resize handle on the selected widget. */
+.sd-resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: rgb(96, 165, 250);
+  border: 1px solid #0b1017;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
 }
 
 /* Image widget preview. */

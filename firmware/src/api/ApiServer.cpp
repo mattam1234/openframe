@@ -10,6 +10,7 @@
 #include "../OpenFrameConfig.h"
 #include "../core/StorageManager.h"
 #include "../core/ConfigManager.h"
+#include "../core/Lock.h"
 #include "../hardware/InputManager.h"
 #include "../hardware/OutputManager.h"
 #include "../hardware/SensorManager.h"
@@ -29,6 +30,9 @@
 #include "../managers/NodeLink.h"
 #include "../managers/HealthMonitor.h"
 #include "../managers/NotificationManager.h"
+#include "../managers/PushNotifier.h"     // self-gated on OF_ENABLE_PUSH
+#include "../managers/WeatherManager.h"   // self-gated on OF_ENABLE_WEATHER
+#include "../managers/ConfigHotApply.h"
 
 // Constant-time token compare (defined below; forward-declared so the WS auth
 // handshake in handleWebSocketMessage can use it before its definition).
@@ -193,10 +197,11 @@ void serializeVariable(JsonObject obj, const Variable& var) {
     // Source category for the Variables tab / designer (F3) — derived from the id
     // namespace so the frontend doesn't have to string-parse prefixes.
     const char* source = "local";
-    if      (var.id.startsWith("sensor.")) source = "sensor";
-    else if (var.id.startsWith("input."))  source = "input";
-    else if (var.id.startsWith("output.")) source = "output";
-    else if (var.id.startsWith("node."))   source = "node";
+    if      (var.id.startsWith("sensor."))  source = "sensor";
+    else if (var.id.startsWith("input."))   source = "input";
+    else if (var.id.startsWith("output."))  source = "output";
+    else if (var.id.startsWith("node."))    source = "node";
+    else if (var.id.startsWith("weather.")) source = "weather";
     obj["source"] = source;
     if (var.hasRange) { obj["min"] = var.rangeMin; obj["max"] = var.rangeMax; }
     if (var.unit.length()) obj["unit"] = var.unit;
@@ -628,6 +633,30 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
     });
 
     // ── Notifications ─────────────────────────────────────────────────────────
+#if OF_ENABLE_PUSH
+    // Test push. Validation happens here, but the HTTP POST itself is queued and
+    // sent from the loop task (outbound HTTP must never run on the async callback
+    // task) — so "ok" means "queued", with delivery failures visible in the logs.
+    registerJsonPost(server, "/api/notify/test", [](AsyncWebServerRequest* request, const String&) {
+        JsonDocument resp;
+        String why;
+        if (!PushNotifier::instance().validateConfig(why)) {
+            resp["ok"]    = false;
+            resp["error"] = why;
+            String s;
+            serializeJson(resp, s);
+            request->send(422, "application/json", s);
+            return;
+        }
+        PushNotifier::instance().send(ConfigManager::instance().config().device.name,
+                                      "Test notification from OpenFrame", 3);
+        resp["ok"]      = true;
+        resp["message"] = "Test push queued";
+        String s;
+        serializeJson(resp, s);
+        request->send(200, "application/json", s);
+    });
+#endif
     server.on("/api/notifications", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendNotifications(request);
     });
@@ -832,7 +861,7 @@ void ApiServer::sendSelfTest(AsyncWebServerRequest* request) const {
     // configured display's pins when it specifies them, so this is a meaningful
     // "is the panel actually on the bus?" check. Falls back to the board default.
     int8_t scanSda = -1, scanScl = -1;
-    for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
+    for (const auto& cfg : DisplayManager::instance().displayConfigsCopy()) {
         if (cfg.sdaPin >= 0 && cfg.sclPin >= 0) { scanSda = cfg.sdaPin; scanScl = cfg.sclPin; break; }
     }
     auto i2c = doc["i2c"].to<JsonObject>();
@@ -996,24 +1025,51 @@ void ApiServer::handleConfigUpdate(AsyncWebServerRequest* request, const String&
           ", ha=" + String((doc["ha"]["enabled"] | false) ? "enabled" : "disabled"));
 
     // Snapshot the current (pre-change) config first, so a bad push can be rolled
-    // back in one tap from the backups list.
+    // back in one tap from the backups list. `before` is the same snapshot used to
+    // decide whether the change can apply live.
+    JsonDocument before;
+    ConfigManager::instance().toJson(before);
     createConfigBackup();
 
-    ConfigManager::instance().fromJson(doc);
+    {
+        // Hold the config lock across the write: fromJson reassigns the config
+        // Strings on this (web) task while loop-task managers may be copying
+        // them (see ConfigManager::mutex()).
+        of_lock_guard<of_recursive_mutex> lock(ConfigManager::instance().mutex());
+        ConfigManager::instance().fromJson(doc);
+    }
+    // The parsed request is applied — free it before allocating the post-save
+    // snapshot. This handler runs on the async task, and every concurrent
+    // config-sized allocation counts on the ESP8266's heap.
+    doc.clear();
     if (!ConfigManager::instance().save()) {
         sendError(request, 500, "Failed to save config");
         return;
     }
 
-    JsonDocument response;
-    ConfigManager::instance().toJson(response);
-    response["restartRequired"] = true;
-    response["message"] = "Settings saved. Restarting to apply changes.";
+    JsonDocument after;
+    ConfigManager::instance().toJson(after);
+
+    // Hot-apply decision + manager dispatch live in ConfigHotApply, shared with
+    // the MQTT apply_config fleet command so the two write paths can't drift.
+    const bool hotApplicable = applyConfigHot(before, after);
+    // The diff is done and `after` doubles as the response body (it already is
+    // the fresh full config) — release the pre-change snapshot.
+    before.clear();
+
+    JsonDocument& response = after;
+    if (hotApplicable) {
+        response["restartRequired"] = false;
+        response["message"] = "Settings saved and applied.";
+    } else {
+        response["restartRequired"] = true;
+        response["message"] = "Settings saved. Restarting to apply changes.";
+    }
     sendJson(request, response);
     broadcastFrame("config_change", response);
     publishHealthUpdate();
 
-    scheduleRestart();
+    if (!hotApplicable) scheduleRestart();
 }
 
 // ── Config backup/restore slots ─────────────────────────────────────────────
@@ -1511,24 +1567,28 @@ String ApiServer::buildStatusJson() const {
     }
     doc["haEnabled"] = config.ha.enabled;
     doc["otaEnabled"] = config.ota.enabled;
+
+    // Compile-time capability flags — the frontend gates feature cards/routes on
+    // these instead of guessing from the board name. Key names are a contract.
+    auto features = doc["features"].to<JsonObject>();
+    features["weather"]      = (OF_ENABLE_WEATHER != 0);
+    features["push"]         = (OF_ENABLE_PUSH != 0);
+    features["ha_ws"]        = (OF_ENABLE_HA_WS != 0);
+    features["images"]       = (OF_ENABLE_IMAGES != 0);
+    features["tft"]          = (OF_ENABLE_TFT != 0);
+    features["sd"]           = (OF_ENABLE_SD != 0);
+    features["hw_variables"] = (OF_ENABLE_HW_VARIABLES != 0);
+    features["tls"]          = (OF_ENABLE_TLS != 0);
+
     doc["logCount"] = Logger::instance().getEntryCount();
     doc["variableCount"] = VariableManager::instance().all().size();
     doc["moduleCount"] = ModuleManager::instance().modules().size();
     doc["i2cErrorCount"] = ModuleManager::instance().i2cErrorCount();
 
-    // Sensor failure flags
+    // Sensor failure flags (locked snapshot — sensors hot-reload on the loop task).
     auto sensorArr = doc["sensors"].to<JsonArray>();
     uint32_t sensorErrorTotal = 0;
-    for (const auto& inst : SensorManager::instance().sensors()) {
-        if (!inst.healthy || inst.errorCount > 0) {
-            auto obj = sensorArr.add<JsonObject>();
-            obj["id"]         = inst.config.id;
-            obj["healthy"]    = inst.healthy;
-            obj["errorCount"] = inst.errorCount;
-            if (inst.lastError.length()) obj["lastError"] = inst.lastError;
-            sensorErrorTotal += inst.errorCount;
-        }
-    }
+    SensorManager::instance().fillHealthJson(sensorArr, sensorErrorTotal);
     doc["sensorErrorCount"] = sensorErrorTotal;
 
     doc["activeProfileId"] = ProfileManager::instance().activeId();
@@ -1720,17 +1780,7 @@ void ApiServer::handleOutputsControl(AsyncWebServerRequest* request, const Strin
 void ApiServer::sendSensors(AsyncWebServerRequest* request) const {
     JsonDocument doc;
     if (!StorageManager::instance().readJson(OF_SENSORS_PATH, doc)) {
-        auto arr = doc["sensors"].to<JsonArray>();
-        for (const auto& inst : SensorManager::instance().sensors()) {
-            auto obj = arr.add<JsonObject>();
-            obj["id"] = inst.config.id;
-            obj["type"] = inst.config.type;
-            obj["enabled"] = inst.config.enabled;
-            obj["poll_interval_ms"] = inst.config.pollIntervalMs;
-            obj["variable_prefix"] = inst.config.variablePrefix;
-            obj["address"] = inst.config.address;
-            obj["pin"] = inst.config.pin;
-        }
+        SensorManager::instance().fillConfigJson(doc["sensors"].to<JsonArray>());
     }
     doc["count"] = doc["sensors"].is<JsonArrayConst>() ? doc["sensors"].as<JsonArrayConst>().size() : 0;
     sendJson(request, doc);
@@ -1768,7 +1818,7 @@ void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
     if (!hasPersisted) {
         doc.clear();
         auto arr = doc["displays"].to<JsonArray>();
-        for (const auto& cfg : DisplayManager::instance().displayConfigs()) {
+        for (const auto& cfg : DisplayManager::instance().displayConfigsCopy()) {
             auto obj = arr.add<JsonObject>();
             obj["id"]      = cfg.id;
             obj["type"]    = cfg.type;
@@ -1780,6 +1830,14 @@ void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
             obj["refresh_interval_ms"] = cfg.refreshIntervalMs;
             obj["contrast"]            = cfg.contrast;
             obj["spi_frequency"]       = cfg.spiFrequency;
+            // Brightness + night mode — emitted with their defaults so the seeded
+            // display is fully editable and a save round-trips every field.
+            obj["brightness"]       = cfg.brightness;
+            obj["night_enabled"]    = cfg.nightEnabled;
+            obj["night_start_min"]  = cfg.nightStartMin;
+            obj["night_end_min"]    = cfg.nightEndMin;
+            obj["night_brightness"] = cfg.nightBrightness;
+            obj["night_blank"]      = cfg.nightBlank;
             if (cfg.initialPageId.length()) obj["page"] = cfg.initialPageId;
             // Emit only the pins that are actually wired (>= 0) so the UI's pin
             // selectors show blank for unused fields rather than "-1".
@@ -2031,12 +2089,13 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
         return;
     }
 
+    InputManager::instance().requestReload();  // apply live — no reboot
+
     JsonDocument response;
     response["ok"] = true;
-    response["restartRequired"] = true;
-    response["message"] = "Inputs saved. Restarting to apply.";
+    response["restartRequired"] = false;
+    response["message"] = "Inputs saved and applied.";
     sendJson(request, response);
-    scheduleRestart();
 }
 
 void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -2156,12 +2215,13 @@ void ApiServer::handleSensorsUpdate(AsyncWebServerRequest* request, const String
         return;
     }
 
+    SensorManager::instance().requestReload();  // apply live — no reboot
+
     JsonDocument response;
     response["ok"] = true;
-    response["restartRequired"] = true;
-    response["message"] = "Sensors saved. Restarting to apply.";
+    response["restartRequired"] = false;
+    response["message"] = "Sensors saved and applied.";
     sendJson(request, response);
-    scheduleRestart();
 }
 
 void ApiServer::handleHaImportUpdate(AsyncWebServerRequest* request, const String& body) {
@@ -2253,6 +2313,15 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
             if (item["page_order"].is<JsonArrayConst>()) out["page_order"]           = item["page_order"];
             if (item["reset_pin"].is<int>()) out["reset_pin"] = item["reset_pin"].as<int>();
             if (item["contrast"].is<int>()) out["contrast"] = item["contrast"].as<int>();
+            // Brightness + night-mode dimming (day level 0-255; window in minutes
+            // past local midnight; night level or full blank). Only persist when
+            // present so an omitted field keeps the DisplayConfig default.
+            if (item["brightness"].is<int>())       out["brightness"]       = item["brightness"].as<int>();
+            if (item["night_enabled"].is<bool>())   out["night_enabled"]    = item["night_enabled"].as<bool>();
+            if (item["night_start_min"].is<int>())  out["night_start_min"]  = item["night_start_min"].as<int>();
+            if (item["night_end_min"].is<int>())    out["night_end_min"]    = item["night_end_min"].as<int>();
+            if (item["night_brightness"].is<int>()) out["night_brightness"] = item["night_brightness"].as<int>();
+            if (item["night_blank"].is<bool>())     out["night_blank"]      = item["night_blank"].as<bool>();
             if (item["cs_pin"].is<int>()) out["cs_pin"] = item["cs_pin"].as<int>();
             if (item["dc_pin"].is<int>()) out["dc_pin"] = item["dc_pin"].as<int>();
             if (item["mosi_pin"].is<int>()) out["mosi_pin"] = item["mosi_pin"].as<int>();
@@ -2333,12 +2402,15 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
         return;
     }
 
+    // Apply live — no reboot. The render task rebuilds displays + pages from the
+    // files we just wrote (see DisplayManager::requestReload).
+    DisplayManager::instance().requestReload();
+
     JsonDocument response;
     response["ok"] = true;
-    response["restartRequired"] = true;
-    response["message"] = "Displays/pages saved. Restarting to apply.";
+    response["restartRequired"] = false;
+    response["message"] = "Displays/pages saved and applied.";
     sendJson(request, response);
-    scheduleRestart();
 }
 
 void ApiServer::sendModules(AsyncWebServerRequest* request) const {
@@ -2465,11 +2537,12 @@ void ApiServer::handleHardwareAdopt(AsyncWebServerRequest* request, const String
         return;
     }
 
+    SensorManager::instance().requestReload();  // apply live — no reboot
+
     response["ok"] = true;
-    response["restartRequired"] = true;
-    response["message"] = String(added.size()) + " sensor(s) adopted. Restarting to apply.";
+    response["restartRequired"] = false;
+    response["message"] = String(added.size()) + " sensor(s) adopted and applied.";
     sendJson(request, response);
-    scheduleRestart();
 }
 
 void ApiServer::sendActions(AsyncWebServerRequest* request) const {
@@ -2523,117 +2596,20 @@ void ApiServer::handleActionsUpdate(AsyncWebServerRequest* request, const String
         return;
     }
 
-    auto parseConditionOp = [](const String& op) -> ConditionOp {
-        if (op == "ne") return ConditionOp::Ne;
-        if (op == "lt") return ConditionOp::Lt;
-        if (op == "lte") return ConditionOp::Lte;
-        if (op == "gt") return ConditionOp::Gt;
-        if (op == "gte") return ConditionOp::Gte;
-        return ConditionOp::Eq;
-    };
-
-    auto parseActionType = [](const String& typeStr) -> ActionType {
-        if (typeStr == "http_request") return ActionType::HttpRequest;
-        if (typeStr == "mqtt_publish") return ActionType::MqttPublish;
-        if (typeStr == "variable_set") return ActionType::VariableSet;
-        if (typeStr == "variable_increment") return ActionType::VariableIncrement;
-        if (typeStr == "variable_toggle") return ActionType::VariableToggle;
-        if (typeStr == "output_control") return ActionType::OutputControl;
-        if (typeStr == "ha_service_call") return ActionType::HaServiceCall;
-        if (typeStr == "page_change") return ActionType::PageChange;
-        if (typeStr == "notification") return ActionType::Notification;
-        if (typeStr == "keyboard_shortcut") return ActionType::KeyboardShortcut;
-        if (typeStr == "media_control") return ActionType::MediaControl;
-        if (typeStr == "remote_action") return ActionType::RemoteAction;
-        if (typeStr == "sync_action") return ActionType::SyncAction;
-        if (typeStr == "if") return ActionType::If;
-        if (typeStr == "else") return ActionType::Else;
-        if (typeStr == "endif") return ActionType::EndIf;
-        if (typeStr == "repeat") return ActionType::Repeat;
-        if (typeStr == "endrepeat") return ActionType::EndRepeat;
-        return ActionType::Delay;
-    };
-
-    auto parseActionObject = [&](JsonObjectConst item, ActionConfig& action) {
-        action.id = item["id"] | String("");
-        action.name = item["name"] | String("");
-        action.enabled = item["enabled"] | true;
-
-        if (item["trigger"].is<JsonObjectConst>()) {
-            JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
-            action.trigger.source       = t["source"]        | String("");
-            action.trigger.inputId      = t["input_id"]      | String("");
-            action.trigger.event        = t["event"]         | String("");
-            action.trigger.scheduleMode = t["schedule_mode"] | String("");
-            action.trigger.intervalSec  = t["interval_sec"]  | 0;
-            action.trigger.dailySeconds = t["daily_seconds"] | -1;
-            action.trigger.debounceMs   = t["debounce_ms"]   | 0;
-            action.trigger.cooldownMs   = t["cooldown_ms"]   | 0;
-        }
-
-        if (item["conditions"].is<JsonArrayConst>()) {
-            for (JsonObjectConst cond : item["conditions"].as<JsonArrayConst>()) {
-                Condition c;
-                c.variableId = cond["variable_id"] | String("");
-                c.op = parseConditionOp(cond["op"] | String("eq"));
-                c.value = cond["value"] | String("");
-                if (c.variableId.length()) action.conditions.push_back(c);
-            }
-        }
-
-        if (item["steps"].is<JsonArrayConst>()) {
-            for (JsonObjectConst step : item["steps"].as<JsonArrayConst>()) {
-                ActionStep s;
-                s.type = parseActionType(step["type"] | String("delay"));
-                s.delayMs = step["delay_ms"] | 0;
-                s.url = step["url"] | String("");
-                s.method = step["method"] | String("GET");
-                s.body = step["body"] | String("");
-                s.topic = step["topic"] | String("");
-                s.variableId = step["variable_id"] | String("");
-                s.value = step["value"] | String("");
-                s.increment = step["increment"] | 1.0f;
-                s.haService = step["ha_service"] | String("");
-                s.haEntityId = step["ha_entity_id"] | String("");
-                s.displayId = step["display_id"] | String("");
-                s.pageId = step["page_id"] | String("");
-                s.message = step["message"] | String("");
-                s.keysCombo = step["keys"] | String("");
-                s.mediaCommand = step["media_command"] | String("");
-                s.nodeId = step["node_id"] | String("");
-                s.outputId = step["output_id"] | String("");
-                s.command = step["command"] | String("");
-                s.on = step["on"] | false;
-                s.red = step["r"] | 0;
-                s.green = step["g"] | 0;
-                s.blue = step["b"] | 0;
-                s.brightnessVal = step["brightness"] | 0;
-                s.animation = step["animation"] | String("");
-                s.speed = step["speed"] | 128;
-                s.frequency = step["frequency"] | 2000;
-                s.durationMs = step["duration_ms"] | 200;
-                s.angle = step["angle"] | 90;
-                s.position = step["position"] | 0;
-                s.op = step["op"] | String("eq");
-                s.repeatCount = step["repeat_count"] | 1;
-                action.steps.push_back(s);
-            }
-        }
-    };
-
+    // Parse via ActionEngine's own parser — the one loadActions() uses — so the
+    // REST body and the stored file share a single source of truth. (A mirrored
+    // copy here once collapsed unknown step types to Delay when it went stale.)
     bool updated = false;
     if (doc["actions"].is<JsonArrayConst>()) {
         for (JsonObjectConst item : doc["actions"].as<JsonArrayConst>()) {
             ActionConfig action;
-            parseActionObject(item, action);
-            if (!action.id.length()) continue;
+            if (!ActionEngine::parseActionJson(item, action)) continue;
             ActionEngine::instance().registerAction(action);
             updated = true;
         }
     } else if (doc["id"].is<const char*>()) {
         ActionConfig action;
-        parseActionObject(doc.as<JsonObjectConst>(), action);
-        if (action.id.length()) {
+        if (ActionEngine::parseActionJson(doc.as<JsonObjectConst>(), action)) {
             ActionEngine::instance().registerAction(action);
             updated = true;
         }

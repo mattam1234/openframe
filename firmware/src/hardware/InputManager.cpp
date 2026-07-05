@@ -9,40 +9,68 @@ InputManager& InputManager::instance() {
 }
 
 bool InputManager::begin() {
+    reload();
+    LOG_I(TAG, "Initialised (" + String(_digitalConfigs.size()) + " digital, " + String(_analogConfigs.size()) + " analog)");
+    return true;
+}
+
+// Re-read inputs.json and re-apply pin modes. Inputs are polled (no ISRs to detach),
+// and nothing on the web task reads the input vectors, so this just needs to run on
+// the loop task — which it does, via the flag consumed in loop().
+void InputManager::reload() {
     if (!loadConfig()) {
         LOG_W(TAG, "Using empty input configuration");
     }
-
     configureDigitalPins();
     configureEncoderPins();
     configureKeypadPins();
-    _digitalStates.resize(_digitalConfigs.size());
-    _analogStates.resize(_analogConfigs.size());
-
+    _digitalStates.assign(_digitalConfigs.size(), DigitalInputState{});
+    _analogStates.assign(_analogConfigs.size(), AnalogInputState{});
     registerVariables();
+}
 
-    LOG_I(TAG, "Initialised (" + String(_digitalConfigs.size()) + " digital, " + String(_analogConfigs.size()) + " analog)");
-    return true;
+void InputManager::requestReload() {
+    _reloadPending = true;   // consumed in loop() on the main task
 }
 
 // ── F1: read-only variable mirror ───────────────────────────────────────────────
 #if OF_ENABLE_HW_VARIABLES
 void InputManager::registerVariables() {
     auto& vm = VariableManager::instance();
+    // Purge stale mirrors before re-defining: reload() re-runs this and define()
+    // alone never removes anything, so a deleted/renamed input would otherwise
+    // leave a frozen variable behind until reboot. Removal is by the exact ids
+    // we defined last time — a blanket input.* sweep could take out foreign
+    // variables (e.g. an HA import whose user-chosen id lands in the namespace).
+    for (const auto& id : _definedVarIds) vm.remove(id);
+    _definedVarIds.clear();
+    auto def = [&](const String& id, VarType type, const String& label) {
+        // Track only ids define() actually creates: on a collision define() is a
+        // no-op, and claiming a foreign (possibly persistent, user-created)
+        // variable would delete it on the next reload — remove() doesn't spare
+        // persistent variables the way the old removeByPrefix sweep did.
+        if (vm.get(id)) return;
+        vm.define(id, type, label, false, true);
+        _definedVarIds.push_back(id);
+    };
     for (const auto& c : _digitalConfigs)
-        vm.define("input." + c.id + ".pressed", VarType::Boolean, c.id + " pressed", false, true);
+        def("input." + c.id + ".pressed", VarType::Boolean, c.id + " pressed");
     for (const auto& c : _analogConfigs)
-        vm.define("input." + c.id + ".value", VarType::Integer, c.id + " value", false, true);
+        def("input." + c.id + ".value", VarType::Integer, c.id + " value");
     for (const auto& c : _encoderConfigs)
-        if (c.pinButton) vm.define("input." + c.id + ".pressed", VarType::Boolean, c.id + " pressed", false, true);
+        if (c.pinButton) def("input." + c.id + ".pressed", VarType::Boolean, c.id + " pressed");
     for (const auto& c : _keypadConfigs)
-        vm.define("input." + c.id + ".key", VarType::String, c.id + " key", false, true);
+        def("input." + c.id + ".key", VarType::String, c.id + " key");
 }
 #else
 void InputManager::registerVariables() {}
 #endif
 
 void InputManager::loop() {
+    if (_reloadPending) {
+        _reloadPending = false;
+        reload();
+    }
     const uint32_t nowMs = millis();
     updateDigitalInputs(nowMs);
     updateAnalogInputs(nowMs);

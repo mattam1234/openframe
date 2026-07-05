@@ -4,6 +4,7 @@
 #include "../core/Logger.h"
 #include "../core/ConfigManager.h"
 #include "MqttManager.h"
+#include "ConfigHotApply.h"
 #include "TelemetryManager.h"
 #include "ProfileManager.h"
 #include "WiFiManager.h"
@@ -128,24 +129,47 @@ void CommandManager::handle(const String& payload) {
         ack(id, type, true);
     } else if (type == "apply_config") {
         // Push a (partial) config — mirrors POST /api/config: merge, persist, and
-        // reboot to apply, exactly like the web settings path. The payload must
-        // fit the MQTT buffer (see MqttManager::begin).
+        // apply. Hot-appliable changes (mqtt/time/notify/weather sections — see
+        // ConfigHotApply) take effect live; anything else reboots, exactly like
+        // the web settings path. The ack carries restartRequired so the CMS can
+        // tell the operator which one happened. The payload must fit the MQTT
+        // buffer (see MqttManager::begin).
         JsonVariant cfg = doc["payload"];
         if (!cfg.is<JsonObject>()) {
             ack(id, type, false, "missing config payload");
             return;
         }
-        JsonDocument cfgDoc;
-        cfgDoc.set(cfg);
-        ConfigManager::instance().fromJson(cfgDoc);
+        JsonDocument before;
+        ConfigManager::instance().toJson(before);
+        {
+            JsonDocument cfgDoc;   // fromJson takes a document; freed right after
+            cfgDoc.set(cfg);
+            ConfigManager::instance().fromJson(cfgDoc);
+        }
         if (!ConfigManager::instance().save()) {
             ack(id, type, false, "save failed");
             return;
         }
-        ack(id, type, true);
-        LOG_W(TAG, "Config applied remotely — rebooting to apply");
-        _rebootPending = true;
-        _rebootAtMs    = millis() + 800;
+        JsonDocument after;
+        ConfigManager::instance().toJson(after);
+        const bool hot = applyConfigHot(before, after);
+
+        JsonDocument out;
+        out["id"]   = id;
+        out["type"] = type;
+        out["ok"]   = true;
+        out["restartRequired"] = !hot;
+        String outStr;
+        serializeJson(out, outStr);
+        MqttManager::instance().publishDevice("cmd/result", outStr, false);
+
+        if (hot) {
+            LOG_I(TAG, "Config applied remotely — applied live");
+        } else {
+            LOG_W(TAG, "Config applied remotely — rebooting to apply");
+            _rebootPending = true;
+            _rebootAtMs    = millis() + 800;
+        }
     } else if (type == "ota_url") {
         // Fleet OTA: download + flash firmware from a (LAN, plain-HTTP) URL —
         // typically served by the CMS. Deferred to loop() so this ack flushes first.

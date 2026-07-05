@@ -54,6 +54,7 @@
 import { computed, onMounted, ref } from 'vue'
 import api from '../api/client'
 import { useWebSocketStore } from '../stores/websocket'
+import { variableGroupOf } from '../lib/screenEditor'
 import VarTable from '../components/VarTable.vue'
 
 const wsStore = useWebSocketStore()
@@ -72,29 +73,24 @@ function matches(v) {
 
 const filtered = computed(() => allVars.value.filter(matches))
 
-// F3 — categorise this node's variables by source. The firmware tags each variable
-// with `source` (sensor/input/output/local); fall back to the id prefix if absent.
+// F3 — categorise this node's variables by source. variableGroupOf() (shared
+// with the Screen Designer picker) owns the id/source → group mapping; this
+// list only styles the cards. Groups without a card here (e.g. `node`) fold
+// into "This node".
 const SOURCE_GROUPS = [
-  { key: 'local',  title: 'This node', icon: 'mdi-chip',               color: 'primary' },
-  { key: 'sensor', title: 'Sensors',   icon: 'mdi-thermometer',        color: 'orange' },
-  { key: 'input',  title: 'Inputs',    icon: 'mdi-gesture-tap-button', color: 'green' },
-  { key: 'output', title: 'Outputs',   icon: 'mdi-led-on',             color: 'purple' },
+  { key: 'local',   title: 'This node', icon: 'mdi-chip',               color: 'primary' },
+  { key: 'sensor',  title: 'Sensors',   icon: 'mdi-thermometer',        color: 'orange' },
+  { key: 'input',   title: 'Inputs',    icon: 'mdi-gesture-tap-button', color: 'green' },
+  { key: 'output',  title: 'Outputs',   icon: 'mdi-led-on',             color: 'purple' },
+  { key: 'weather', title: 'Weather',   icon: 'mdi-brightness-5',       color: 'cyan' },
 ]
-
-function sourceOf(v) {
-  if (v.source) return v.source
-  if (v.id.startsWith('sensor.')) return 'sensor'
-  if (v.id.startsWith('input.')) return 'input'
-  if (v.id.startsWith('output.')) return 'output'
-  return 'local'
-}
 
 const localGroups = computed(() => {
   const buckets = {}
   for (const v of filtered.value) {
     if (v.id.startsWith('node/')) continue
-    const s = sourceOf(v)
-    const key = ['sensor', 'input', 'output'].includes(s) ? s : 'local'
+    const g = variableGroupOf(v.id, v.source)
+    const key = SOURCE_GROUPS.some((c) => c.key === g) ? g : 'local'
     ;(buckets[key] ||= []).push(v)
   }
   return SOURCE_GROUPS

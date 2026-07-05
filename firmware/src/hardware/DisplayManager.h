@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include "../core/Lock.h"
 #include "../OpenFrameConfig.h"
 #include "../core/EventBus.h"
 #include "../core/Logger.h"
@@ -86,7 +87,20 @@ public:
     // the given duration. The overlay is rendered on top of the current page.
     void showNotification(const String& message, uint32_t durationMs = 3000);
 
-    const std::vector<DisplayConfig>& displayConfigs() const { return _configs; }
+    // Runtime brightness override (action engine / API): 0-255 applies immediately
+    // and stays pinned — above the config level AND the night schedule — until
+    // cleared with -1 (back to config/night logic). Empty displayId targets all
+    // displays. Safe to call from any task (locks).
+    void setBrightnessOverride(const String& displayId, int brightness);
+
+    // Thread-safe snapshot of the active display configs, for web-task readers that
+    // would otherwise race the loop-task reload (which rebuilds the vector).
+    std::vector<DisplayConfig> displayConfigsCopy() const;
+
+    // Apply displays.json + page changes live, without a device reboot. The HTTP
+    // handler calls this after writing the files; the actual rebuild happens on the
+    // loop task (in loop()) so it never races a render. Safe to call from any task.
+    void requestReload();
 
     // Drop a cached image so a freshly uploaded/deleted file is picked up on the
     // next render without a reboot (called by the image upload/delete endpoints).
@@ -108,6 +122,11 @@ private:
         uint32_t                        lastRenderMs = 0;
         bool                            dirty = true;
         uint32_t                        lastRotationMs = 0;  // F4 auto-rotation timer
+        // Brightness / night-mode state (see updateNightAndBrightness):
+        int16_t  brightnessOverride = -1;   // pinned via setBrightnessOverride; -1 = none
+        int16_t  appliedBrightness  = -1;   // last level pushed to the provider (-1 = never)
+        bool     nightActive        = false;// currently inside the night window
+        bool     blanked            = false;// night_blank in effect — rendering suspended
     };
 
     DisplayManager() = default;
@@ -116,7 +135,17 @@ private:
     bool loadConfig();
     bool loadPages();
     void startConfiguredDisplays();
+    void reload();   // re-read config + pages and rebuild displays (loop task only)
     void advanceRotations(uint32_t nowMs);   // F4: auto-advance rotating displays
+    // Cheap ~10 s check on the loop task: derive the local minute-of-day via
+    // localtime_r and flip each display between day/night brightness (or blank).
+    void updateNightAndBrightness(uint32_t nowMs);
+    // Push a display's effective brightness (override > night > config) to its
+    // provider and handle blank transitions. Caller holds _mtx.
+    void applyBrightness(DisplayInstance& display);
+    // Minutes-past-midnight window test; handles windows crossing midnight
+    // (22:00→07:00). An empty window (start == end) is never "night".
+    static bool inNightWindow(uint16_t nowMin, uint16_t startMin, uint16_t endMin);
     void renderDisplays(uint32_t nowMs);
     void renderDisplay(DisplayInstance& display, uint32_t nowMs);
     void onVariableChanged(const String& variableId);
@@ -163,6 +192,17 @@ private:
     std::vector<DisplayPage>         _pages;
     std::vector<DisplayInstance>     _displays;
     bool                             _subscribedToVariableEvents = false;
+
+    // Guards _configs/_pages/_displays/_imageCache against the loop-task reload()
+    // racing web-task readers (fillScreensJson, nav, displayConfigsCopy, evictImage).
+    // Recursive so the nextPage→setActivePage call chain can re-lock on one thread.
+    mutable of_recursive_mutex       _mtx;
+    volatile bool                    _reloadPending = false;
+
+    // Night-mode scheduler state (loop task only, like _reloadPending consumption).
+    uint32_t _lastNightCheckMs = 0;
+    bool     _nightCheckDue    = true;   // force a re-check on the next loop pass
+    static constexpr uint32_t NIGHT_CHECK_MS = 10000;
 
     // Notification overlay state
     String   _notifMessage;

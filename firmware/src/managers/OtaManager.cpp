@@ -2,9 +2,7 @@
 #include "../OpenFrameConfig.h"
 
 #include <LittleFS.h>
-#if defined(ESP8266) && OF_ENABLE_TLS
-#include <WiFiClientSecure.h>
-#endif
+#include "../core/HttpTransport.h"
 
 namespace {
 
@@ -96,15 +94,15 @@ bool OtaManager::checkGitHubRelease(String& latestVersion, String& downloadUrl) 
     return false;
 #else
     HTTPClient http;
-  #if defined(ESP8266)
-    // ESP8266 needs an explicit TLS client for the HTTPS GitHub API. There is no
-    // on-device certificate store, so validation is skipped (setInsecure).
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();
-    http.begin(secureClient, url);
-  #else
-    http.begin(url);  // ESP32 HTTPClient sets up TLS transport internally
-  #endif
+    // Client selection (platform × TLS) lives in HttpTransport — shared with
+    // PushNotifier and WeatherManager. It picks the explicit insecure BearSSL
+    // client the HTTPS GitHub API needs on the ESP8266 (no on-device cert
+    // store); the ESP32 HTTPClient sets up TLS internally.
+    HttpTransport transport;
+    if (!transport.begin(http, url)) {
+        LOG_W(TAG, "HTTP begin failed");
+        return false;
+    }
     http.addHeader("User-Agent", "OpenFrame/" OF_VERSION_STRING);
     http.addHeader("Accept", "application/vnd.github+json");
 

@@ -12,6 +12,8 @@ export interface Heartbeat {
   uptimeMs?: number;
   cpuLoadPercent?: number;
   activeProfileId?: string;
+  /** Build-time feature flags (weather, push, tls, …) — mirrors /api/features. */
+  features?: Record<string, boolean>;
 }
 
 export interface Device extends Heartbeat {

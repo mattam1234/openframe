@@ -47,6 +47,29 @@ void VariableManager::setOptions(const String& id, const std::vector<String>& op
     it->second.options = options;
 }
 
+bool VariableManager::remove(const String& id) {
+    auto it = _vars.find(id);
+    if (it == _vars.end()) return false;
+    // A removed persistent variable must disappear from the next flush too.
+    if (it->second.persistent) _dirty = true;
+    _vars.erase(it);
+    // _callbacks[id] is left intact — see the header note on why that is safe.
+    return true;
+}
+
+size_t VariableManager::removeByPrefix(const String& prefix) {
+    size_t removed = 0;
+    for (auto it = _vars.begin(); it != _vars.end();) {
+        if (!it->second.persistent && it->first.startsWith(prefix)) {
+            it = _vars.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
+
 // ── Getters ───────────────────────────────────────────────────────────────────
 
 int32_t VariableManager::getInt(const String& id) const {

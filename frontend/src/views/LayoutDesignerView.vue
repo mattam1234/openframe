@@ -50,13 +50,18 @@
             <div class="ld-fields">
               <v-select
                 v-model="inp.subtype"
-                :items="['digital', 'analog']"
+                :items="['digital', 'analog', 'encoder']"
                 label="Type"
                 density="compact"
                 variant="outlined"
                 hide-details
               />
+              <template v-if="inp.subtype === 'encoder'">
+                <v-select v-model="inp.pin_a" :items="ioPins" label="Pin A" density="compact" variant="outlined" hide-details />
+                <v-select v-model="inp.pin_b" :items="ioPins" label="Pin B" density="compact" variant="outlined" hide-details />
+              </template>
               <v-select
+                v-else
                 v-model="inp.pin"
                 :items="inp.subtype === 'analog' ? adcPins : ioPins"
                 label="Pin"
@@ -65,7 +70,7 @@
                 hide-details
               />
               <v-checkbox
-                v-if="inp.subtype !== 'analog'"
+                v-if="inp.subtype !== 'analog' && inp.subtype !== 'encoder'"
                 v-model="inp.touch"
                 label="Capacitive touch"
                 density="compact"
@@ -73,6 +78,51 @@
                 title="Read this pin as a capacitive touch pad (ESP32)"
               />
             </div>
+            <!-- Every field the firmware's InputManager parses for this type. Blank
+                 number fields fall back to the firmware default (the placeholder).
+                 Inputs hot-reload, so these apply live on save. -->
+            <v-expansion-panels variant="accordion" class="ld-advanced">
+              <v-expansion-panel>
+                <v-expansion-panel-title>Advanced</v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div v-if="inp.subtype === 'analog'" class="ld-fields">
+                    <v-text-field v-model.number="inp.poll_interval_ms" label="Poll interval (ms)" placeholder="30" type="number" min="1" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="inp.min_delta" label="Min change to report (counts)" placeholder="8" type="number" min="0" density="compact" variant="outlined" hide-details title="Noise smoothing: value events only fire when the reading moves at least this many ADC counts" />
+                    <v-checkbox v-model="inp.inverted" label="Inverted" density="compact" hide-details title="Invert the raw reading" />
+                    <v-switch v-model="inp.threshold_enabled" label="Threshold events" density="compact" color="primary" hide-details inset title="Emit above/below events when the value crosses a threshold" />
+                    <template v-if="inp.threshold_enabled">
+                      <v-text-field v-model.number="inp.threshold" label="Threshold (counts)" placeholder="2048" type="number" min="0" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="inp.threshold_hysteresis" label="Hysteresis (counts)" placeholder="16" type="number" min="0" density="compact" variant="outlined" hide-details title="Dead band around the threshold to stop event flapping" />
+                    </template>
+                    <v-switch v-model="inp.range_enabled" label="Range events" density="compact" color="primary" hide-details inset title="Emit enter/leave events for a value range" />
+                    <template v-if="inp.range_enabled">
+                      <v-text-field v-model.number="inp.range_min" label="Range min (counts)" placeholder="0" type="number" min="0" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="inp.range_max" label="Range max (counts)" placeholder="4095" type="number" min="0" density="compact" variant="outlined" hide-details />
+                    </template>
+                  </div>
+                  <div v-else-if="inp.subtype === 'encoder'" class="ld-fields">
+                    <v-select v-model="inp.pin_button" :items="ioPins" label="Button pin (blank = none)" density="compact" variant="outlined" hide-details clearable />
+                    <v-checkbox v-model="inp.pullup" label="Internal pull-ups" density="compact" hide-details />
+                    <v-text-field v-model.number="inp.debounce_ms" label="Button debounce (ms)" placeholder="30" type="number" min="0" density="compact" variant="outlined" hide-details />
+                  </div>
+                  <div v-else class="ld-fields">
+                    <v-checkbox v-model="inp.pullup" label="Internal pull-up" density="compact" hide-details />
+                    <v-checkbox v-model="inp.pulldown" label="Internal pull-down (ESP32)" density="compact" hide-details />
+                    <v-checkbox v-model="inp.inverted" label="Inverted" density="compact" hide-details title="Invert the raw pin reading" />
+                    <v-text-field v-if="inp.touch" v-model.number="inp.touch_threshold" label="Touch threshold" placeholder="40" type="number" min="0" density="compact" variant="outlined" hide-details title="Counts as pressed while touchRead() is below this value" />
+                    <v-text-field v-model.number="inp.debounce_ms" label="Debounce (ms)" placeholder="30" type="number" min="0" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="inp.hold_ms" label="Hold event after (ms)" placeholder="500" type="number" min="0" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="inp.long_press_ms" label="Long press (ms)" placeholder="1200" type="number" min="0" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="inp.multi_press_window_ms" label="Multi-press window (ms)" placeholder="350" type="number" min="0" density="compact" variant="outlined" hide-details title="Max gap between presses that still counts as a double/triple press" />
+                    <v-text-field v-model.number="inp.repeat_start_ms" label="Repeat starts after (ms)" placeholder="800" type="number" min="0" density="compact" variant="outlined" hide-details />
+                    <v-text-field v-model.number="inp.repeat_interval_ms" label="Repeat interval (ms)" placeholder="250" type="number" min="0" density="compact" variant="outlined" hide-details />
+                  </div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Blank fields use the firmware default shown as the placeholder.
+                  </div>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
           </v-card>
           <button class="ld-add" @click="addInput">
             <v-icon size="28">mdi-plus</v-icon>
@@ -136,6 +186,58 @@
                 title="Perceptually-linear dimming"
               />
             </div>
+            <!-- Every field the firmware's OutputManager parses for this type. Blank
+                 number fields fall back to the firmware default (the placeholder).
+                 Output config still applies on restart. -->
+            <v-expansion-panels variant="accordion" class="ld-advanced">
+              <v-expansion-panel>
+                <v-expansion-panel-title>Advanced</v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div class="ld-fields">
+                    <v-checkbox v-model="out.inverted" label="Inverted (active-low)" density="compact" hide-details title="Drive the pin LOW to turn the output on" />
+                    <template v-if="out.type === 'led'">
+                      <v-checkbox v-model="out.pwm" label="PWM dimming" density="compact" hide-details title="Enable brightness control on this pin" />
+                      <template v-if="out.pwm">
+                        <v-text-field v-model.number="out.pwm_channel" label="PWM channel (ESP32)" placeholder="0" type="number" min="0" max="5" density="compact" variant="outlined" hide-details title="LEDC channel 0-5; channels 6-7 are reserved for the display backlight" />
+                        <v-text-field v-model.number="out.pwm_frequency" label="PWM frequency (Hz)" placeholder="5000" type="number" min="1" density="compact" variant="outlined" hide-details />
+                        <v-text-field v-model.number="out.pwm_resolution" label="PWM resolution (bits)" placeholder="8" type="number" min="1" max="16" density="compact" variant="outlined" hide-details />
+                      </template>
+                    </template>
+                    <template v-else-if="out.type === 'rgb'">
+                      <v-select v-model="out.pin_r" :items="ioPins" label="R pin" density="compact" variant="outlined" hide-details clearable />
+                      <v-select v-model="out.pin_g" :items="ioPins" label="G pin" density="compact" variant="outlined" hide-details clearable />
+                      <v-select v-model="out.pin_b" :items="ioPins" label="B pin" density="compact" variant="outlined" hide-details clearable />
+                      <v-text-field v-model.number="out.channel_r" label="PWM channel R (ESP32)" placeholder="0" type="number" min="0" max="5" density="compact" variant="outlined" hide-details title="LEDC channel 0-5; channels 6-7 are reserved for the display backlight" />
+                      <v-text-field v-model.number="out.channel_g" label="PWM channel G (ESP32)" placeholder="1" type="number" min="0" max="5" density="compact" variant="outlined" hide-details title="LEDC channel 0-5; channels 6-7 are reserved for the display backlight" />
+                      <v-text-field v-model.number="out.channel_b" label="PWM channel B (ESP32)" placeholder="2" type="number" min="0" max="5" density="compact" variant="outlined" hide-details title="LEDC channel 0-5; channels 6-7 are reserved for the display backlight" />
+                      <v-text-field v-model.number="out.pwm_frequency" label="PWM frequency (Hz)" placeholder="5000" type="number" min="1" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="out.pwm_resolution" label="PWM resolution (bits)" placeholder="8" type="number" min="1" max="16" density="compact" variant="outlined" hide-details />
+                    </template>
+                    <template v-else-if="out.type === 'ws2812'">
+                      <v-slider :model-value="out.brightness ?? 255" label="Brightness" :min="0" :max="255" :step="1" thumb-label density="compact" hide-details color="amber-darken-2" @update:model-value="out.brightness = $event" />
+                    </template>
+                    <template v-else-if="out.type === 'servo'">
+                      <v-text-field v-model.number="out.servo_min_us" label="Min pulse (µs)" placeholder="500" type="number" min="0" density="compact" variant="outlined" hide-details title="Pulse width at 0°" />
+                      <v-text-field v-model.number="out.servo_max_us" label="Max pulse (µs)" placeholder="2500" type="number" min="0" density="compact" variant="outlined" hide-details title="Pulse width at 180°" />
+                      <v-text-field v-model.number="out.pwm_frequency" label="PWM frequency (Hz)" placeholder="50" type="number" min="1" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="out.pwm_resolution" label="PWM resolution (bits)" placeholder="16" type="number" min="1" max="16" density="compact" variant="outlined" hide-details />
+                    </template>
+                    <template v-else-if="out.type === 'stepper'">
+                      <v-select v-model="out.pin_enable" :items="ioPins" label="Enable pin (blank = none)" density="compact" variant="outlined" hide-details clearable />
+                      <v-text-field v-model.number="out.steps_per_rev" label="Steps per revolution" placeholder="200" type="number" min="1" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="out.max_step_hz" label="Max step rate (Hz)" placeholder="1000" type="number" min="1" density="compact" variant="outlined" hide-details />
+                    </template>
+                    <template v-else-if="out.type === 'buzzer'">
+                      <v-text-field v-model.number="out.pwm_channel" label="PWM channel (ESP32)" placeholder="0" type="number" min="0" max="5" density="compact" variant="outlined" hide-details title="LEDC channel used for tone generation (0-5; 6-7 are reserved for the display backlight)" />
+                    </template>
+                  </div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Blank fields use the firmware default shown as the placeholder.
+                    <template v-if="out.type === 'rgb'">RGB drives the R/G/B pins above — the main Pin field is unused.</template>
+                  </div>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
           </v-card>
           <button class="ld-add" @click="addOutput">
             <v-icon size="28">mdi-plus</v-icon>
@@ -210,6 +312,30 @@
                 density="compact" variant="outlined" hide-details />
             </div>
             <v-expansion-panels variant="accordion" class="ld-advanced">
+              <!-- Panel brightness + scheduled night dimming. Times are shown as
+                   HH:MM but stored as minutes past midnight (night_start_min /
+                   night_end_min); untouched controls keep the firmware defaults. -->
+              <v-expansion-panel>
+                <v-expansion-panel-title>Brightness &amp; night mode</v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div class="ld-fields">
+                    <v-slider :model-value="disp.brightness ?? 255" label="Brightness" :min="0" :max="255" :step="1" thumb-label density="compact" hide-details color="indigo" title="An untouched slider follows the panel's tuned Contrast setting" @update:model-value="disp.brightness = $event" />
+                    <div class="text-caption text-medium-emphasis">Untouched, the panel keeps its tuned contrast (Brightness follows Contrast when unset).</div>
+                    <v-switch v-model="disp.night_enabled" label="Night mode" density="compact" color="indigo" hide-details inset />
+                    <template v-if="disp.night_enabled">
+                      <v-text-field :model-value="minutesToHhmm(disp.night_start_min, 1320)" label="Night starts" type="time" density="compact" variant="outlined" hide-details @update:model-value="disp.night_start_min = hhmmToMinutes($event)" />
+                      <v-text-field :model-value="minutesToHhmm(disp.night_end_min, 420)" label="Night ends" type="time" density="compact" variant="outlined" hide-details @update:model-value="disp.night_end_min = hhmmToMinutes($event)" />
+                      <v-slider :model-value="disp.night_brightness ?? 10" label="Night brightness" :min="0" :max="255" :step="1" thumb-label density="compact" hide-details color="indigo" @update:model-value="disp.night_brightness = $event" />
+                      <v-switch v-model="disp.night_blank" label="Blank screen at night" density="compact" color="indigo" hide-details inset title="Turn the panel fully off at night instead of dimming" />
+                    </template>
+                  </div>
+                  <div class="text-caption text-medium-emphasis mt-1">
+                    Dims the panel between the start and end times — a window that
+                    crosses midnight (e.g. 22:00 → 07:00) works. Clearing a time falls
+                    back to the default shown.
+                  </div>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
               <v-expansion-panel>
                 <v-expansion-panel-title>Advanced (sub-window &amp; pins)</v-expansion-panel-title>
                 <v-expansion-panel-text>
@@ -254,6 +380,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import api from '../api/client'
+import { minutesToHhmm, hhmmToMinutes } from '../lib/timeFormat'
 import { pinItems } from '../utils/boardPins'
 
 const loading = ref(false)
@@ -265,6 +392,9 @@ const savingDisplays = ref(false)
 const activeTab = ref('inputs')
 
 const inputs = ref([])
+// Keypad configs have no card UI (rows/cols/keys matrices); they're loaded from
+// /api/inputs and posted back verbatim so saving inputs never wipes them.
+const keypadsRaw = ref([])
 const outputs = ref([])
 const sensors = ref([])
 const displays = ref([])
@@ -363,13 +493,17 @@ async function saveInputs() {
   statusMessage.value = null
   try {
     // Strip only the UI-only `subtype`; keep every other field (debounce, hold,
-    // thresholds, ranges…) so saving here never drops advanced settings.
-    const digital = inputs.value.filter(i => i.subtype !== 'analog')
+    // thresholds, ranges…) so saving here never drops advanced settings. Keypads
+    // have no UI and are round-tripped verbatim (the device rebuilds inputs.json
+    // from this POST, so omitting them would wipe them).
+    const digital = inputs.value.filter(i => !i.subtype || i.subtype === 'digital')
       .map(({ subtype, ...rest }) => ({ pullup: true, inverted: false, ...rest }))
     const analog = inputs.value.filter(i => i.subtype === 'analog')
       .map(({ subtype, ...rest }) => ({ inverted: false, ...rest }))
-    await api.post('/api/inputs', { digital, analog })
-    statusMessage.value = { type: 'success', text: 'Inputs saved. Restart device to apply.' }
+    const encoders = inputs.value.filter(i => i.subtype === 'encoder')
+      .map(({ subtype, ...rest }) => ({ pullup: true, ...rest }))
+    const res = await api.post('/api/inputs', { digital, analog, encoders, keypads: keypadsRaw.value })
+    statusMessage.value = { type: 'success', text: res?.message || (res?.restartRequired ? 'Inputs saved. Restart device to apply.' : 'Inputs saved and applied.') }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -385,8 +519,8 @@ async function saveOutputs() {
   savingOutputs.value = true
   statusMessage.value = null
   try {
-    await api.post('/api/outputs', { outputs: outputs.value })
-    statusMessage.value = { type: 'success', text: 'Outputs saved. Restart device to apply.' }
+    const res = await api.post('/api/outputs', { outputs: outputs.value })
+    statusMessage.value = { type: 'success', text: res?.message || 'Outputs saved. Restart device to apply.' }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -402,8 +536,8 @@ async function saveSensors() {
   savingSensors.value = true
   statusMessage.value = null
   try {
-    await api.post('/api/sensors', { sensors: sensors.value })
-    statusMessage.value = { type: 'success', text: 'Sensors saved. Restart device to apply.' }
+    const res = await api.post('/api/sensors', { sensors: sensors.value })
+    statusMessage.value = { type: 'success', text: res?.message || (res?.restartRequired ? 'Sensors saved. Restart device to apply.' : 'Sensors saved and applied.') }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -419,9 +553,9 @@ async function saveDisplays() {
   savingDisplays.value = true
   statusMessage.value = null
   try {
-    await api.post('/api/displays', { displays: displays.value })
+    const res = await api.post('/api/displays', { displays: displays.value })
     displaysSeeded.value = false  // now persisted — no longer a board default
-    statusMessage.value = { type: 'success', text: 'Displays saved. Restart device to apply.' }
+    statusMessage.value = { type: 'success', text: res?.message || (res?.restartRequired ? 'Displays saved. Restart device to apply.' : 'Displays saved and applied.') }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -444,9 +578,13 @@ async function refresh() {
   // failed load turn into an empty overwrite.
   await Promise.all([
     api.get('/api/inputs').then((d) => {
-      const dd = (d.digital || []).map(i => ({ ...i, subtype: 'digital' }))
+      // Normalise booleans whose firmware default is true (pullup) so the
+      // Advanced checkboxes show the effective value for configs that omit them.
+      const dd = (d.digital || []).map(i => ({ ...i, subtype: 'digital', pullup: i.pullup ?? true, inverted: i.inverted ?? false }))
       const aa = (d.analog || []).map(i => ({ ...i, subtype: 'analog' }))
-      inputs.value = [...dd, ...aa]
+      const ee = (d.encoders || []).map(i => ({ ...i, subtype: 'encoder', pullup: i.pullup ?? true }))
+      inputs.value = [...dd, ...aa, ...ee]
+      keypadsRaw.value = d.keypads || []
       loaded.value.inputs = true
     }).catch(() => { loaded.value.inputs = false }),
     api.get('/api/outputs').then((d) => { outputs.value = d.outputs || []; loaded.value.outputs = true })

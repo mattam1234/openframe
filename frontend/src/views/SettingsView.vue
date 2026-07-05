@@ -247,6 +247,138 @@
             />
             <v-switch v-model="form.time.rtc_enabled" label="DS3231 RTC present" color="primary" class="mt-2" hide-details />
             <div class="text-caption text-medium-emphasis">Seeds the clock before/without NTP, and is re-synced from NTP when available.</div>
+
+            <v-divider class="my-3" />
+            <div class="text-subtitle-2 mb-1">Location</div>
+            <v-row no-gutters class="ga-2">
+              <v-col>
+                <v-text-field
+                  v-model.number="form.time.latitude"
+                  label="Latitude"
+                  type="number"
+                  step="0.0001"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+              <v-col>
+                <v-text-field
+                  v-model.number="form.time.longitude"
+                  label="Longitude"
+                  type="number"
+                  step="0.0001"
+                  density="compact"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+            <div class="text-caption text-medium-emphasis mt-1">
+              For sunrise/sunset triggers and weather. Decimal degrees; 0 / 0 = unset.
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col v-if="hasFeature('push')" cols="12" md="6">
+        <v-card title="Push Notifications">
+          <v-card-subtitle>Forward device notifications (disconnects, errors, firmware events) to your phone.</v-card-subtitle>
+          <v-card-text>
+            <v-switch v-model="form.notify.enabled" label="Enabled" color="primary" />
+            <v-select v-model="form.notify.service" :items="notifyServiceOptions" label="Service" />
+            <template v-if="form.notify.service === 'ntfy'">
+              <v-text-field v-model="form.notify.url" label="ntfy server URL" placeholder="https://ntfy.sh" />
+              <v-text-field v-model="form.notify.topic" label="Topic" hint="Subscribe to this topic in the ntfy app" persistent-hint />
+            </template>
+            <template v-else-if="form.notify.service === 'telegram'">
+              <v-text-field v-model="form.notify.token" label="Bot token" type="password" />
+              <v-text-field v-model="form.notify.chat_id" label="Chat ID" />
+            </template>
+            <template v-else-if="form.notify.service === 'pushover'">
+              <v-text-field v-model="form.notify.token" label="Application token" type="password" />
+              <v-text-field v-model="form.notify.chat_id" label="User key" />
+            </template>
+            <template v-else>
+              <v-text-field
+                v-model="form.notify.url"
+                label="Webhook URL"
+                placeholder="https://example.com/hook"
+                hint="Receives POST {title, message, level, device}"
+                persistent-hint
+              />
+            </template>
+            <v-select v-model="form.notify.min_level" :items="notifyLevelOptions" label="Minimum severity" class="mt-2" />
+            <v-btn
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-broadcast"
+              :loading="testingNotify"
+              :disabled="!form.notify.enabled"
+              @click="sendTestNotification"
+            >
+              Send test
+            </v-btn>
+            <div class="text-caption text-medium-emphasis mt-1">
+              Save first — the test uses the saved settings. Telegram and Pushover need TLS, which ESP8266 builds don't include.
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col v-if="hasFeature('weather')" cols="12" md="6">
+        <v-card title="Weather">
+          <v-card-subtitle>Polls Open-Meteo (no API key needed) and publishes live weather variables.</v-card-subtitle>
+          <v-card-text>
+            <v-switch v-model="form.weather.enabled" label="Enabled" color="primary" />
+            <v-text-field
+              v-model.number="form.weather.update_minutes"
+              label="Update interval (minutes)"
+              type="number"
+              min="10"
+              hint="Minimum 10 minutes"
+              persistent-hint
+            />
+            <v-select v-model="form.weather.units" :items="weatherUnitOptions" label="Units" class="mt-2" />
+            <div class="text-caption text-medium-emphasis mt-2">
+              Location comes from the Latitude/Longitude fields in the Time &amp; Schedules card.
+              Values appear as <code>weather.temperature</code>, <code>weather.condition</code>, … in the
+              screen designer's variable picker and on the Variables page.
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+
+      <v-col cols="12" md="6">
+        <v-card title="Firmware">
+          <v-card-subtitle>Current version: {{ firmwareVersion }}</v-card-subtitle>
+          <v-card-text>
+            <div class="d-flex ga-2 flex-wrap">
+              <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" :loading="checkingUpdate" @click="checkForUpdates">
+                Check for updates
+              </v-btn>
+              <v-btn size="small" variant="tonal" prepend-icon="mdi-upload" href="/update" target="_blank" rel="noopener">
+                Open updater (/update)
+              </v-btn>
+            </div>
+            <v-alert
+              v-if="updateInfo"
+              :type="updateInfo.updateAvailable ? 'info' : 'success'"
+              variant="tonal"
+              density="compact"
+              class="mt-3"
+            >
+              <template v-if="updateInfo.updateAvailable">
+                Update available: <strong>{{ updateInfo.latestVersion }}</strong>
+                <div v-if="updateInfo.downloadUrl" class="text-caption">
+                  <a :href="updateInfo.downloadUrl" target="_blank" rel="noopener">Download the firmware .bin</a>,
+                  then flash it via the updater.
+                </div>
+              </template>
+              <template v-else>Firmware is up to date ({{ updateInfo.currentVersion }}).</template>
+            </v-alert>
+            <div class="text-caption text-medium-emphasis mt-2">
+              The release check uses the GitHub repository configured under Integrations. The updater page
+              accepts a firmware or filesystem .bin directly.
+            </div>
           </v-card-text>
         </v-card>
       </v-col>
@@ -333,6 +465,13 @@ import api, { setApiToken } from '../api/client'
 const deviceStore = useDeviceStore()
 const wsStore = useWebSocketStore()
 
+// Board capability flags from GET /api/status `features` (weather, push, …).
+// Older firmware has no features object — treat everything as available then
+// (also while status is still loading), so cards only hide on an explicit false.
+function hasFeature(key) {
+  return deviceStore.status?.features?.[key] !== false
+}
+
 // Live ESP-NOW peer status rides the WebSocket health frame (buildStatusJson →
 // nodelink). Falls back to empty until the first health frame arrives.
 const nodelinkStatus = computed(() => {
@@ -363,9 +502,31 @@ const form = reactive({
   ha: { enabled: false, discovery_prefix: 'homeassistant' },
   ota: { enabled: true, github_repo: '', auto_check: false },
   nodelink: { enabled: false, channel: 0, gateway: false, key: '' },
-  time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '', rtc_enabled: false, rtc_address: 104 },
+  time: { ntp_server: 'pool.ntp.org', ntp_server2: 'time.nist.gov', tz: '', rtc_enabled: false, rtc_address: 104, latitude: 0, longitude: 0 },
   power: { mode: 'off', awake_seconds: 30, sleep_seconds: 300, wake_pin: -1, wake_level: 1 },
+  notify: { enabled: false, service: 'ntfy', url: '', topic: '', token: '', chat_id: '', min_level: 2 },
+  weather: { enabled: false, update_minutes: 30, units: 'metric' },
 })
+
+const notifyServiceOptions = [
+  { title: 'ntfy', value: 'ntfy' },
+  { title: 'Telegram', value: 'telegram' },
+  { title: 'Pushover', value: 'pushover' },
+  { title: 'Webhook', value: 'webhook' },
+]
+
+// Mirrors the firmware's severity mapping (PushNotifier::levelForType).
+const notifyLevelOptions = [
+  { title: 'Everything (info and up)', value: 0 },
+  { title: 'Notices and up (firmware updates…)', value: 1 },
+  { title: 'Warnings and up (disconnects…)', value: 2 },
+  { title: 'Errors only', value: 3 },
+]
+
+const weatherUnitOptions = [
+  { title: 'Metric (°C, km/h)', value: 'metric' },
+  { title: 'Imperial (°F, mph)', value: 'imperial' },
+]
 
 // WiFi TX-power choices (dBm). -1 = leave at the SDK default (max). Lower values
 // cut the current spikes that brown out marginally-powered boards, and reduce
@@ -458,6 +619,18 @@ function applyConfig(config) {
   form.time.tz = config?.time?.tz || ''
   form.time.rtc_enabled = config?.time?.rtc_enabled ?? false
   form.time.rtc_address = config?.time?.rtc_address ?? 104
+  form.time.latitude = config?.time?.latitude ?? 0
+  form.time.longitude = config?.time?.longitude ?? 0
+  form.notify.enabled = config?.notify?.enabled ?? false
+  form.notify.service = config?.notify?.service || 'ntfy'
+  form.notify.url = config?.notify?.url || ''
+  form.notify.topic = config?.notify?.topic || ''
+  form.notify.token = config?.notify?.token || ''
+  form.notify.chat_id = config?.notify?.chat_id || ''
+  form.notify.min_level = config?.notify?.min_level ?? 2
+  form.weather.enabled = config?.weather?.enabled ?? false
+  form.weather.update_minutes = config?.weather?.update_minutes ?? 30
+  form.weather.units = config?.weather?.units || 'metric'
   form.power.mode = config?.power?.mode || 'off'
   form.power.awake_seconds = config?.power?.awake_seconds ?? 30
   form.power.sleep_seconds = config?.power?.sleep_seconds ?? 300
@@ -531,11 +704,14 @@ async function saveSettings() {
     // Mirror the API token into this browser BEFORE the save reply so we keep
     // access once the device starts enforcing it.
     setApiToken(form.device.api_token)
-    await deviceStore.saveConfig(payload)
+    const res = await deviceStore.saveConfig(payload)
     applyConfig(deviceStore.config)
+    // MQTT/time-only changes apply live; WiFi/device/HA changes still reboot.
     statusMessage.value = {
       type: 'success',
-      text: 'Settings saved successfully.',
+      text: res?.restartRequired
+        ? 'Settings saved. The device is restarting to apply changes.'
+        : (res?.message || 'Settings saved and applied.'),
     }
   } catch (error) {
     statusMessage.value = {
@@ -578,6 +754,41 @@ function applyProvision() {
     statusMessage.value = { type: 'info', text: 'Pre-filled from a provisioning link — review and Save.' }
   } catch {
     statusMessage.value = { type: 'error', text: 'Invalid provisioning link.' }
+  }
+}
+
+// ── Push notification test ────────────────────────────────────────────────────
+// The device only queues the push here (HTTP to the service happens on its loop
+// task), so "queued" is the success state; delivery failures land in the logs.
+const testingNotify = ref(false)
+
+async function sendTestNotification() {
+  testingNotify.value = true
+  try {
+    const res = await api.post('/api/notify/test', {})
+    statusMessage.value = { type: 'success', text: res?.message || 'Test push queued.' }
+  } catch (e) {
+    statusMessage.value = { type: 'error', text: e.message || 'Test push failed' }
+  } finally {
+    testingNotify.value = false
+  }
+}
+
+// ── Firmware update check ─────────────────────────────────────────────────────
+const checkingUpdate = ref(false)
+const updateInfo = ref(null)
+const firmwareVersion = computed(
+  () => updateInfo.value?.currentVersion || deviceStore.status?.version || '—'
+)
+
+async function checkForUpdates() {
+  checkingUpdate.value = true
+  try {
+    updateInfo.value = await api.get('/api/ota/check')
+  } catch (e) {
+    statusMessage.value = { type: 'error', text: e.message || 'Update check failed' }
+  } finally {
+    checkingUpdate.value = false
   }
 }
 
@@ -634,5 +845,7 @@ onMounted(async () => {
   await loadSettings()
   applyProvision()
   loadBackups()
+  // Firmware version for the Firmware card (non-fatal if it races the token).
+  if (!deviceStore.status) deviceStore.fetchStatus().catch(() => {})
 })
 </script>

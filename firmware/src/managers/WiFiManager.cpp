@@ -47,6 +47,38 @@ void WiFiManager::begin() {
 void WiFiManager::loop() {
     if (_apMode) {
         _dns.processNextRequest();
+        const uint32_t now = millis();
+        // Track when a portal client was last associated (checked ~1×/s — the
+        // station count is an SDK query, no need to hit it every pass). A probe
+        // tears the AP down for up to ~10 s, so it must wait until the AP has
+        // been client-free for a quiet period: a phone that merely idled off
+        // the AP shouldn't come back to find the portal gone.
+        if (now - _lastApClientCheckMs >= 1000) {
+            _lastApClientCheckMs = now;
+            if (WiFi.softAPgetStationNum() > 0) _lastApClientMs = now;
+        }
+
+        // Fallback-AP with saved credentials: keep probing for the configured
+        // network to come back (router reboot, AP power-cycle) instead of
+        // staying in AP mode until someone reboots the device. Back off after
+        // repeated failed probes, and never leave an explicitly forced AP.
+        const auto& cfg = ConfigManager::instance().config().wifi;
+        const uint32_t probeInterval = (_probeFailures >= AP_STA_BACKOFF_AFTER)
+                                           ? AP_STA_BACKOFF_INTERVAL_MS
+                                           : AP_STA_RETRY_INTERVAL_MS;
+        if (!cfg.apMode && hasConfiguredNetworks() &&
+            now - _lastApClientMs >= AP_CLIENT_QUIET_MS &&
+            now - _lastAttempt >= probeInterval) {
+            LOG_I(TAG, "AP fallback: retrying saved WiFi network");
+            _retryCount = 0;
+            _apMode     = false;
+            _dns.stop();
+            startSTA(/*probe=*/true);   // already offline — a failed probe is no transition
+            if (!_connected) {
+                if (_probeFailures < 255) _probeFailures++;
+                startAP();   // back to the portal until the next probe
+            }
+        }
         return;
     }
 
@@ -62,10 +94,12 @@ void WiFiManager::loop() {
         onDisconnected();
     }
 
-    // Reconnect back-off with strongest-network reselection
+    // Reconnect back-off (exponential, capped) with strongest-network reselection
     if (!_connected && !_apMode) {
         uint32_t now = millis();
-        if (now - _lastAttempt >= RETRY_INTERVAL_MS) {
+        uint32_t interval = RETRY_INTERVAL_MS << (_retryCount < 4 ? _retryCount : 4);
+        if (interval > RETRY_MAX_INTERVAL_MS) interval = RETRY_MAX_INTERVAL_MS;
+        if (now - _lastAttempt >= interval) {
             if (_retryCount < MAX_RETRIES) {
                 LOG_I(TAG, "Reconnect attempt " + String(_retryCount + 1) + "/" + String(MAX_RETRIES));
                 startSTA();
@@ -109,20 +143,22 @@ void WiFiManager::startAP() {
     // AP mode — the radio must stay up for connected clients).
     of_wifi_set_tx_power_dbm(ConfigManager::instance().config().wifi.txPower);
 
-    _apMode    = true;
-    _connected = false;
-    _retryCount = 0;
+    _apMode      = true;
+    _connected   = false;
+    _retryCount  = 0;
+    _lastAttempt = millis();       // spaces the fallback STA probes from AP start
+    _lastApClientMs = millis();    // client-free quiet window counts from AP start
 
     LOG_I(TAG, "AP started: " + ssid + " @ " + WiFi.softAPIP().toString());
 }
 
-void WiFiManager::startSTA() {
+void WiFiManager::startSTA(bool probe) {
     WiFi.mode(WIFI_STA);
     if (!connectToBestConfiguredNetwork()) {
         LOG_W(TAG, "No valid WiFi credentials configured");
         _lastAttempt = millis();
         _retryCount++;
-        onDisconnected();
+        if (!probe) onDisconnected();
         return;
     }
 
@@ -142,7 +178,10 @@ void WiFiManager::startSTA() {
         _retryCount++;
         _lastAttempt = millis();
         _connected = false;
-        onDisconnected();
+        // Events mark state TRANSITIONS only: a failed fallback-AP probe was
+        // already disconnected, so don't re-fire WifiDisconnected (every one
+        // spawns a notification and a phone push).
+        if (!probe) onDisconnected();
     }
 }
 
@@ -178,6 +217,7 @@ void WiFiManager::scanNearbyNetworks(JsonDocument& doc) {
 
 void WiFiManager::onConnected() {
     _connected = true;
+    _probeFailures = 0;   // any successful connect resets the AP-probe back-off
     LOG_I(TAG, "Connected — IP: " + WiFi.localIP().toString());
     startMdns();
     EventBus::instance().publish(EventType::WifiConnected, "wifi", WiFi.localIP().toString());

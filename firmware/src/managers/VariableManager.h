@@ -68,6 +68,19 @@ public:
     // Attach an enum option set to an existing String variable (e.g. animations).
     void setOptions(const String& id, const std::vector<String>& options);
 
+    // Remove a variable by id. Returns true if it existed. Change subscriptions
+    // for the id are deliberately kept: they're id-keyed, self-contained
+    // std::functions (nothing points into the variable map), so nothing can
+    // dangle — and if the id is re-defined after a hot reload, the existing
+    // subscribers keep receiving changes.
+    bool remove(const String& id);
+
+    // Remove every NON-persistent variable whose id starts with `prefix`. Used
+    // by the hardware mirrors (sensor.* / input.*) to purge stale entries when
+    // their config hot-reloads; persistent (user) variables are never touched.
+    // Returns the number removed.
+    size_t removeByPrefix(const String& prefix);
+
     // Getters
     int32_t getInt(const String& id) const;
     float   getFloat(const String& id) const;

@@ -20,6 +20,25 @@ const devicesInSite = computed(() => filterBySite(devices.value, selectedSite.va
 // Per-device freeHeap ring buffers, fed from live updates → shared Sparkline.
 const heapHistory = reactive({})
 
+// Per-device rolling window of the Warning+ log lines devices mirror over MQTT,
+// fed live from `log` WS frames; DeviceView seeds it from GET /api/devices/:id/logs.
+const deviceLogs = reactive({})
+const MAX_LOG_LINES = 250
+
+function recordLog(deviceId, entry) {
+  if (!deviceId || !entry) return
+  const buf = deviceLogs[deviceId] || (deviceLogs[deviceId] = [])
+  buf.push(entry)
+  if (buf.length > MAX_LOG_LINES) buf.shift()
+}
+
+// Replace the window with the server's copy (REST seed) — it already contains
+// anything that also arrived over the WS, so replacing avoids duplicates.
+function seedLogs(deviceId, entries) {
+  if (!deviceId) return
+  deviceLogs[deviceId] = (entries || []).slice(-MAX_LOG_LINES)
+}
+
 let socket = null
 let reconnectTimer = null
 let started = false
@@ -66,6 +85,8 @@ function connect() {
       if (a.resolvedAt) { if (i >= 0) activeAlerts.value.splice(i, 1) }
       else if (i >= 0) activeAlerts.value[i] = a
       else activeAlerts.value.push(a)
+    } else if (msg.type === 'log') {
+      recordLog(msg.deviceId, msg.entry)
     }
   }
 }
@@ -80,5 +101,5 @@ async function init() {
 }
 
 export function useFleet() {
-  return { devices, connected, activeAlerts, heapHistory, selectedSite, sites, devicesInSite, init, upsert }
+  return { devices, connected, activeAlerts, heapHistory, deviceLogs, seedLogs, selectedSite, sites, devicesInSite, init, upsert }
 }

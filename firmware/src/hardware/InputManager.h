@@ -69,7 +69,16 @@ public:
     bool begin();
     void loop();
 
+    // Apply inputs.json changes live, without a reboot. The HTTP handler calls this
+    // after writing the file; the rebuild runs on the loop task (in loop()), which is
+    // the same task that polls the inputs, so the two never overlap. There are no
+    // web-task readers of the input state, so no lock is needed (inputs use polling,
+    // not ISRs — nothing to detach).
+    void requestReload();
+
 private:
+    void reload();   // re-read config + re-apply pin modes (loop task only)
+
     struct DigitalInputState {
         bool     stablePressed      = false;
         bool     lastRawPressed     = false;
@@ -137,6 +146,12 @@ private:
     std::vector<EncoderInputState>  _encoderStates;
     std::vector<KeypadInputConfig>  _keypadConfigs;
     std::vector<KeypadInputState>   _keypadStates;
+
+    volatile bool _reloadPending = false;   // set by requestReload(), consumed in loop()
+
+    // Variable ids registerVariables() defined last run — removed one by one on
+    // the next run (never a blanket input.* purge; see registerVariables()).
+    std::vector<String> _definedVarIds;
 
     static constexpr const char* TAG = "InputMgr";
 };

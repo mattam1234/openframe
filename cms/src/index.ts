@@ -6,6 +6,7 @@ import { JsonStore } from './store';
 import { Job, JobStore, JobScheduler } from './jobs';
 import { TemplateStore, Template } from './templates';
 import { HistoryStore, Sample } from './history';
+import { DeviceLogStore } from './logs';
 import { AlertManager } from './alerts';
 import { FirmwareStore } from './firmware-store';
 import { AuditLog, AuditEntry } from './audit';
@@ -38,7 +39,10 @@ if (cfg.alertWebhookUrl) {
   console.log(`[cms] alerts -> webhook ${hook}`);
 }
 
-const bridge = new MqttBridge(cfg, registry);
+// Rolling per-device window of the Warning+ logs devices mirror over MQTT (#83).
+const logs = new DeviceLogStore();
+
+const bridge = new MqttBridge(cfg, registry, logs);
 
 // Scheduled fleet jobs (#63): run a fleet command on a schedule. The runner
 // resolves the job's target set and fans the command out via the broker.
@@ -63,7 +67,7 @@ registry.on('change', (device) => {
 const sweep = setInterval(() => registry.sweep(), Math.min(cfg.offlineTimeoutMs, 15_000));
 sweep.unref?.();
 
-const server = createServer(registry, bridge, templates, history, alerts, firmware, cfg.publicUrl, cfg.authToken, cfg.viewerToken, audit, jobs, scheduler);
+const server = createServer(registry, bridge, templates, history, alerts, firmware, cfg.publicUrl, cfg.authToken, cfg.viewerToken, audit, jobs, scheduler, logs);
 if (cfg.authToken) console.log('[cms] token auth enabled');
 if (cfg.viewerToken) console.log('[cms] read-only viewer token enabled');
 

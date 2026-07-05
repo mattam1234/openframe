@@ -29,6 +29,8 @@
 #include "managers/ProfileManager.h"
 #include "managers/HealthMonitor.h"
 #include "managers/NotificationManager.h"
+#include "managers/PushNotifier.h"       // self-gated on OF_ENABLE_PUSH
+#include "managers/WeatherManager.h"     // self-gated on OF_ENABLE_WEATHER
 #include "managers/PowerManager.h"
 #include "api/ApiServer.h"
 
@@ -95,6 +97,11 @@ void setup() {
     HaManager::instance().begin();
     HaBridgeManager::instance().begin();
     OtaManager::instance().begin(webServer);
+#if OF_ENABLE_WEATHER
+    // Weather (#weather): pure connectivity (Open-Meteo poll → weather.* vars),
+    // so it lives with the network subsystems; compiled out on constrained boards.
+    WeatherManager::instance().begin();
+#endif
 
     // ── Phase 2.5: Web server (before optional hardware) ──────────────────────
     // Bring the API/UI up *before* the hardware subsystems below. The async web
@@ -103,6 +110,10 @@ void setup() {
     // crashes, or starves the heap — those would otherwise reboot the device
     // before this point and leave the UI dead until safe mode kicks in. This is
     // the "keep the device recoverable" idea from safe mode, applied on every boot.
+#if OF_ENABLE_PUSH
+    // Push forwarding must exist before NotificationManager starts posting.
+    PushNotifier::instance().begin();
+#endif
     NotificationManager::instance().begin();
     ApiServer::instance().begin(webServer);
     webServer.begin();
@@ -155,6 +166,12 @@ void loop() {
     NodeLinkManager::instance().loop();
     GatewayManager::instance().loop();
     OtaManager::instance().loop();
+#if OF_ENABLE_PUSH
+    PushNotifier::instance().loop();
+#endif
+#if OF_ENABLE_WEATHER
+    WeatherManager::instance().loop();
+#endif
     PowerManager::instance().loop();
 
     // Hardware & automation were never started in safe mode — skip their loops.

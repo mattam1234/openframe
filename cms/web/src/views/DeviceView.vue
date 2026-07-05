@@ -146,7 +146,8 @@
           <v-card-title class="text-subtitle-1">Push config</v-card-title>
           <v-card-text>
             <p class="text-caption text-medium-emphasis mb-2">
-              Partial config JSON (same shape as <code>POST /api/config</code>). The device merges, saves, and reboots.
+              Partial config JSON (same shape as <code>POST /api/config</code>). The device merges and saves;
+              MQTT/time/notify/weather changes apply live, anything else reboots it.
             </p>
             <v-textarea
               v-model="configJson"
@@ -175,8 +176,29 @@
             </div>
 
             <div v-if="pendingConfig && configDiff && configDiff.length" class="d-flex ga-2 mt-3">
-              <v-btn color="error" @click="pushConfig">Confirm push &amp; reboot</v-btn>
+              <v-btn color="error" @click="pushConfig">Confirm push</v-btn>
               <v-btn variant="text" @click="cancelConfig">Cancel</v-btn>
+            </div>
+          </v-card-text>
+        </v-card>
+
+        <!-- Device log: Warning+ lines mirrored to <base>/<id>/log (#83) -->
+        <v-card border flat class="mt-4">
+          <v-card-title class="text-subtitle-1">Device log</v-card-title>
+          <v-card-text>
+            <p class="text-caption text-medium-emphasis mb-2">
+              Warning+ log lines the device mirrors over MQTT — streamed live, most recent last.
+            </p>
+            <p v-if="!logEntries.length" class="text-caption text-medium-emphasis mb-0">
+              No log lines received yet.
+            </p>
+            <div v-else class="logbox">
+              <div v-for="(e, i) in logEntries" :key="i" class="d-flex ga-2 align-baseline py-1">
+                <span class="text-caption text-medium-emphasis text-no-wrap">{{ fmtLogTime(e.t) }}</span>
+                <v-chip :color="logColor(e.level)" size="x-small" variant="flat">{{ e.level }}</v-chip>
+                <span v-if="e.tag" class="text-caption text-medium-emphasis text-no-wrap">{{ e.tag }}</span>
+                <span class="text-caption logmsg">{{ e.msg }}</span>
+              </div>
             </div>
           </v-card-text>
         </v-card>
@@ -196,7 +218,7 @@ import ScreenCanvas from '../components/ScreenCanvas.vue'
 const props = defineProps({ id: { type: String, required: true } })
 const routeId = computed(() => props.id)
 
-const { devices } = useFleet()
+const { devices, deviceLogs, seedLogs } = useFleet()
 const device = computed(() => devices.value.find((d) => d.deviceId === props.id) || loadedDevice.value)
 const loadedDevice = ref(null)
 const notFound = ref(false)
@@ -217,9 +239,17 @@ const fields = computed(() => {
     { label: 'CPU load', value: asNum(d.cpuLoadPercent) == null ? '—' : `${d.cpuLoadPercent}%` },
     { label: 'Uptime', value: fmtUptime(d.uptimeMs) },
     { label: 'Profile', value: d.activeProfileId || '—' },
+    { label: 'Features', value: featureList(d.features) },
     { label: 'Last seen', value: fmtAgo(d.lastSeen) },
   ]
 })
+
+// Build-time feature flags from the heartbeat (older firmware doesn't send them).
+function featureList(features) {
+  if (!features || typeof features !== 'object') return '—'
+  const on = Object.entries(features).filter(([, v]) => v).map(([k]) => k)
+  return on.length ? on.join(', ') : 'none'
+}
 
 const newTag = ref('')
 const site = ref('')
@@ -349,9 +379,26 @@ function cancelConfig() { pendingConfig.value = null; configDiff.value = null }
 async function pushConfig() {
   if (!pendingConfig.value) return
   try { localStorage.setItem(baselineKey.value, JSON.stringify(pendingConfig.value)) } catch { /* ignore */ }
-  await cmd('apply_config', pendingConfig.value)
+  result.value = 'pushing config…'
+  try {
+    const res = await api.post(`/api/devices/${encodeURIComponent(props.id)}/cmd`,
+      { type: 'apply_config', payload: pendingConfig.value })
+    // Older firmware acks omit restartRequired — it always rebooted, so treat
+    // "missing" as a reboot.
+    result.value = res.ok
+      ? (res.restartRequired === false
+          ? 'Config applied live — no reboot needed.'
+          : 'Config saved — device is rebooting to apply.')
+      : JSON.stringify(res, null, 2)
+  } catch (e) { result.value = `error: ${e.message}` }
   cancelConfig()
 }
+
+// ── Device log (#83) ─────────────────────────────────────────────────────────
+const logEntries = computed(() => deviceLogs[props.id] || [])
+const fmtLogTime = (t) => (t ? new Date(t).toLocaleTimeString() : '')
+const logColor = (level) =>
+  level === 'error' || level === 'fatal' ? 'error' : level === 'warning' ? 'warning' : 'grey'
 
 async function load() {
   // Seed fields from REST if the device isn't already in the live store.
@@ -361,6 +408,8 @@ async function load() {
   }
   try { history.value = (await api.get(`/api/devices/${encodeURIComponent(props.id)}/history`)).samples || [] }
   catch { /* history is optional */ }
+  try { seedLogs(props.id, (await api.get(`/api/devices/${encodeURIComponent(props.id)}/logs`)).entries || []) }
+  catch { /* logs are optional */ }
 }
 
 // Don't clobber the editors while typing; seed them once the device resolves.
@@ -387,6 +436,14 @@ onUnmounted(() => clearInterval(screensTimer))
 }
 .mono :deep(textarea) { font-family: 'Roboto Mono', monospace; font-size: 0.85rem; }
 .mono { font-family: 'Roboto Mono', monospace; }
+.logbox {
+  max-height: 240px;
+  overflow: auto;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.logmsg { word-break: break-word; }
 .diff-added { color: #22c55e; font-weight: 600; }
 .diff-removed { color: #ef4444; font-weight: 600; }
 .diff-changed { color: #f59e0b; font-weight: 600; }

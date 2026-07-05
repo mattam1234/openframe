@@ -5,6 +5,7 @@
 #include <vector>
 #include "StorageManager.h"
 #include "Logger.h"
+#include "Lock.h"
 #include "../OpenFrameConfig.h"
 
 // ── Default configuration schema ─────────────────────────────────────────────
@@ -94,6 +95,10 @@ struct TimeConfig {
     // is re-synced from NTP once available — accurate time with no WiFi.
     bool    rtcEnabled = false;
     uint8_t rtcAddress = 0x68;
+    // Device location (decimal degrees) — drives sunrise/sunset schedule
+    // triggers and the weather integration. 0/0 = unset.
+    float   latitude   = 0.0f;
+    float   longitude  = 0.0f;
 };
 
 struct DeviceConfig {
@@ -137,6 +142,29 @@ struct PowerConfig {
     uint8_t  wakeLevel    = 1;        // wake when wakePin reaches this level (0/1)
 };
 
+// Push notifications (PushNotifier): forward device notifications to an external
+// service so they reach a phone, not just the web UI. Default off.
+struct NotifyConfig {
+    bool   enabled = false;
+    // "ntfy" | "telegram" | "pushover" | "webhook"
+    String service = "ntfy";
+    String url;      // ntfy server base URL (e.g. https://ntfy.sh) or webhook URL
+    String topic;    // ntfy topic
+    String token;    // telegram bot token / pushover app token
+    String chatId;   // telegram chat id / pushover user key
+    // Minimum severity forwarded: 0=info, 1=notice, 2=warning, 3=error.
+    uint8_t minLevel = 2;
+};
+
+// Weather integration (WeatherManager): polls Open-Meteo for current conditions
+// and today's range, publishing live weather.* variables. Location comes from
+// time.latitude/longitude. Default off.
+struct WeatherConfig {
+    bool     enabled       = false;
+    uint16_t updateMinutes = 30;         // poll interval; clamped to >= 10
+    String   units         = "metric";   // metric (°C, km/h) | imperial (°F, mph)
+};
+
 struct AppConfig {
     DeviceConfig   device;
     WifiConfig     wifi;
@@ -146,6 +174,8 @@ struct AppConfig {
     NodeLinkConfig nodelink;
     TimeConfig     time;
     PowerConfig    power;
+    NotifyConfig   notify;
+    WeatherConfig  weather;
 };
 
 // ── ConfigManager ─────────────────────────────────────────────────────────────
@@ -177,6 +207,15 @@ public:
     // silently revert the change on the next reboot. No-op on ESP8266 (no NVS).
     bool syncNvsBackup(const JsonDocument& doc);
 
+    // Cross-task guard for _config. fromJson runs on the async web task
+    // (/api/config POST) and reassigns the config Strings in place, so any
+    // loop-task reader that copies a section (e.g. a manager's applyConfig
+    // snapshot) must hold this while copying:
+    //     of_lock_guard<of_recursive_mutex> lock(ConfigManager::instance().mutex());
+    // toJson()/fromJson()/save() lock it internally (recursive, so callers may
+    // already hold it). No-op on the ESP8266 (see Lock.h).
+    of_recursive_mutex& mutex() const { return _mtx; }
+
 private:
     ConfigManager() = default;
     void applyDefaults();
@@ -186,5 +225,6 @@ private:
     void migrate(int fromVersion);
 
     AppConfig _config;
+    mutable of_recursive_mutex _mtx;
     static constexpr const char* TAG = "Config";
 };

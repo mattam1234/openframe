@@ -1,6 +1,7 @@
 #include "MqttManager.h"
 #include "WiFiManager.h"
 #include "../core/StorageManager.h"
+#include "../core/Lock.h"
 #include "../core/Logger.h"
 #include "../OpenFrameConfig.h"
 #include <ArduinoJson.h>
@@ -32,7 +33,13 @@ MqttManager& MqttManager::instance() {
 // ── Public ────────────────────────────────────────────────────────────────────
 
 void MqttManager::begin() {
-    const auto& cfg = ConfigManager::instance().config().mqtt;
+    // Snapshot the section under the config lock — a /api/config push on the
+    // async web task can reassign these Strings while we copy them.
+    MqttConfig cfg;
+    {
+        of_lock_guard<of_recursive_mutex> lock(ConfigManager::instance().mutex());
+        cfg = ConfigManager::instance().config().mqtt;
+    }
     _enabled = cfg.enabled;
 
     if (!_enabled) {
@@ -40,8 +47,14 @@ void MqttManager::begin() {
         return;
     }
 
-    configureTransport();
-    _client.setServer(cfg.host.c_str(), cfg.port);
+    // Copy into our own stable storage BEFORE setServer — PubSubClient keeps the
+    // raw host pointer, so it must point at MqttManager-owned memory (see .h).
+    _host     = cfg.host;
+    _user     = cfg.user;
+    _password = cfg.password;
+
+    configureTransport(cfg);
+    _client.setServer(_host.c_str(), cfg.port);
     _client.setKeepAlive(60);
     // PubSubClient uses one buffer for both RX and TX. 2 KB leaves headroom for
     // HA discovery payloads and, importantly, inbound remote-config pushes on the
@@ -53,29 +66,87 @@ void MqttManager::begin() {
 
     // Structured remote logging (#83): mirror Warning+ logs to
     // <baseTopic>/<deviceId>/log so a CMS or syslog bridge can ingest them. The
-    // re-entrancy guard stops a publish that itself logs from recursing.
-    Logger::instance().addListener([this](const LogEntry& e) {
-        static const char* kLvl[] = { "trace", "debug", "info", "warning", "error", "fatal" };
-        if (e.level < LogLevel::Warning) return;
-        static bool inLog = false;
-        if (inLog || !_client.connected()) return;
-        inLog = true;
-        JsonDocument doc;
-        doc["ts"]    = e.timestamp;
-        doc["level"] = kLvl[static_cast<uint8_t>(e.level) <= 5 ? static_cast<uint8_t>(e.level) : 2];
-        doc["tag"]   = e.tag;
-        doc["msg"]   = e.message;
-        String payload;
-        serializeJson(doc, payload);
-        publishDevice("log", payload);
-        inLog = false;
-    });
+    // re-entrancy guard stops a publish that itself logs from recursing. Added once —
+    // begin() can run again on an off→on reconfigure, which must not duplicate it.
+    if (!_listenerAdded) {
+        _listenerAdded = true;
+        Logger::instance().addListener([this](const LogEntry& e) {
+            static const char* kLvl[] = { "trace", "debug", "info", "warning", "error", "fatal" };
+            if (e.level < LogLevel::Warning) return;
+            static bool inLog = false;
+            if (inLog || !_client.connected()) return;
+            inLog = true;
+            JsonDocument doc;
+            doc["ts"]    = e.timestamp;
+            doc["level"] = kLvl[static_cast<uint8_t>(e.level) <= 5 ? static_cast<uint8_t>(e.level) : 2];
+            doc["tag"]   = e.tag;
+            doc["msg"]   = e.message;
+            String payload;
+            serializeJson(doc, payload);
+            publishDevice("log", payload);
+            inLog = false;
+        });
+    }
 
-    LOG_I(TAG, "MQTT configured — broker: " + cfg.host + ":" + String(cfg.port));
+    LOG_I(TAG, "MQTT configured — broker: " + _host + ":" + String(cfg.port));
     connect();
 }
 
+// Re-apply the MQTT config without a reboot. Disabled → drop the link; off→on → full
+// bring-up (begin() re-guards the one-time listener); already-on → point at the new
+// broker and drop the stale connection so loop() reconnects with the fresh settings.
+void MqttManager::applyConfig() {
+    // Snapshot the section under the config lock (see begin()).
+    MqttConfig cfg;
+    {
+        of_lock_guard<of_recursive_mutex> lock(ConfigManager::instance().mutex());
+        cfg = ConfigManager::instance().config().mqtt;
+    }
+    const bool wasEnabled = _enabled;
+    if (!cfg.enabled) {
+        _enabled = false;
+        if (_client.connected()) {
+            // A clean DISCONNECT suppresses the Last-Will, so replace the retained
+            // "online" birth message ourselves before dropping the link — otherwise
+            // CMS/HA presence shows this node online forever. _willTopic is this
+            // session's topic, immune to config changes made since connect.
+            publishRaw(_willTopic, "offline", true);
+            _client.disconnect();
+        }
+        LOG_I(TAG, "MQTT disabled");
+        return;
+    }
+    if (!wasEnabled) { begin(); return; }
+    if (_client.connected()) {
+        // See the disable path above: clear our retained presence (on this
+        // session's own topic) before the clean disconnect (which suppresses the
+        // LWT). Must happen before configureTransport() swaps the network client —
+        // this is the old broker/session we're saying goodbye to.
+        publishRaw(_willTopic, "offline", true);
+        _client.disconnect();
+    }
+    // Refresh our stable copies BEFORE setServer — PubSubClient keeps the raw
+    // host pointer (see .h). We run on the loop task (via _reconfigurePending),
+    // the only task that touches _client, so swapping the String here is safe.
+    _host     = cfg.host;
+    _user     = cfg.user;
+    _password = cfg.password;
+    configureTransport(cfg);
+    _client.setServer(_host.c_str(), cfg.port);
+    _backoffMs = 2000;
+    _lastAttempt = 0;
+    LOG_I(TAG, "MQTT reconfigured — broker: " + _host + ":" + String(cfg.port));
+}
+
+void MqttManager::requestReconfigure() {
+    _reconfigurePending = true;   // applied in loop() on the main task
+}
+
 void MqttManager::loop() {
+    if (_reconfigurePending) {
+        _reconfigurePending = false;
+        applyConfig();
+    }
     if (!_enabled) return;
 
     if (_client.connected()) {
@@ -116,6 +187,9 @@ bool MqttManager::isConnected() {
 }
 
 String MqttManager::baseTopic() const {
+    // Copy under the config lock — callable from any task while a web-task
+    // config push may be reassigning the String.
+    of_lock_guard<of_recursive_mutex> lock(ConfigManager::instance().mutex());
     return ConfigManager::instance().config().mqtt.baseTopic;
 }
 
@@ -129,8 +203,9 @@ bool MqttManager::publishDevice(const String& subtopic, const String& payload, b
 
 // ── Private ───────────────────────────────────────────────────────────────────
 
-void MqttManager::configureTransport() {
-    const auto& cfg = ConfigManager::instance().config().mqtt;
+// `cfg` is the caller's loop-task snapshot of the MQTT section (never a live
+// reference into ConfigManager — the web task can reassign those Strings).
+void MqttManager::configureTransport(const MqttConfig& cfg) {
     _tlsActive = cfg.tls;
 
 #if !OF_ENABLE_TLS
@@ -179,7 +254,6 @@ void MqttManager::configureTransport() {
 }
 
 void MqttManager::connect() {
-    const auto& cfg = ConfigManager::instance().config().mqtt;
     _lastAttempt = millis();
 
     // Use the stable device id for the client id so two devices that share the
@@ -189,24 +263,27 @@ void MqttManager::connect() {
 
     // Last-Will: if this node drops off the broker ungracefully, the broker
     // publishes a retained "offline" to its presence topic, giving the CMS
-    // instant presence detection without polling. QoS 1, retained.
-    const String willTopic = deviceTopic("online");
+    // instant presence detection without polling. QoS 1, retained. The topic is
+    // cached for the session: the farewell in applyConfig() must clear the exact
+    // retained "online" this connect registered, not one rebuilt from a config
+    // the web task may already have changed.
+    _willTopic = deviceTopic("online");
 
     bool ok;
-    if (cfg.user.isEmpty()) {
-        ok = _client.connect(clientId.c_str(), willTopic.c_str(), 1, true, "offline");
+    if (_user.isEmpty()) {
+        ok = _client.connect(clientId.c_str(), _willTopic.c_str(), 1, true, "offline");
     } else {
-        ok = _client.connect(clientId.c_str(), cfg.user.c_str(), cfg.password.c_str(),
-                             willTopic.c_str(), 1, true, "offline");
+        ok = _client.connect(clientId.c_str(), _user.c_str(), _password.c_str(),
+                             _willTopic.c_str(), 1, true, "offline");
     }
 
     if (ok) {
         _backoffMs = 2000;
         _lastError = "";
-        LOG_I(TAG, "MQTT connected to " + cfg.host);
+        LOG_I(TAG, "MQTT connected to " + _host);
         // Retained birth message — clears the will and marks the node present for
         // anyone (CMS, HA) subscribing after we connected.
-        publishRaw(willTopic, "online", true);
+        publishRaw(_willTopic, "online", true);
         resubscribeAll();
         EventBus::instance().publish(EventType::MqttConnected, "mqtt", "");
     } else {

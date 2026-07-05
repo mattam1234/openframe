@@ -117,6 +117,7 @@ void ConfigManager::migrate(int fromVersion) {
 }
 
 bool ConfigManager::save() {
+    of_lock_guard<of_recursive_mutex> lock(_mtx);
     JsonDocument doc;
     toJson(doc);
     const bool ok = StorageManager::instance().writeJson(OF_CONFIG_PATH, doc);
@@ -173,6 +174,7 @@ void ConfigManager::applyDefaults() {
 }
 
 void ConfigManager::toJson(JsonDocument& doc) const {
+    of_lock_guard<of_recursive_mutex> lock(_mtx);
     doc["schema_version"] = OF_CONFIG_SCHEMA_VERSION;
 
     auto device      = doc["device"].to<JsonObject>();
@@ -237,6 +239,8 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     timeObj["tz"]              = _config.time.tz;
     timeObj["rtc_enabled"]     = _config.time.rtcEnabled;
     timeObj["rtc_address"]     = _config.time.rtcAddress;
+    timeObj["latitude"]        = _config.time.latitude;
+    timeObj["longitude"]       = _config.time.longitude;
 
     auto power                 = doc["power"].to<JsonObject>();
     power["mode"]              = _config.power.mode;
@@ -244,9 +248,24 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     power["sleep_seconds"]     = _config.power.sleepSeconds;
     power["wake_pin"]          = _config.power.wakePin;
     power["wake_level"]        = _config.power.wakeLevel;
+
+    auto notify                = doc["notify"].to<JsonObject>();
+    notify["enabled"]          = _config.notify.enabled;
+    notify["service"]          = _config.notify.service;
+    notify["url"]              = _config.notify.url;
+    notify["topic"]            = _config.notify.topic;
+    notify["token"]            = _config.notify.token;
+    notify["chat_id"]          = _config.notify.chatId;
+    notify["min_level"]        = _config.notify.minLevel;
+
+    auto weather               = doc["weather"].to<JsonObject>();
+    weather["enabled"]         = _config.weather.enabled;
+    weather["update_minutes"]  = _config.weather.updateMinutes;
+    weather["units"]           = _config.weather.units;
 }
 
 bool ConfigManager::fromJson(const JsonDocument& doc) {
+    of_lock_guard<of_recursive_mutex> lock(_mtx);
     if (doc["device"].is<JsonObjectConst>()) {
         _config.device.name      = doc["device"]["name"]  | _config.device.name;
         _config.device.boardType = doc["device"]["board"] | _config.device.boardType;
@@ -347,6 +366,8 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.time.tz         = doc["time"]["tz"]          | String("");
         _config.time.rtcEnabled = doc["time"]["rtc_enabled"] | false;
         _config.time.rtcAddress = doc["time"]["rtc_address"] | 0x68;
+        _config.time.latitude   = doc["time"]["latitude"]    | 0.0f;
+        _config.time.longitude  = doc["time"]["longitude"]   | 0.0f;
     }
     if (doc["power"].is<JsonObjectConst>()) {
         _config.power.mode         = doc["power"]["mode"]          | String("off");
@@ -354,6 +375,22 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.power.sleepSeconds = doc["power"]["sleep_seconds"] | 300u;
         _config.power.wakePin      = static_cast<int8_t>(doc["power"]["wake_pin"] | -1);
         _config.power.wakeLevel    = static_cast<uint8_t>(doc["power"]["wake_level"] | 1);
+    }
+    if (doc["notify"].is<JsonObjectConst>()) {
+        _config.notify.enabled  = doc["notify"]["enabled"]   | false;
+        _config.notify.service  = doc["notify"]["service"]   | String("ntfy");
+        _config.notify.url      = doc["notify"]["url"]       | String("");
+        _config.notify.topic    = doc["notify"]["topic"]     | String("");
+        _config.notify.token    = doc["notify"]["token"]     | String("");
+        _config.notify.chatId   = doc["notify"]["chat_id"]   | String("");
+        _config.notify.minLevel = static_cast<uint8_t>(doc["notify"]["min_level"] | 2);
+        if (_config.notify.minLevel > 3) _config.notify.minLevel = 3;
+    }
+    if (doc["weather"].is<JsonObjectConst>()) {
+        _config.weather.enabled       = doc["weather"]["enabled"]        | false;
+        _config.weather.updateMinutes = doc["weather"]["update_minutes"] | 30;
+        if (_config.weather.updateMinutes < 10) _config.weather.updateMinutes = 10;
+        _config.weather.units         = doc["weather"]["units"]          | String("metric");
     }
     return true;
 }

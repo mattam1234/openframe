@@ -5,9 +5,11 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include <ArduinoJson.h>
 #include "../core/StorageManager.h"
 #include "../core/EventBus.h"
 #include "../core/Logger.h"
+#include "../core/Lock.h"
 #include "../managers/VariableManager.h"
 #include "../OpenFrameConfig.h"
 
@@ -88,12 +90,23 @@ public:
 
     const std::vector<SensorInstance>& sensors() const { return _sensors; }
 
+    // Apply sensors.json changes live, without a reboot. The HTTP handler calls this
+    // after writing the file; the rebuild happens on the loop task. Safe from any task.
+    void requestReload();
+
+    // Thread-safe JSON snapshots for web-task readers (the sensor vector is rebuilt by
+    // the loop-task reload and holds non-copyable drivers, so callers can't iterate it
+    // directly without racing).
+    void fillConfigJson(JsonArray arr) const;                       // id/type/enabled/…
+    void fillHealthJson(JsonArray arr, uint32_t& errorTotal) const; // unhealthy sensors
+
 private:
     SensorManager() = default;
 
     void registerBuiltInSensors();
     bool loadConfig();
     void startConfiguredSensors();
+    void reload();   // re-read config + restart sensors (loop task only)
     String variablePrefixFor(const SensorConfig& config) const;
     void defineVariables(const SensorInstance& sensor);
     void pollSensor(SensorInstance& sensor, uint32_t nowMs);
@@ -103,6 +116,10 @@ private:
     std::map<String, SensorFactory> _registry;
     std::vector<SensorConfig>       _configs;
     std::vector<SensorInstance>     _sensors;
+
+    // Guards _configs/_sensors against the loop-task reload racing web-task readers.
+    mutable of_recursive_mutex      _mtx;
+    volatile bool                   _reloadPending = false;
 
     static constexpr const char* TAG = "SensorMgr";
 };

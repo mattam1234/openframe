@@ -35,6 +35,10 @@ public:
     // Call every loop()
     void loop();
 
+    // Re-apply the MQTT config (broker host/port/creds/enabled) live, without a
+    // reboot. Safe from any task — the reconnect happens on the loop task.
+    void requestReconfigure();
+
     // Publish payload to <baseTopic>/<subtopic>
     bool publish(const String& subtopic, const String& payload, bool retained = false);
 
@@ -67,9 +71,10 @@ private:
     MqttManager() = default;
 
     void connect();
-    void configureTransport();   // pick plain vs TLS client + load CA / insecure
+    void configureTransport(const MqttConfig& cfg);   // pick plain vs TLS client + load CA / insecure
     void onMessage(const char* topic, const uint8_t* payload, unsigned int length);
     void resubscribeAll();
+    void applyConfig();          // (re)read config, set server, drop stale connection
 
     WiFiClient        _wifiClient;
 #if OF_ENABLE_TLS
@@ -84,6 +89,20 @@ private:
     bool             _tlsActive = false;
     PubSubClient     _client;
 
+    // MqttManager-owned copies of the broker settings. PubSubClient::setServer
+    // stores the raw host pointer WITHOUT copying, and ConfigManager's Strings
+    // can be reallocated by a config push on the async web task — so setServer
+    // and connect() must only ever see storage we own. Reassigned exclusively on
+    // the loop task (begin()/applyConfig via the _reconfigurePending flag).
+    String           _host;
+    String           _user;
+    String           _password;
+    // Presence topic of the CURRENT session, cached at connect(): the farewell
+    // publish in applyConfig() must clear the retained "online" where this
+    // connect's LWT/birth actually live, not a topic rebuilt from a config the
+    // web task may have changed since.
+    String           _willTopic;
+
     // Registered subscriptions
     struct Subscription {
         String          topic;   // full absolute topic
@@ -91,9 +110,11 @@ private:
     };
     std::vector<Subscription> _subscriptions;
 
-    bool     _enabled       = false;
-    uint32_t _lastAttempt   = 0;
-    uint32_t _backoffMs     = 2000;
+    bool     _enabled            = false;
+    bool     _listenerAdded      = false;   // Logger listener is one-time (don't dup on reconfigure)
+    volatile bool _reconfigurePending = false;
+    uint32_t _lastAttempt        = 0;
+    uint32_t _backoffMs          = 2000;
     String   _lastError;
 
     static constexpr uint32_t MAX_BACKOFF_MS = 60000;

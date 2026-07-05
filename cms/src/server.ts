@@ -8,6 +8,7 @@ import { DeviceRegistry } from './registry';
 import { MqttBridge } from './mqtt';
 import { TemplateStore } from './templates';
 import { HistoryStore } from './history';
+import { DeviceLogStore } from './logs';
 import { AlertManager } from './alerts';
 import { FirmwareStore } from './firmware-store';
 import { makeAuth, tokenMatches } from './auth';
@@ -71,6 +72,7 @@ export function createServer(
   audit?: AuditLog,
   jobs?: JobStore,
   scheduler?: JobScheduler,
+  logs?: DeviceLogStore,
 ): http.Server {
   const app = express();
   const auth = makeAuth(authToken, viewerToken);
@@ -208,6 +210,12 @@ export function createServer(
 
   app.get('/api/devices/:id/history', (req, res) => {
     res.json({ deviceId: req.params.id, samples: history.get(req.params.id) });
+  });
+
+  // Warning+ log lines the device mirrors to <base>/<id>/log (#83) — a rolling
+  // in-memory window, also streamed live over the WebSocket as `log` frames.
+  app.get('/api/devices/:id/logs', (req, res) => {
+    res.json({ deviceId: req.params.id, entries: logs ? logs.get(req.params.id) : [] });
   });
 
   // Live screen preview (#57): ask the device what its displays are currently
@@ -543,6 +551,7 @@ export function createServer(
 
   registry.on('change', (device) => broadcast({ type: 'device', device }));
   alerts.on('alert', (alert) => broadcast({ type: 'alert', alert }));
+  logs?.on('entry', (deviceId, entry) => broadcast({ type: 'log', deviceId, entry }));
 
   return server;
 }

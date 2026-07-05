@@ -232,6 +232,29 @@ bool OutputManager::loadConfig() {
         cfg.brightness    = item["brightness"] | 255;
 
         cfg.id = ensureUniqueId(item["id"] | String(""), "out", cfg.pin);
+
+#if OF_ENABLE_TFT
+        // LEDC channels 6-7 are reserved for the display backlight (DisplayManager
+        // dims on channel 7; channel 6 shares timer3 with it, so a different PWM
+        // frequency there would retune the backlight too). Warn but still apply —
+        // don't brick configs that already use these channels.
+        auto warnReservedChannel = [&cfg](uint8_t ch, const char* field) {
+            if (ch >= 6) {
+                LOG_W(TAG, "Output '" + cfg.id + "': " + field + " " + String(ch) +
+                               " — channels 6-7 are reserved for the display backlight"
+                               " (6 shares its timer); expect PWM conflicts");
+            }
+        };
+        if (cfg.pwm || cfg.type == OutputType::Buzzer || cfg.type == OutputType::Servo) {
+            warnReservedChannel(cfg.pwmChannel, "pwm_channel");
+        }
+        if (cfg.type == OutputType::Rgb) {
+            warnReservedChannel(cfg.channelR, "channel_r");
+            warnReservedChannel(cfg.channelG, "channel_g");
+            warnReservedChannel(cfg.channelB, "channel_b");
+        }
+#endif
+
         _configs.push_back(cfg);
     }
     return true;

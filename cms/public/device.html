@@ -78,12 +78,13 @@
         </div>
 
         <h3>Push config</h3>
-        <p class="hint">Partial config JSON (same shape as <code>POST /api/config</code>). The device merges, saves, and reboots.</p>
+        <p class="hint">Partial config JSON (same shape as <code>POST /api/config</code>). The device merges and saves;
+        MQTT/time/notify/weather changes apply live, anything else reboots it.</p>
         <textarea id="config-json" rows="8" placeholder='{ "device": { "name": "Lobby Frame" } }'></textarea>
         <div class="row"><button id="preview-config">Preview changes</button></div>
         <div id="config-diff" class="config-diff hidden"></div>
         <div id="config-confirm" class="row hidden">
-          <button id="push-config" class="danger">Confirm push &amp; reboot</button>
+          <button id="push-config" class="danger">Confirm push</button>
           <button id="cancel-config">Cancel</button>
         </div>
 

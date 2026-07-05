@@ -192,6 +192,19 @@ void enableBacklight(int8_t pin, bool activeLow) {
     digitalWrite(pin, activeLow ? LOW : HIGH);
 }
 
+// LEDC channel for backlight dimming (of_pwm_*). Channel 7 is reserved for the
+// display: LEDC channels share a timer in pairs (ch6/7 → timer3), so a user
+// output on any lower channel can never retune the backlight's timer —
+// OutputManager warns when a config claims channel ≥ 6 for the same reason.
+// Channel 7 always exists where this code runs: classic ESP32 and S3 both have
+// ≥ 8 channels, and the boards without (ESP32-C3's 6 channels, ESP8266) compile
+// the TFT provider out via OF_ENABLE_TFT. The pin stays a plain full-on GPIO
+// until the first dimmed level arrives (see TftCanvasProvider::setBrightness),
+// so boards that never dim never claim it.
+constexpr uint8_t  TFT_BL_PWM_CHANNEL = 7;
+constexpr uint32_t TFT_BL_PWM_FREQ    = 5000;   // above flicker perception
+constexpr uint8_t  TFT_BL_PWM_RES     = 8;      // duty 0-255, matches the level range
+
 // Bind the shared hardware-SPI bus to a TFT's pins. On the ESP32 family any GPIO
 // can route to the SPI peripheral via the IO-mux/GPIO-matrix, so an integrated
 // panel on non-default pins (e.g. the S3-GEEK's SCK12/MOSI11, the S3-BOX's
@@ -261,6 +274,13 @@ public:
         _display->clearDisplay();
         _display->setTextWrap(false);
         _display->setTextColor(SSD1306_WHITE);
+    }
+
+    // OLED brightness = panel contrast (same command begin() uses for config.contrast).
+    void setBrightness(uint8_t level) override {
+        if (!_display) return;
+        _display->ssd1306_command(SSD1306_SETCONTRAST);
+        _display->ssd1306_command(level);
     }
 
     void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
@@ -444,6 +464,11 @@ public:
         if (_u8g2) _u8g2->clearBuffer();
     }
 
+    // OLED brightness = panel contrast (same call begin() uses for config.contrast).
+    void setBrightness(uint8_t level) override {
+        if (_u8g2) _u8g2->setContrast(level);
+    }
+
     void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
         if (!_u8g2) return;
         // U8g2 can't scale a font like Adafruit's setTextSize; pick a larger glyph
@@ -523,6 +548,9 @@ public:
 
     void clear() override { if (_u8g2) _u8g2->clearBuffer(); }
 
+    // OLED brightness = panel contrast (same call begin() uses for config.contrast).
+    void setBrightness(uint8_t level) override { if (_u8g2) _u8g2->setContrast(level); }
+
     void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
         if (!_u8g2) return;
         _u8g2->setFont(textSize >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
@@ -590,6 +618,9 @@ public:
 
     void clear() override { if (_u8g2) _u8g2->clearBuffer(); }
 
+    // PCD8544 "brightness" = the Vop/contrast register — same call begin() uses.
+    void setBrightness(uint8_t level) override { if (_u8g2) _u8g2->setContrast(level); }
+
     void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
         if (!_u8g2) return;
         _u8g2->setFont(textSize >= 2 ? u8g2_font_10x20_tr : u8g2_font_5x8_tr);
@@ -652,6 +683,11 @@ public:
         _display->clearDisplay();
         _display->setTextWrap(false);
         _display->setTextColor(SH110X_WHITE);
+    }
+
+    // OLED brightness = panel contrast (same call begin() uses for config.contrast).
+    void setBrightness(uint8_t level) override {
+        if (_display) _display->setContrast(level);
     }
 
     void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
@@ -763,6 +799,28 @@ public:
 
     bool isColor() const override { return true; }
 
+    // TFT brightness = backlight PWM. No backlight pin wired → no controllable
+    // brightness (no-op). The pin is left as the full-on GPIO enableBacklight()
+    // set until the first level below 255 arrives, so the default behaviour
+    // (and boards that never dim) keep the plain digitalWrite drive; after that
+    // the pin belongs to the LEDC channel and every level goes through PWM.
+    void setBrightness(uint8_t level) override {
+        const int8_t pin = _config.backlightPin;
+        if (pin < 0) return;
+        if (!_blPwm) {
+            if (level == 255) {
+                enableBacklight(pin, _config.backlightActiveLow);   // already full-on
+                return;
+            }
+            of_pwm_setup(static_cast<uint8_t>(pin), TFT_BL_PWM_CHANNEL,
+                         TFT_BL_PWM_FREQ, TFT_BL_PWM_RES);
+            _blPwm = true;
+        }
+        of_pwm_write(static_cast<uint8_t>(pin), TFT_BL_PWM_CHANNEL,
+                     _config.backlightActiveLow ? static_cast<uint32_t>(255 - level)
+                                                : static_cast<uint32_t>(level));
+    }
+
     void drawText(int16_t x, int16_t y, const String& text, uint8_t textSize) override {
         Adafruit_GFX* g = target();
         if (!g) return;
@@ -827,6 +885,7 @@ protected:
     std::unique_ptr<PsramCanvas16> _canvas;
     uint16_t                      _w = 0;
     uint16_t                      _h = 0;
+    bool                          _blPwm = false;  // backlight moved from GPIO to LEDC
 };
 
 // ── TFT: ILI9341 ─────────────────────────────────────────────────────────────
@@ -987,6 +1046,12 @@ public:
 
     void clear() override {
         // Nextion manages its own display buffer — no frame buffer to clear.
+    }
+
+    // Nextion backlight: `dim=<0-100>` (runtime-only; `dims=` would persist to the
+    // panel's EEPROM, which we deliberately avoid — the schedule re-applies levels).
+    void setBrightness(uint8_t level) override {
+        sendCommand("dim=" + String((level * 100 + 127) / 255));
     }
 
     void drawWidget(const String& widgetId, int16_t /*x*/, int16_t /*y*/,
@@ -1169,18 +1234,7 @@ DisplayManager& DisplayManager::instance() {
 
 bool DisplayManager::begin() {
     registerBuiltInDisplays();
-
-    if (!loadConfig()) {
-        LOG_W(TAG, "Using empty display configuration");
-    }
-    // Zero persisted displays → fall back to the board's built-in panel wiring so
-    // integrated-screen boards (S3-GEEK/-BOX) come up with a working display out of
-    // the box. Any display saved from the UI replaces this (loadConfig is non-empty).
-    if (_configs.empty() && appendBoardDefaultDisplays(_configs)) {
-        LOG_I(TAG, "Seeded built-in display for " + String(BOARD_NAME));
-    }
-    loadPages();
-    startConfiguredDisplays();
+    reload();   // load config + pages + start displays (under the lock)
 
     if (!_subscribedToVariableEvents) {
         _subscribedToVariableEvents = true;
@@ -1193,8 +1247,44 @@ bool DisplayManager::begin() {
     return true;
 }
 
+// Re-read displays.json + the page files and rebuild every display from scratch.
+// Runs on the loop task (from begin() or loop()'s reload check) and holds the lock,
+// so web-task readers can't observe a half-rebuilt collection.
+void DisplayManager::reload() {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+
+    if (!loadConfig()) {
+        LOG_W(TAG, "Using empty display configuration");
+    }
+    // Zero persisted displays → fall back to the board's built-in panel wiring so
+    // integrated-screen boards (S3-GEEK/-BOX) come up with a working display out of
+    // the box. Any display saved from the UI replaces this (loadConfig is non-empty).
+    if (_configs.empty() && appendBoardDefaultDisplays(_configs)) {
+        LOG_I(TAG, "Seeded built-in display for " + String(BOARD_NAME));
+    }
+    loadPages();
+    startConfiguredDisplays();
+    _nightCheckDue = true;   // re-evaluate the night window against the new configs
+}
+
+void DisplayManager::requestReload() {
+    _reloadPending = true;   // consumed in loop() on the render task — no lock needed
+}
+
+std::vector<DisplayConfig> DisplayManager::displayConfigsCopy() const {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    return _configs;
+}
+
 void DisplayManager::loop() {
+    // Apply a pending hot-reload here (render task) so it never races a render or a
+    // web-task reader holding the lock.
+    if (_reloadPending) {
+        _reloadPending = false;
+        reload();
+    }
     const uint32_t nowMs = millis();
+    updateNightAndBrightness(nowMs);   // no-op between the ~10 s checks
     advanceRotations(nowMs);
     renderDisplays(nowMs);
 }
@@ -1205,6 +1295,7 @@ void DisplayManager::registerDisplay(const String& type, DisplayFactory factory)
 }
 
 bool DisplayManager::setActivePage(const String& displayId, const String& pageId) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     const int index = findDisplayIndexById(displayId);
     if (index < 0) return false;
 
@@ -1225,6 +1316,7 @@ bool DisplayManager::setActivePage(const String& displayId, const String& pageId
 // ── Screen navigation primitive (F4/F5/F6) ──────────────────────────────────────
 
 std::vector<String> DisplayManager::buildPageList(const String& displayId) const {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     std::vector<String> result;
     const int di = findDisplayIndexById(displayId);
     if (di < 0) return result;
@@ -1245,6 +1337,7 @@ std::vector<String> DisplayManager::buildPageList(const String& displayId) const
 }
 
 bool DisplayManager::gotoPageByIndex(const String& displayId, int index) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     const std::vector<String> list = buildPageList(displayId);
     if (list.empty()) return false;
     const int n = static_cast<int>(list.size());
@@ -1253,6 +1346,7 @@ bool DisplayManager::gotoPageByIndex(const String& displayId, int index) {
 }
 
 bool DisplayManager::nextPage(const String& displayId) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     const std::vector<String> list = buildPageList(displayId);
     if (list.empty()) return false;
     const int di = findDisplayIndexById(displayId);
@@ -1264,6 +1358,7 @@ bool DisplayManager::nextPage(const String& displayId) {
 }
 
 bool DisplayManager::previousPage(const String& displayId) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     const std::vector<String> list = buildPageList(displayId);
     if (list.empty()) return false;
     const int di = findDisplayIndexById(displayId);
@@ -1275,7 +1370,9 @@ bool DisplayManager::previousPage(const String& displayId) {
 }
 
 void DisplayManager::advanceRotations(uint32_t nowMs) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     for (auto& display : _displays) {
+        if (display.blanked) continue;   // no point cycling pages nobody can see
         if (!display.config.rotationEnabled || display.config.rotationIntervalMs == 0) continue;
         if (display.lastRotationMs == 0) { display.lastRotationMs = nowMs; continue; }
         if (nowMs - display.lastRotationMs < display.config.rotationIntervalMs) continue;
@@ -1402,6 +1499,20 @@ bool DisplayManager::loadConfig() {
         cfg.pageOffset        = readUint8(item["page_offset"], 0xFF);
         cfg.comPins           = readInt16(item["com_pins"], -1);
 
+        // Brightness + night-mode dimming. `brightness` defaults to the panel's
+        // configured contrast so existing contrast tuning survives day/night
+        // switching (returning to "day" re-applies this value, not a blanket 255).
+        cfg.brightness        = readUint8(item["brightness"], cfg.contrast);
+        cfg.nightEnabled      = item["night_enabled"] | false;
+        int16_t nightStart    = readInt16(item["night_start_min"], 1320);
+        int16_t nightEnd      = readInt16(item["night_end_min"], 420);
+        if (nightStart < 0 || nightStart > 1439) nightStart = 1320;  // 22:00
+        if (nightEnd   < 0 || nightEnd   > 1439) nightEnd   = 420;   // 07:00
+        cfg.nightStartMin     = static_cast<uint16_t>(nightStart);
+        cfg.nightEndMin       = static_cast<uint16_t>(nightEnd);
+        cfg.nightBrightness   = readUint8(item["night_brightness"], 10);
+        cfg.nightBlank        = item["night_blank"] | false;
+
         // SPI TFT fields
         cfg.csPin             = static_cast<int8_t>(readInt16(item["cs_pin"], -1));
         cfg.dcPin             = static_cast<int8_t>(readInt16(item["dc_pin"], -1));
@@ -1499,6 +1610,13 @@ bool DisplayManager::loadPages() {
 }
 
 void DisplayManager::startConfiguredDisplays() {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    // Carry pinned brightness overrides across the rebuild so a config hot-reload
+    // doesn't silently drop an override an action just applied.
+    std::map<String, int16_t> overrides;
+    for (const auto& d : _displays) {
+        if (d.brightnessOverride >= 0) overrides[d.config.id] = d.brightnessOverride;
+    }
     _displays.clear();
     clearImageCache();   // free decoded frames; pages may now reference different images
     _sparkHistory.clear();  // discard rolling history; widgets may have changed
@@ -1533,12 +1651,19 @@ void DisplayManager::startConfiguredDisplays() {
             publishPageChange(display, *initialPage);
         }
 
+        // Day brightness (or a restored override) now; the night window is
+        // re-evaluated on the next loop pass (_nightCheckDue — see reload()).
+        auto ov = overrides.find(cfg.id);
+        if (ov != overrides.end()) display.brightnessOverride = ov->second;
+        applyBrightness(display);
+
         LOG_I(TAG, "Registered display '" + cfg.id + "' (" + display.provider->describe() + ")");
         _displays.push_back(std::move(display));
     }
 }
 
 void DisplayManager::showNotification(const String& message, uint32_t durationMs) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     _notifMessage  = message;
     _notifExpireMs = millis() + durationMs;
     for (auto& display : _displays) {
@@ -1546,8 +1671,103 @@ void DisplayManager::showNotification(const String& message, uint32_t durationMs
     }
 }
 
-void DisplayManager::renderDisplays(uint32_t nowMs) {
+// ── Brightness + night-mode dimming ──────────────────────────────────────────
+
+void DisplayManager::setBrightnessOverride(const String& displayId, int brightness) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    if (brightness > 255) brightness = 255;
     for (auto& display : _displays) {
+        if (displayId.length() && display.config.id != displayId) continue;
+        display.brightnessOverride = brightness < 0 ? -1
+                                                    : static_cast<int16_t>(brightness);
+        applyBrightness(display);
+    }
+}
+
+bool DisplayManager::inNightWindow(uint16_t nowMin, uint16_t startMin, uint16_t endMin) {
+    if (startMin == endMin) return false;                            // zero-length window
+    if (startMin < endMin)  return nowMin >= startMin && nowMin < endMin;   // same-day
+    return nowMin >= startMin || nowMin < endMin;                    // crosses midnight
+}
+
+// Runs on the loop task. Between the ~10 s checks this returns immediately, so the
+// render loop pays one timestamp compare per pass. No String building on the steady
+// path — logs fire only when a display actually flips day↔night.
+void DisplayManager::updateNightAndBrightness(uint32_t nowMs) {
+    if (!_nightCheckDue && (nowMs - _lastNightCheckMs) < NIGHT_CHECK_MS) return;
+    _nightCheckDue    = false;
+    _lastNightCheckMs = nowMs;
+
+    // Pre-NTP/RTC the clock is meaningless — treat as day, so a booting device
+    // never comes up dimmed/blank because epoch 0 happens to land in the window.
+    const bool haveTime = TimeManager::instance().isValid();
+    uint16_t nowMin = 0;
+    if (haveTime) {
+        const time_t now = static_cast<time_t>(TimeManager::instance().epoch());
+        struct tm tmv;
+        localtime_r(&now, &tmv);
+        nowMin = static_cast<uint16_t>(tmv.tm_hour * 60 + tmv.tm_min);
+    }
+
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    for (auto& display : _displays) {
+        const DisplayConfig& cfg = display.config;
+        const bool night = haveTime && cfg.nightEnabled
+                           && inNightWindow(nowMin, cfg.nightStartMin, cfg.nightEndMin);
+        if (night != display.nightActive) {
+            display.nightActive = night;
+            LOG_I(TAG, "Display '" + cfg.id + "' night mode "
+                       + String(night ? (cfg.nightBlank ? "ON (blank)" : "ON (dim)")
+                                      : "OFF"));
+        }
+        applyBrightness(display);
+    }
+}
+
+// Resolve and push a display's effective brightness. Precedence: a pinned override
+// beats the night schedule beats the config day level. Idempotent — the provider is
+// only touched when the level or the blank state actually changes. Caller holds _mtx.
+void DisplayManager::applyBrightness(DisplayInstance& display) {
+    const bool blank = display.brightnessOverride < 0
+                       && display.nightActive && display.config.nightBlank;
+    int16_t level;
+    if (display.brightnessOverride >= 0) {
+        level = display.brightnessOverride;
+    } else if (blank) {
+        level = 0;                                  // darkest while the frame is held black
+    } else if (display.nightActive) {
+        level = display.config.nightBrightness;
+    } else {
+        level = display.config.brightness;
+    }
+
+    if (blank != display.blanked) {
+        display.blanked = blank;
+        if (blank) {
+            // Push one black frame so the panel goes dark immediately — the render
+            // loop skips blanked displays, so this frame holds until morning.
+            if (display.provider) {
+                display.provider->clear();
+                display.provider->present();
+            }
+        } else {
+            display.dirty = true;                   // wake: redraw on the next pass
+        }
+    }
+
+    if (level != display.appliedBrightness) {
+        display.appliedBrightness = level;
+        if (display.provider) display.provider->setBrightness(static_cast<uint8_t>(level));
+    }
+}
+
+void DisplayManager::renderDisplays(uint32_t nowMs) {
+    // Hold the lock for the whole pass: renderDisplay touches _displays, _pages, the
+    // image cache and the sparkline history, all of which a web-task reload/evict can
+    // mutate. Uncontended most frames; a /api/screens poll just waits one render.
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    for (auto& display : _displays) {
+        if (display.blanked) continue;   // night blank: hold the dark frame
         const bool intervalElapsed = display.lastRenderMs == 0
             || (nowMs - display.lastRenderMs) >= display.config.refreshIntervalMs;
         if (display.dirty || intervalElapsed) {
@@ -1617,6 +1837,7 @@ void DisplayManager::renderDisplay(DisplayInstance& display, uint32_t nowMs) {
 
 void DisplayManager::onVariableChanged(const String& variableId) {
     if (!variableId.length()) return;
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
 
     for (auto& display : _displays) {
         const auto* page = findPageForDisplay(display.config, display.currentPageId);
@@ -1900,6 +2121,7 @@ void DisplayManager::clearImageCache() {
 }
 
 void DisplayManager::evictImage(const String& name) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     auto it = _imageCache.find(name);
     if (it == _imageCache.end()) return;
     if (it->second.data) free(it->second.data);
@@ -2004,6 +2226,7 @@ int DisplayManager::findDisplayIndexById(const String& id) const {
 }
 
 void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
     const bool notifActive = _notifMessage.length() && (int32_t)(millis() - _notifExpireMs) < 0;
     size_t widgetBudget = maxWidgets;
 

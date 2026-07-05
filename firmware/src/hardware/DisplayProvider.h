@@ -22,6 +22,20 @@ struct DisplayConfig {
     uint32_t             rotationIntervalMs = 0;
     std::vector<String>  pageOrder;
 
+    // Runtime brightness + night-mode dimming. `brightness` is the normal (day)
+    // level, 0-255 (OLEDs map it to the contrast register, TFTs PWM the backlight,
+    // Nextion sends dim=). With night mode enabled, the window
+    // [nightStartMin, nightEndMin) — minutes past local midnight, may cross it
+    // (22:00→07:00) — drops the panel to nightBrightness, or blanks it entirely
+    // when nightBlank is set. Applied by DisplayManager on begin/reload and
+    // re-evaluated ~every 10 s in loop(); pre-NTP (no valid time) counts as day.
+    uint8_t  brightness        = 255;
+    bool     nightEnabled      = false;
+    uint16_t nightStartMin     = 1320;  // 22:00
+    uint16_t nightEndMin       = 420;   // 07:00
+    uint8_t  nightBrightness   = 10;
+    bool     nightBlank        = false;
+
     // I²C (SSD1306, SH1106)
     uint8_t  address           = 0x3C;
     int8_t   resetPin          = -1;
@@ -108,6 +122,11 @@ public:
 
     // Called when the active page changes (before the first render of that page).
     virtual void setPage(const String& pageId) { (void)pageId; }
+
+    // Panel brightness, 0 (darkest) to 255 (full). OLEDs map this to the contrast
+    // register, TFTs PWM the backlight pin, Nextion sends its dim= command.
+    // Default no-op for surfaces with no controllable brightness.
+    virtual void setBrightness(uint8_t level) { (void)level; }
 
     // Called at the start of each render cycle.
     virtual void clear() = 0;

@@ -67,6 +67,15 @@ String TelemetryManager::buildHeartbeatJson() const {
     doc["cpuLoadPercent"]  = static_cast<int>(HealthMonitor::instance().getCpuLoadPercent());
     doc["activeProfileId"] = ProfileManager::instance().activeId();
 
+    // Build-time feature flags (mirrors /api/features) so the CMS can show what
+    // each node supports without an extra per-device round-trip.
+    JsonObject features = doc["features"].to<JsonObject>();
+    features["weather"] = (OF_ENABLE_WEATHER != 0);
+    features["push"]    = (OF_ENABLE_PUSH != 0);
+    features["ha_ws"]   = (OF_ENABLE_HA_WS != 0);
+    features["tft"]     = (OF_ENABLE_TFT != 0);
+    features["tls"]     = (OF_ENABLE_TLS != 0);
+
     String out;
     serializeJson(doc, out);
     return out;

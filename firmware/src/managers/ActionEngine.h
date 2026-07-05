@@ -36,6 +36,7 @@ enum class ActionType : uint8_t {
     PageChange,          // goto a specific display page (displayId, pageId)
     NavigateScreenNext,  // advance the display to its next page (displayId; wraps)
     NavigateScreenPrev,  // step the display to its previous page (displayId; wraps)
+    DisplayBrightness,   // override a display's brightness (displayId, dispBrightness; -1 clears)
     Notification,
     KeyboardShortcut,
     MediaControl,
@@ -55,14 +56,19 @@ struct ActionStep {
     String      url;
     String      method;
     String      body;
+    String      headers;       // HttpRequest: newline-separated "Name: Value" lines (each templated)
     String      topic;
     String      variableId;
     String      value;
     float       increment     = 1.0f;
     String      haService;
     String      haEntityId;
-    String      displayId;
+    String      displayId;     // display steps (PageChange/Navigate*/DisplayBrightness): target display
     String      pageId;
+
+    // DisplayBrightness: 0–255 overrides the display's configured brightness;
+    // -1 clears the override (back to the configured level).
+    int16_t     dispBrightness = -1;
     String      message;
     String      keysCombo;
     String      mediaCommand;
@@ -98,9 +104,16 @@ struct ActionTrigger {
     // source == "schedule": "interval" runs every intervalSec (millis-based, needs
     // no wall clock); "daily" runs once per day at dailySeconds past local midnight
     // (needs NTP/cluster time + the configured TZ — see TimeManager / TimeConfig).
+    // "sunrise"/"sunset" run once per day at the computed sun event ± offsetMin
+    // (additionally needs a device location — see TimeManager::sunTimes).
     String   scheduleMode;
     uint32_t intervalSec  = 0;
     int32_t  dailySeconds = -1;
+    int32_t  offsetMin    = 0;     // sunrise/sunset: minutes relative to the event (may be negative)
+
+    // Day-of-week filter for daily/sunrise/sunset schedules: bit0=Sunday …
+    // bit6=Saturday. A clear bit skips that day; 0x7F (default) = every day.
+    uint8_t  dowMask      = 0x7F;
 
     // Rate modifiers for input-source triggers (ms; 0 = off). debounce defers the
     // fire until the input has been quiet for `debounceMs`, coalescing a burst of
@@ -193,6 +206,14 @@ public:
     bool saveActions() const;
     bool loadActions();
 
+    // Parse one action object (the shared stored-file / REST shape) into an
+    // ActionConfig. Returns false when the object carries no id. This is the
+    // ONLY action parser — loadActions() and the /api/actions POST handler both
+    // go through it, so a new step/trigger field is added exactly once (and its
+    // inverse in saveActions()'s serializer). Don't mirror it elsewhere: a stale
+    // copy silently collapsed unknown step types to Delay once already.
+    static bool parseActionJson(JsonObjectConst item, ActionConfig& out);
+
 private:
     ActionEngine() = default;
 
@@ -215,6 +236,7 @@ private:
     std::vector<ActionHistoryEntry> _history;
     std::vector<ScheduledTrigger>   _scheduled;
     bool                            _subscribed = false;
+    uint32_t                        _lastScheduleScanMs = 0;  // evaluateSchedules 1 Hz throttle
 
     static constexpr size_t HISTORY_LIMIT = OF_ACTION_HISTORY_SIZE;
     static constexpr const char* TAG = "ActionEngine";

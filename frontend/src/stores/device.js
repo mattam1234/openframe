@@ -15,7 +15,9 @@ export const useDeviceStore = defineStore('device', () => {
   }
 
   async function saveConfig(payload) {
-    config.value = await api.post('/api/config', payload)
+    const res = await api.post('/api/config', payload)
+    config.value = res
+    return res   // includes restartRequired + message
   }
 
   async function scanWifi() {

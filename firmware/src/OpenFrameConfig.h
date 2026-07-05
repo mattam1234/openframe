@@ -258,6 +258,24 @@
     #define OF_IMAGE_MAX_BYTES (200 * 1024)
 #endif
 
+// Push notifications (PushNotifier): forwards NotificationManager posts to an
+// external service (ntfy / Telegram / Pushover / generic webhook). Small code +
+// a 4-entry outbound queue drained one POST per loop pass, so it's affordable on
+// every board. TLS-only services (Telegram, Pushover, https ntfy/webhooks)
+// additionally need OF_ENABLE_TLS — on the ESP8266 (TLS off, see below) only
+// plain-http ntfy/webhook endpoints work.
+#ifndef OF_ENABLE_PUSH
+    #define OF_ENABLE_PUSH 1
+#endif
+
+// Weather integration (WeatherManager): polls Open-Meteo (keyless) and publishes
+// live weather.* variables for the screen designer / actions. One bounded JSON
+// fetch per interval + ~10 extra live variables — compiled out on constrained
+// boards (heap/flash), on everywhere else. Override with -DOF_ENABLE_WEATHER.
+#ifndef OF_ENABLE_WEATHER
+    #define OF_ENABLE_WEATHER (!OF_CONSTRAINED)
+#endif
+
 // TLS / BearSSL. On the ESP8266 a single TLS handshake needs ~16-22 KB of heap —
 // most of the ~25 KB free at boot — so MQTT-over-TLS or an HTTPS update check can
 // OOM-crash the device, and BearSSL adds ~56 KB of flash. Gate it off there: the

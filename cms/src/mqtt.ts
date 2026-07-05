@@ -2,6 +2,7 @@ import mqtt, { MqttClient } from 'mqtt';
 import { randomUUID } from 'crypto';
 import { Config } from './config';
 import { DeviceRegistry } from './registry';
+import { DeviceLogStore } from './logs';
 import { CommandRequest, CommandResult } from './types';
 
 interface Pending {
@@ -17,7 +18,11 @@ export class MqttBridge {
   private readonly pending = new Map<string, Pending>();
   public connected = false;
 
-  constructor(private readonly cfg: Config, private readonly registry: DeviceRegistry) {
+  constructor(
+    private readonly cfg: Config,
+    private readonly registry: DeviceRegistry,
+    private readonly logs?: DeviceLogStore,
+  ) {
     this.client = mqtt.connect(cfg.mqttUrl, {
       username: cfg.mqttUsername,
       password: cfg.mqttPassword,
@@ -28,7 +33,7 @@ export class MqttBridge {
     this.client.on('connect', () => {
       this.connected = true;
       const b = cfg.baseTopic;
-      this.client.subscribe([`${b}/+/online`, `${b}/+/status`, `${b}/+/cmd/result`], { qos: 1 }, (err) => {
+      this.client.subscribe([`${b}/+/online`, `${b}/+/status`, `${b}/+/cmd/result`, `${b}/+/log`], { qos: 1 }, (err) => {
         if (err) console.error('[mqtt] subscribe failed:', err.message);
         else console.log(`[mqtt] connected, subscribed under ${b}/+`);
       });
@@ -60,6 +65,15 @@ export class MqttBridge {
         this.onResult(JSON.parse(text) as CommandResult);
       } catch {
         /* ignore malformed acks */
+      }
+    } else if (kind === 'log') {
+      // Warning+ log lines the firmware mirrors to <base>/<id>/log (#83) —
+      // structured {ts, level, tag, msg} JSON per line.
+      if (!text || !this.logs) return;
+      try {
+        this.logs.append(deviceId, JSON.parse(text));
+      } catch {
+        /* ignore malformed log lines */
       }
     }
   }

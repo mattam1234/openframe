@@ -325,11 +325,21 @@ const entities = ref([])           // [{ entity_id, variable_id, type, writable 
 const savingSettings = ref(false)
 const savingEntities = ref(false)
 
-const transportItems = [
+// The firmware reports board capabilities in GET /api/status `features`; only
+// an explicit ha_ws:false (constrained boards) disables the WebSocket transport
+// — missing features (older firmware) leaves it selectable.
+const wsTransportUnavailable = computed(() => deviceStore.status?.features?.ha_ws === false)
+const transportItems = computed(() => [
   { value: 'mqtt', label: 'MQTT (Statestream)' },
-  { value: 'websocket', label: 'WebSocket (HA API)' },
+  {
+    value: 'websocket',
+    label: wsTransportUnavailable.value
+      ? 'WebSocket (HA API) — not available on this board'
+      : 'WebSocket (HA API)',
+    props: { disabled: wsTransportUnavailable.value },
+  },
   { value: 'auto', label: 'Auto' },
-]
+])
 const typeItems = ['string', 'float', 'integer', 'boolean']
 const transportHint = computed(() => importForm.transport === 'mqtt'
   ? 'Reads HA Statestream over MQTT; control needs an HA automation. Works on all boards.'
@@ -479,5 +489,7 @@ async function refresh() {
 
 onMounted(() => {
   refresh()
+  // Capability flags for the transport picker (non-fatal if it fails).
+  if (!deviceStore.status) deviceStore.fetchStatus().catch(() => {})
 })
 </script>

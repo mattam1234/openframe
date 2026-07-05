@@ -42,8 +42,9 @@ test.describe('Screen Designer', () => {
     await expect(page.locator('.sd-inspector')).not.toContainText('Widget')
     await page.locator('.sd-widget', { hasText: 'temp' }).click()
     await expect(page.locator('.sd-inspector')).toContainText('Widget')
-    // The value widget's variable is bound in the inspector.
-    await expect(page.locator('.sd-inspector input').first()).toHaveValue('temp')
+    // The value widget's variable is bound in the inspector. Target the field by
+    // its label: the Type select sits above it and would win a bare .first().
+    await expect(page.locator('.sd-inspector').getByLabel('Variable', { exact: true })).toHaveValue('temp')
   })
 
   test('shows the empty state when no display exists', async ({ page }) => {

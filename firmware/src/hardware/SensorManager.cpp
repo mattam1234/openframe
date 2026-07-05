@@ -582,20 +582,69 @@ SensorManager& SensorManager::instance() {
 bool SensorManager::begin() {
     registerBuiltInSensors();
     of_i2c_begin();  // start the bus without clobbering pins a display will rebind
-
-    if (!loadConfig()) {
-        LOG_W(TAG, "Using empty sensor configuration");
-    }
-
-    startConfiguredSensors();
+    reload();
     LOG_I(TAG, "Initialised (" + String(_sensors.size()) + " sensors active)");
     return true;
 }
 
+// Re-read sensors.json and rebuild every sensor. Runs on the loop task and holds the
+// lock, so web-task readers never observe a half-rebuilt vector.
+void SensorManager::reload() {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    if (!loadConfig()) {
+        LOG_W(TAG, "Using empty sensor configuration");
+    }
+    startConfiguredSensors();
+}
+
+void SensorManager::requestReload() {
+    _reloadPending = true;   // consumed in loop() on the main task
+}
+
 void SensorManager::loop() {
+    if (_reloadPending) {
+        _reloadPending = false;
+        reload();
+    }
     const uint32_t nowMs = millis();
+    // Per-sensor lock granularity: _sensors is only rebuilt on this (loop) task
+    // — reload() runs just above — so iterating it here needs no lock. Taking
+    // _mtx around each individual poll (instead of the whole pass) lets the
+    // web-task readers (fillConfigJson/fillHealthJson) interleave between
+    // sensors rather than stall behind blocking sensor I/O (a DS18B20 sync
+    // conversion alone holds ~750 ms).
     for (auto& sensor : _sensors) {
+        of_lock_guard<of_recursive_mutex> lk(_mtx);
         pollSensor(sensor, nowMs);
+    }
+}
+
+void SensorManager::fillConfigJson(JsonArray arr) const {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    for (const auto& inst : _sensors) {
+        auto obj = arr.add<JsonObject>();
+        obj["id"]               = inst.config.id;
+        obj["type"]             = inst.config.type;
+        obj["enabled"]          = inst.config.enabled;
+        obj["poll_interval_ms"] = inst.config.pollIntervalMs;
+        obj["variable_prefix"]  = inst.config.variablePrefix;
+        obj["address"]          = inst.config.address;
+        obj["pin"]              = inst.config.pin;
+    }
+}
+
+void SensorManager::fillHealthJson(JsonArray arr, uint32_t& errorTotal) const {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    errorTotal = 0;
+    for (const auto& inst : _sensors) {
+        if (!inst.healthy || inst.errorCount > 0) {
+            auto obj = arr.add<JsonObject>();
+            obj["id"]         = inst.config.id;
+            obj["healthy"]    = inst.healthy;
+            obj["errorCount"] = inst.errorCount;
+            if (inst.lastError.length()) obj["lastError"] = inst.lastError;
+            errorTotal += inst.errorCount;
+        }
     }
 }
 
@@ -991,6 +1040,21 @@ bool SensorManager::loadConfig() {
 }
 
 void SensorManager::startConfiguredSensors() {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+
+    // Purge the previous generation's mirror variables before re-defining, so a
+    // sensor deleted/renamed by the hot reload doesn't leave frozen sensor.*
+    // values behind until reboot. Each old instance is purged via its actual
+    // prefix (covers a custom variable_prefix). Deliberately NO blanket
+    // "sensor." sweep: that namespace isn't exclusively ours (an HA import's
+    // user-chosen variable_id may live there), and non-persistent variables
+    // don't survive a reboot, so the per-instance purge already covers every
+    // variable this manager ever defined.
+    auto& vm = VariableManager::instance();
+    for (const auto& old : _sensors) {
+        vm.removeByPrefix(variablePrefixFor(old.config) + ".");
+    }
+
     _sensors.clear();
 
     for (const auto& cfg : _configs) {

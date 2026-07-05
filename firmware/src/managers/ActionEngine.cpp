@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <time.h>
+#include "../core/HttpTransport.h"
 #include "../core/PlatformCompat.h"
 #include "../hardware/DisplayManager.h"
 #include "../hardware/OutputManager.h"
@@ -38,6 +39,7 @@ ActionType actionTypeFromString(const String& s) {
     if (s == "page_change")        return ActionType::PageChange;
     if (s == "navigate_screen_next") return ActionType::NavigateScreenNext;
     if (s == "navigate_screen_prev") return ActionType::NavigateScreenPrev;
+    if (s == "display_brightness")   return ActionType::DisplayBrightness;
     if (s == "notification")       return ActionType::Notification;
     if (s == "keyboard_shortcut")  return ActionType::KeyboardShortcut;
     if (s == "media_control")      return ActionType::MediaControl;
@@ -66,6 +68,7 @@ const char* actionTypeToString(ActionType t) {
         case ActionType::PageChange:        return "page_change";
         case ActionType::NavigateScreenNext: return "navigate_screen_next";
         case ActionType::NavigateScreenPrev: return "navigate_screen_prev";
+        case ActionType::DisplayBrightness: return "display_brightness";
         case ActionType::Notification:      return "notification";
         case ActionType::KeyboardShortcut:  return "keyboard_shortcut";
         case ActionType::MediaControl:      return "media_control";
@@ -138,6 +141,7 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.url          = item["url"] | String("");
         s.method       = item["method"] | String("GET");
         s.body         = item["body"] | String("");
+        s.headers      = item["headers"] | String("");
         s.topic        = item["topic"] | String("");
         s.variableId   = item["variable_id"] | String("");
         s.value        = item["value"] | String("");
@@ -157,6 +161,7 @@ void deserializeSteps(const JsonArrayConst& arr, std::vector<ActionStep>& out) {
         s.green        = item["g"] | 0;
         s.blue         = item["b"] | 0;
         s.brightnessVal = item["brightness"] | 0;
+        s.dispBrightness = item["brightness"] | -1;  // DisplayBrightness reads the same key, -1 = clear
         s.animation    = item["animation"] | String("");
         s.speed        = item["speed"] | 128;
         s.frequency    = item["frequency"] | 2000;
@@ -191,7 +196,10 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
         obj["type"] = actionTypeToString(s.type);
         switch (s.type) {
             case ActionType::Delay:             obj["delay_ms"] = s.delayMs; break;
-            case ActionType::HttpRequest:       obj["url"] = s.url; obj["method"] = s.method; obj["body"] = s.body; break;
+            case ActionType::HttpRequest:
+                obj["url"] = s.url; obj["method"] = s.method; obj["body"] = s.body;
+                if (s.headers.length()) obj["headers"] = s.headers;
+                break;
             case ActionType::MqttPublish:       obj["topic"] = s.topic; obj["body"] = s.body; break;
             case ActionType::VariableSet:       obj["variable_id"] = s.variableId; obj["value"] = s.value; break;
             case ActionType::VariableIncrement: obj["variable_id"] = s.variableId; obj["increment"] = s.increment; break;
@@ -215,6 +223,7 @@ void serializeSteps(const std::vector<ActionStep>& steps, JsonArray arr) {
             case ActionType::PageChange:        obj["display_id"] = s.displayId; obj["page_id"] = s.pageId; break;
             case ActionType::NavigateScreenNext:
             case ActionType::NavigateScreenPrev: obj["display_id"] = s.displayId; break;
+            case ActionType::DisplayBrightness: obj["display_id"] = s.displayId; obj["brightness"] = s.dispBrightness; break;
             case ActionType::Notification:      obj["message"] = s.message; break;
             case ActionType::KeyboardShortcut:  obj["keys"] = s.keysCombo; break;
             case ActionType::MediaControl:      obj["media_command"] = s.mediaCommand; break;
@@ -265,6 +274,9 @@ static String describeStep(const ActionStep& s) {
         case ActionType::PageChange:   return "display " + s.displayId + " → page " + s.pageId;
         case ActionType::NavigateScreenNext: return "display " + s.displayId + " → next screen";
         case ActionType::NavigateScreenPrev: return "display " + s.displayId + " → previous screen";
+        case ActionType::DisplayBrightness:
+            return "display " + s.displayId + " → brightness " +
+                   (s.dispBrightness < 0 ? String("auto (clear override)") : String(s.dispBrightness));
         case ActionType::Notification: return "notify: " + s.message;
         case ActionType::KeyboardShortcut: return "keyboard " + s.keysCombo;
         case ActionType::MediaControl: return "media " + s.mediaCommand;
@@ -486,7 +498,12 @@ void ActionEngine::loop() {
 }
 
 void ActionEngine::evaluateSchedules() {
+    // Schedule granularity is one second — no need to rescan every loop pass
+    // (~100 Hz of String compares + a localtime_r per scheduled action).
     const uint32_t nowMs = millis();
+    if (nowMs - _lastScheduleScanMs < 1000) return;
+    _lastScheduleScanMs = nowMs;
+
     const uint32_t epoch = TimeManager::instance().epoch();
     const bool haveClock = TimeManager::instance().isValid();
 
@@ -506,8 +523,27 @@ void ActionEngine::evaluateSchedules() {
                 a.lastScheduleMs = nowMs;
                 triggerAction(a.id);
             }
-        } else if (a.trigger.scheduleMode == "daily") {
-            if (a.trigger.dailySeconds < 0 || !haveClock) continue;
+        } else if (a.trigger.scheduleMode == "daily" ||
+                   a.trigger.scheduleMode == "sunrise" ||
+                   a.trigger.scheduleMode == "sunset") {
+            if (!haveClock) continue;
+
+            // Resolve today's fire time (seconds past local midnight) for the mode:
+            // "daily" is fixed; sunrise/sunset are the computed sun event ± offsetMin,
+            // clamped into the day (so a large offset can't slip into tomorrow).
+            int32_t targetSec = -1;
+            if (a.trigger.scheduleMode == "daily") {
+                targetSec = a.trigger.dailySeconds;
+            } else {
+                int sunriseMin = 0, sunsetMin = 0;
+                if (!TimeManager::instance().sunTimes(sunriseMin, sunsetMin)) continue;  // no location / polar day
+                int32_t m = (a.trigger.scheduleMode == "sunrise" ? sunriseMin : sunsetMin) + a.trigger.offsetMin;
+                if (m < 0)    m = 0;
+                if (m > 1439) m = 1439;
+                targetSec = m * 60;
+            }
+            if (targetSec < 0) continue;
+
             // Convert the UTC epoch to local time (honours the configured TZ + DST)
             // so "daily at 08:00" means 08:00 wall-clock, not 08:00 UTC.
             time_t t = static_cast<time_t>(epoch);
@@ -521,11 +557,15 @@ void ActionEngine::evaluateSchedules() {
             // Arm so a time that already passed today isn't "caught up" on boot.
             if (!a.scheduleArmed) {
                 a.scheduleArmed = true;
-                a.lastDailyDay  = (secOfDay >= static_cast<uint32_t>(a.trigger.dailySeconds)) ? day : day - 1;
+                a.lastDailyDay  = (secOfDay >= static_cast<uint32_t>(targetSec)) ? day : day - 1;
             }
-            if (day != a.lastDailyDay && secOfDay >= static_cast<uint32_t>(a.trigger.dailySeconds)) {
+            if (day != a.lastDailyDay && secOfDay >= static_cast<uint32_t>(targetSec)) {
+                // Consume the day even when the dow filter skips it, so a cleared
+                // bit means "skip today" rather than "fire late on the next match".
                 a.lastDailyDay = day;
-                triggerAction(a.id);
+                if (a.trigger.dowMask & (1u << lt.tm_wday)) {
+                    triggerAction(a.id);
+                }
             }
         }
     }
@@ -608,12 +648,44 @@ bool ActionEngine::saveActions() const {
         trig["schedule_mode"] = action.trigger.scheduleMode;
         trig["interval_sec"]  = action.trigger.intervalSec;
         trig["daily_seconds"] = action.trigger.dailySeconds;
+        trig["offset_min"]    = action.trigger.offsetMin;
+        trig["dow_mask"]      = action.trigger.dowMask;
         trig["debounce_ms"]   = action.trigger.debounceMs;
         trig["cooldown_ms"]   = action.trigger.cooldownMs;
         serializeConditions(action.conditions, obj["conditions"].to<JsonArray>());
         serializeSteps(action.steps, obj["steps"].to<JsonArray>());
     }
     return StorageManager::instance().writeJson(OF_ACTIONS_PATH, doc);
+}
+
+// The single shared parser for the stored-file / REST action shape (see .h).
+bool ActionEngine::parseActionJson(JsonObjectConst item, ActionConfig& out) {
+    out.id      = item["id"] | String("");
+    out.name    = item["name"] | String("");
+    out.enabled = item["enabled"] | true;
+    if (!out.id.length()) return false;
+
+    if (item["trigger"].is<JsonObjectConst>()) {
+        JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
+        out.trigger.source       = t["source"]        | String("");
+        out.trigger.inputId      = t["input_id"]      | String("");
+        out.trigger.event        = t["event"]         | String("");
+        out.trigger.scheduleMode = t["schedule_mode"] | String("");
+        out.trigger.intervalSec  = t["interval_sec"]  | 0;
+        out.trigger.dailySeconds = t["daily_seconds"] | -1;
+        out.trigger.offsetMin    = t["offset_min"]    | 0;
+        out.trigger.dowMask      = t["dow_mask"]      | 0x7F;  // missing → every day
+        out.trigger.debounceMs   = t["debounce_ms"]   | 0;
+        out.trigger.cooldownMs   = t["cooldown_ms"]   | 0;
+    }
+
+    if (item["conditions"].is<JsonArrayConst>()) {
+        deserializeConditions(item["conditions"].as<JsonArrayConst>(), out.conditions);
+    }
+    if (item["steps"].is<JsonArrayConst>()) {
+        deserializeSteps(item["steps"].as<JsonArrayConst>(), out.steps);
+    }
+    return true;
 }
 
 bool ActionEngine::loadActions() {
@@ -624,30 +696,7 @@ bool ActionEngine::loadActions() {
 
     for (JsonObjectConst item : doc["actions"].as<JsonArrayConst>()) {
         ActionConfig action;
-        action.id      = item["id"] | String("");
-        action.name    = item["name"] | String("");
-        action.enabled = item["enabled"] | true;
-        if (!action.id.length()) continue;
-
-        if (item["trigger"].is<JsonObjectConst>()) {
-            JsonObjectConst t = item["trigger"].as<JsonObjectConst>();
-            action.trigger.source       = t["source"]        | String("");
-            action.trigger.inputId      = t["input_id"]      | String("");
-            action.trigger.event        = t["event"]         | String("");
-            action.trigger.scheduleMode = t["schedule_mode"] | String("");
-            action.trigger.intervalSec  = t["interval_sec"]  | 0;
-            action.trigger.dailySeconds = t["daily_seconds"] | -1;
-            action.trigger.debounceMs   = t["debounce_ms"]   | 0;
-            action.trigger.cooldownMs   = t["cooldown_ms"]   | 0;
-        }
-
-        if (item["conditions"].is<JsonArrayConst>()) {
-            deserializeConditions(item["conditions"].as<JsonArrayConst>(), action.conditions);
-        }
-        if (item["steps"].is<JsonArrayConst>()) {
-            deserializeSteps(item["steps"].as<JsonArrayConst>(), action.steps);
-        }
-
+        if (!parseActionJson(item, action)) continue;
         _actions.push_back(action);
     }
     return true;
@@ -884,6 +933,20 @@ void ActionEngine::registerBuiltInExecutors() {
         return true;
     });
 
+    // Override a display's brightness (0–255); dispBrightness -1 clears the
+    // override, returning the display to its configured level.
+    runner.registerExecutor(ActionType::DisplayBrightness, [](const ActionStep& step, String& error) -> bool {
+        if (!step.displayId.length()) {
+            error = "display_brightness needs a display_id";
+            return false;
+        }
+        int b = step.dispBrightness;
+        if (b < -1)  b = -1;
+        if (b > 255) b = 255;
+        DisplayManager::instance().setBrightnessOverride(step.displayId, b);
+        return true;
+    });
+
     runner.registerExecutor(ActionType::Notification, [](const ActionStep& step, String&) -> bool {
         JsonDocument doc;
         doc["message"] = expandTemplate(step.message);
@@ -913,11 +976,39 @@ void ActionEngine::registerBuiltInExecutors() {
         const String url  = expandTemplate(step.url);
         const String body = expandTemplate(step.body);
         HTTPClient http;
-        // Portable form: the URL-only begin() overload is an obsolete hard error
-        // on the ESP8266 core. begin(WiFiClient, url) works on both platforms.
-        WiFiClient netClient;
-        http.begin(netClient, url);
-        http.addHeader("Content-Type", "application/json");
+        // Client selection (platform × TLS) lives in HttpTransport — shared with
+        // PushNotifier, WeatherManager and OtaManager. A plain WiFiClient would
+        // make every https:// action URL fail. Must outlive the request.
+        HttpTransport transport;
+        if (!transport.begin(http, url)) {
+            error = "HTTP begin failed (bad URL, or https without TLS support)";
+            return false;
+        }
+        // Custom headers: newline-separated "Name: Value" lines, each templated.
+        // A user-supplied Content-Type replaces the JSON default below.
+        bool haveContentType = false;
+        if (step.headers.length()) {
+            const String hdrs = expandTemplate(step.headers);
+            int start = 0;
+            const int len = static_cast<int>(hdrs.length());
+            while (start < len) {
+                int nl = hdrs.indexOf('\n', start);
+                if (nl < 0) nl = len;
+                String line = hdrs.substring(start, nl);
+                start = nl + 1;
+                line.trim();
+                const int colon = line.indexOf(':');
+                if (colon <= 0) continue;  // blank / malformed line — skip
+                String name  = line.substring(0, colon);
+                String value = line.substring(colon + 1);
+                name.trim();
+                value.trim();
+                if (!name.length()) continue;
+                if (name.equalsIgnoreCase("Content-Type")) haveContentType = true;
+                http.addHeader(name, value);
+            }
+        }
+        if (!haveContentType) http.addHeader("Content-Type", "application/json");
         int code = 0;
         if (step.method == "POST") {
             code = http.POST(body);

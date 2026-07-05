@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include "../hardware/DisplayManager.h"
+#include "PushNotifier.h"   // self-gated on OF_ENABLE_PUSH
 
 NotificationManager& NotificationManager::instance() {
     static NotificationManager inst;
@@ -17,6 +18,17 @@ void NotificationManager::begin() {
     });
 
     LOG_I(TAG, "Initialised");
+}
+
+uint8_t NotificationManager::severityFor(const String& type) {
+    if (type == NotificationType::Error) return 3;
+    if (type == NotificationType::Warning ||
+        type == NotificationType::WifiDisconnect ||
+        type == NotificationType::MqttDisconnect ||
+        type == NotificationType::HaDisconnect ||
+        type == NotificationType::SensorDisconnect) return 2;
+    if (type == NotificationType::FirmwareUpdate) return 1;
+    return 0;  // info and anything unrecognised
 }
 
 void NotificationManager::post(const String& type, const String& message) {
@@ -46,6 +58,13 @@ void NotificationManager::post(const String& type, const String& message) {
     EventBus::instance().publish(EventType::NotificationPosted, n.type, payload);
 
     showOnDisplay(n);
+
+#if OF_ENABLE_PUSH
+    // Forward to the configured external push service (ntfy/Telegram/…). Only
+    // queues here — the HTTP send happens on the loop task (see PushNotifier);
+    // the severity filter (notify.min_level) is applied inside notify().
+    PushNotifier::instance().notify(severityFor(n.type), n.message);
+#endif
 }
 
 bool NotificationManager::markRead(const String& id) {

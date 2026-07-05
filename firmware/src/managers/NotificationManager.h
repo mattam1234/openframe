@@ -35,6 +35,11 @@ public:
     // Post a notification with an explicit type and message.
     void post(const String& type, const String& message);
 
+    // Severity of a notification type: 0=info, 1=notice, 2=warning, 3=error.
+    // Lives here — next to the NotificationType definitions — so transports
+    // (PushNotifier) don't have to enumerate this manager's types.
+    static uint8_t severityFor(const String& type);
+
     // Mark a notification as read by id. Returns true if found.
     bool markRead(const String& id);
 
