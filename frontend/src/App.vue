@@ -75,9 +75,10 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useDisplay, useTheme } from 'vuetify'
 import { useWebSocketStore } from './stores/websocket'
+import api from './api/client'
 import CommandPalette from './components/CommandPalette.vue'
 
 // Dark/light theme toggle (#46), persisted to localStorage.
@@ -107,10 +108,24 @@ function handleNavClick() {
 const wsStore = useWebSocketStore()
 wsStore.connect()
 
-const navItems = [
+// Touch calibration is only meaningful on builds that drive a touch controller
+// (the /api/touch endpoint 404s elsewhere), so the nav item appears only after a
+// successful capability probe.
+const touchAvailable = ref(false)
+onMounted(async () => {
+  try {
+    await api.get('/api/touch')
+    touchAvailable.value = true
+  } catch { /* not a touch build — leave the item hidden */ }
+})
+
+const navItems = computed(() => [
   { key: 'nav.dashboard', icon: 'mdi-view-dashboard',         to: '/' },
   { key: 'nav.layout',    icon: 'mdi-developer-board',        to: '/layout' },
   { key: 'nav.screens',   icon: 'mdi-monitor-edit',           to: '/screens' },
+  ...(touchAvailable.value
+    ? [{ key: 'nav.touch', icon: 'mdi-gesture-tap',           to: '/touch' }]
+    : []),
   { key: 'nav.sensors',   icon: 'mdi-thermometer',            to: '/sensors' },
   { key: 'nav.variables', icon: 'mdi-variable',               to: '/variables' },
   { key: 'nav.outputs',   icon: 'mdi-led-strip-variant',      to: '/outputs' },
@@ -123,7 +138,7 @@ const navItems = [
   { key: 'nav.files',     icon: 'mdi-folder-cog-outline',     to: '/files' },
   { key: 'nav.settings',  icon: 'mdi-cog',                    to: '/settings' },
   { key: 'nav.setup',     icon: 'mdi-rocket-launch',          to: '/setup' },
-]
+])
 </script>
 
 <style>

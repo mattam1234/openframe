@@ -31,6 +31,10 @@ private:
     void sendWifiScan(AsyncWebServerRequest* request) const;
     void sendVariables(AsyncWebServerRequest* request) const;
     void sendScreens(AsyncWebServerRequest* request) const;
+#if defined(OF_ENABLE_XPT2046_TOUCH)
+    void sendTouchCalibration(AsyncWebServerRequest* request) const;
+    void handleTouchUpdate(AsyncWebServerRequest* request, const String& body);
+#endif
     void sendLogs(AsyncWebServerRequest* request) const;
     void sendOtaStatus(AsyncWebServerRequest* request) const;
     void sendInputs(AsyncWebServerRequest* request) const;
@@ -132,9 +136,14 @@ private:
     static constexpr uint32_t WS_SEND_HEADROOM   = 4096;   // slack beyond the frame itself
 
     String buildStatusJson() const;
+    // Populate `doc` directly (no intermediate String). Callers that send over
+    // HTTP use this and serialize once; the String wrappers below exist only for
+    // the WebSocket-frame paths that genuinely need a String.
+    void   buildVariablesDoc(JsonDocument& doc) const;
     String buildVariablesJson() const;
     // maxCount > 0 limits the result to the most recent maxCount entries
     // (used for the bounded WebSocket connect snapshot); 0 returns the full ring.
+    void   buildLogsDoc(JsonDocument& doc, size_t maxCount = 0) const;
     String buildLogsJson(size_t maxCount = 0) const;
     bool applyVariableUpdate(const JsonVariantConst& item, String& error) const;
 

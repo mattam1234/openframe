@@ -451,6 +451,23 @@ bool ActionEngine::begin() {
             ActionEngine::instance().onInputEvent(event.sourceId, event.payload);
         });
 
+        // Touch-button widgets: a tap on a display Button zone publishes a
+        // DisplayTouchEvent whose payload carries the button's `action` id. Fire
+        // it. Gesture events and Nextion touches carry no `action`, so they're
+        // ignored here (payload has "gesture"/"component" instead).
+        EventBus::instance().subscribe(EventType::DisplayTouchEvent, [](const Event& event) {
+            JsonDocument doc;
+            if (deserializeJson(doc, event.payload)) return;   // not our JSON shape
+            const String actionId = doc["action"] | String("");
+            if (!actionId.length()) return;
+            String error;
+            if (ActionEngine::instance().triggerAction(actionId, error)) {
+                LOG_I(TAG, "Touch button fired action '" + actionId + "'");
+            } else {
+                LOG_W(TAG, "Touch button action '" + actionId + "' failed: " + error);
+            }
+        });
+
         // Actions requested by another node over NodeLink:
         //   "trigger=<id>"          → run now
         //   "trigger@<epoch>=<id>"  → run at a shared cluster-clock epoch (sync effect)

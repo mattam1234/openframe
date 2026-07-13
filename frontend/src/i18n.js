@@ -13,6 +13,7 @@ const en = {
     dashboard: 'Dashboard',
     layout: 'Layout Designer',
     screens: 'Screen Designer',
+    touch: 'Touch Calibration',
     sensors: 'Sensors',
     variables: 'Variables',
     outputs: 'Outputs',

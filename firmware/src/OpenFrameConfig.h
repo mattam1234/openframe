@@ -41,6 +41,7 @@
 #define OF_OUTPUTS_PATH "/outputs.json"
 #define OF_SENSORS_PATH "/sensors.json"
 #define OF_DISPLAYS_PATH "/displays.json"
+#define OF_TOUCH_PATH "/touch.json"
 #define OF_PROFILES_PATH "/profiles"
 #define OF_TEMPLATES_PATH "/templates"
 #define OF_DISPLAY_PAGES_PATH "/pages"

@@ -27,6 +27,18 @@ enum class DisplayWidgetType : uint8_t {
     Image,     // pre-converted image from /images (text = file name)
     Gauge,     // filled-arc gauge bound to a variable (min..max), value in centre
     Sparkline, // mini line chart of a variable's recent history
+    Button,    // tappable label (touch panels): registers a touch zone that fires
+               // `action` when pressed. Renders as a filled, bordered label.
+    // ── Interactive widgets (touch panels) — driven directly by DisplayManager's
+    //    touch handler, manipulating the Variable bus / screen nav rather than the
+    //    ActionEngine. See handleTouchInteraction().
+    Toggle,    // flip a bound variable between off (min) and on (max)
+    Slider,    // drag along the width to set a numeric variable across [min,max]
+    Stepper,   // tap the − / + halves to adjust a numeric variable by `step`
+    Nav,       // navigate the display: `target` = "next" | "prev" | a page id
+    Momentary, // hold → set max, release → set min (jog / push-to-talk)
+    Cycle,     // tap cycles the variable through `target` (comma list) or 0..max
+    SetValue,  // tap sets the variable to a fixed preset value (max)
 };
 
 struct DisplayWidget {
@@ -40,6 +52,9 @@ struct DisplayWidget {
     TextAlign         align     = TextAlign::Left;
     String            text;            // label / strftime format / icon name
     String            variableId;
+    String            action;          // Button widget: action id fired on tap
+    String            target;          // Nav: "next"/"prev"/pageId · Cycle: value list
+    float             step      = 1.0f;// Stepper increment (also Cycle numeric step)
     String            prefix;
     String            suffix;
     uint8_t           decimals  = 1;
@@ -102,6 +117,14 @@ public:
     // loop task (in loop()) so it never races a render. Safe to call from any task.
     void requestReload();
 
+    // Lighter cousin of requestReload() for when only page *content* changed (the
+    // common case while live-editing in the designer). Reloads the page files and
+    // re-renders WITHOUT tearing down and recreating the display providers — so no
+    // canvas/SPI reallocation, which on a fragmented classic-ESP32 heap is the
+    // churn that was starving the async web stack (empty API responses). A full
+    // requestReload() supersedes a pending page reload.
+    void requestPagesReload();
+
     // Drop a cached image so a freshly uploaded/deleted file is picked up on the
     // next render without a reboot (called by the image upload/delete endpoints).
     void evictImage(const String& name);
@@ -136,6 +159,27 @@ private:
     bool loadPages();
     void startConfiguredDisplays();
     void reload();   // re-read config + pages and rebuild displays (loop task only)
+    void reloadPages();  // re-read pages + re-render, keeping providers (loop task only)
+    // Publish the button widgets of every display's currently-visible page as touch
+    // zones (via TouchManager). Called whenever the active page or page set changes.
+    void refreshTouchZones();
+
+    // Raw touch handler for the interactive widgets (toggle/slider/stepper/nav/
+    // momentary/cycle/setvalue). Registered with TouchManager in begin(); receives
+    // every press/move/release with panel-pixel coordinates and drives the Variable
+    // bus / screen nav directly. Button widgets go through the zone→action path
+    // instead (refreshTouchZones), so they're skipped here.
+    void handleTouchInteraction(int16_t x, int16_t y, bool pressed);
+    static bool isInteractiveType(DisplayWidgetType t);
+    // Pixel bounds of an interactive widget (applies the per-type render defaults so
+    // the tappable area equals the drawn box).
+    static void interactiveBounds(const DisplayWidget& w,
+                                  int16_t& x, int16_t& y, int16_t& bw, int16_t& bh);
+    // Variable read/write helpers that respect the target variable's type.
+    float readVarNumber(const String& id) const;
+    void  writeVarNumber(const DisplayWidget& w, float value);
+    void  applyTouchPress(const DisplayWidget& w, const String& displayId, int16_t x, int16_t y);
+    void  cycleVariable(const DisplayWidget& w);
     void advanceRotations(uint32_t nowMs);   // F4: auto-advance rotating displays
     // Cheap ~10 s check on the loop task: derive the local minute-of-day via
     // localtime_r and flip each display between day/night brightness (or blank).
@@ -198,6 +242,15 @@ private:
     // Recursive so the nextPage→setActivePage call chain can re-lock on one thread.
     mutable of_recursive_mutex       _mtx;
     volatile bool                    _reloadPending = false;
+    volatile bool                    _pagesReloadPending = false;
+
+    // Interactive-touch capture state (loop task). A press latches the widget it
+    // landed on so drags (slider) and the release (momentary) target that widget
+    // even if the finger later leaves its box.
+    bool          _touchDown     = false;
+    bool          _touchCaptured = false;
+    DisplayWidget _touchWidget;              // copy of the captured widget
+    String        _touchDisplayId;           // display that owns it (for nav)
 
     // Night-mode scheduler state (loop task only, like _reloadPending consumption).
     uint32_t _lastNightCheckMs = 0;

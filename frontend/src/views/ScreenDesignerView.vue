@@ -158,6 +158,11 @@
               <svg v-else-if="widget.type === 'sparkline'" class="sd-svg" :viewBox="`0 0 ${widget.w || 60} ${widget.h || 20}`" preserveAspectRatio="none">
                 <polyline :points="sparkSample(widget)" :stroke="previewColor(widget.color)" fill="none" stroke-width="1" vector-effect="non-scaling-stroke" />
               </svg>
+              <template v-else-if="['button','toggle','momentary','setvalue','cycle','nav'].includes(widget.type)">{{ previewLabel(widget) }}</template>
+              <template v-else-if="widget.type === 'stepper'">−&nbsp;{{ widget.variableId || 'val' }}&nbsp;+</template>
+              <div v-else-if="widget.type === 'slider'" class="sd-slider-track">
+                <span class="sd-slider-knob" :style="{ left: `${(liveFracOf(widget) ?? 0.5) * 100}%`, background: previewColor(widget.color) }" />
+              </div>
               <!-- Corner resize handle for widgets with an on-panel box (drag = resize). -->
               <span
                 v-if="selectedWidgetIdx === idx && isResizable(widget)"
@@ -300,6 +305,87 @@
             </p>
           </template>
 
+          <!-- Button: label + the action fired on tap (touch panels only). -->
+          <template v-else-if="selectedWidget.type === 'button'">
+            <v-text-field
+              v-model="selectedWidget.text"
+              label="Label" density="compact" variant="outlined" hide-details class="mb-3"
+            />
+            <v-combobox
+              v-model="selectedWidget.action"
+              :items="actionItems"
+              label="Action on tap"
+              :menu-props="{ maxHeight: 320 }"
+              density="compact" variant="outlined" hide-details class="mb-1"
+            />
+            <p class="text-caption text-medium-emphasis mb-3">
+              Fires this action when tapped. Needs a display with a touch panel
+              (calibrate under <router-link to="/touch" class="text-decoration-none">Touch Calibration</router-link>).
+            </p>
+          </template>
+
+          <!-- Nav button: label + destination page -->
+          <template v-else-if="selectedWidget.type === 'nav'">
+            <v-text-field v-model="selectedWidget.text" label="Label (blank = arrow)"
+              density="compact" variant="outlined" hide-details class="mb-3" />
+            <v-combobox v-model="selectedWidget.target" :items="navTargetItems" label="Go to"
+              density="compact" variant="outlined" hide-details class="mb-1" />
+            <p class="text-caption text-medium-emphasis mb-3">
+              <code>next</code>/<code>prev</code> cycle this display's pages, or pick a page id.
+            </p>
+          </template>
+
+          <!-- Interactive variable widgets: toggle / slider / stepper / momentary /
+               cycle / set value — all bind a variable, then type-specific fields. -->
+          <template v-else-if="['toggle','slider','stepper','momentary','cycle','setvalue'].includes(selectedWidget.type)">
+            <v-combobox
+              v-model="selectedWidget.variableId"
+              v-model:search="variableSearch"
+              :items="groupedVariableItems"
+              no-filter
+              label="Variable"
+              :menu-props="{ maxHeight: 320 }"
+              density="compact" variant="outlined" hide-details class="mb-3"
+            >
+              <template #item="{ item, props: itemProps }">
+                <v-list-subheader v-if="item.raw.type === 'subheader'">{{ item.raw.title }}</v-list-subheader>
+                <v-list-item v-else v-bind="itemProps" :title="item.raw.title">
+                  <template #append>
+                    <span class="text-caption text-medium-emphasis ml-3">{{ item.raw.live }}</span>
+                  </template>
+                </v-list-item>
+              </template>
+            </v-combobox>
+
+            <!-- Set value: just the preset -->
+            <v-text-field v-if="selectedWidget.type === 'setvalue'" v-model.number="selectedWidget.max"
+              label="Value to set" type="number" density="compact" variant="outlined" hide-details class="mb-3" />
+
+            <!-- Cycle: value list (or numeric range) -->
+            <template v-else-if="selectedWidget.type === 'cycle'">
+              <v-text-field v-model="selectedWidget.target" label="Values (comma-separated)"
+                placeholder="off, low, high" density="compact" variant="outlined" hide-details class="mb-1" />
+              <p class="text-caption text-medium-emphasis mb-2">Leave blank to cycle numbers 0…Max by Step.</p>
+              <div class="d-flex ga-2 mb-3">
+                <v-text-field v-model.number="selectedWidget.max" label="Max" type="number" density="compact" variant="outlined" hide-details />
+                <v-text-field v-model.number="selectedWidget.step" label="Step" type="number" density="compact" variant="outlined" hide-details />
+              </div>
+            </template>
+
+            <!-- Toggle / slider / stepper / momentary: min + max (+ step for stepper) -->
+            <template v-else>
+              <div class="d-flex ga-2 mb-3">
+                <v-text-field v-model.number="selectedWidget.min" :label="interactiveMinLabel" type="number" density="compact" variant="outlined" hide-details />
+                <v-text-field v-model.number="selectedWidget.max" :label="interactiveMaxLabel" type="number" density="compact" variant="outlined" hide-details />
+              </div>
+              <v-text-field v-if="selectedWidget.type === 'stepper'" v-model.number="selectedWidget.step"
+                label="Step" type="number" density="compact" variant="outlined" hide-details class="mb-3" />
+            </template>
+            <p class="text-caption text-medium-emphasis mb-3">
+              Touch-panel widget — drives the variable live.
+            </p>
+          </template>
+
           <!-- Position -->
           <div class="d-flex ga-2 mb-3">
             <v-text-field v-model.number="selectedWidget.x" label="X" type="number" density="compact" variant="outlined" hide-details @update:model-value="constrainSelected" />
@@ -430,6 +516,14 @@ const WIDGET_TYPES = [
   { type: 'image',    label: 'Image',          hint: 'Upload a picture',   icon: 'mdi-image',             color: 'deep-purple' },
   { type: 'gauge',    label: 'Gauge',          hint: 'Arc dial of a value', icon: 'mdi-gauge',            color: 'cyan' },
   { type: 'sparkline', label: 'Sparkline',     hint: 'History mini-chart', icon: 'mdi-chart-line-variant', color: 'light-blue' },
+  { type: 'button',   label: 'Button',         hint: 'Tap to run an action', icon: 'mdi-gesture-tap',    color: 'orange' },
+  { type: 'toggle',   label: 'Toggle',         hint: 'Flip a variable on/off', icon: 'mdi-toggle-switch', color: 'orange' },
+  { type: 'slider',   label: 'Slider',         hint: 'Drag to set a value',  icon: 'mdi-tune',            color: 'orange' },
+  { type: 'stepper',  label: 'Stepper',        hint: 'Tap − / + to adjust',  icon: 'mdi-plus-minus-variant', color: 'orange' },
+  { type: 'momentary', label: 'Momentary',     hint: 'Hold sets, release resets', icon: 'mdi-gesture-tap-button', color: 'orange' },
+  { type: 'cycle',    label: 'Cycle',          hint: 'Tap cycles through values', icon: 'mdi-rotate-right', color: 'orange' },
+  { type: 'setvalue', label: 'Set value',      hint: 'Tap sets a fixed value', icon: 'mdi-numeric',       color: 'orange' },
+  { type: 'nav',      label: 'Nav button',     hint: 'Tap to change page',   icon: 'mdi-arrow-right-bold', color: 'orange' },
 ]
 const LIBRARY = WIDGET_TYPES
 
@@ -456,6 +550,7 @@ const selectedPage = ref(null)
 const selectedWidgetIdx = ref(null)
 const displayList = ref([])
 const variableIds = ref([])
+const actionItems = ref([])         // [{ title, value }] for the Button action picker
 const imagesList = ref([])          // [{ name, size }] from the device
 const imageUrls = ref({})           // name → object URL (originals, for the editor preview)
 const uploadingImage = ref(false)
@@ -593,6 +688,20 @@ function formatLiveValue(value, decimals) {
   return String(value)
 }
 
+// Interactive-widget min/max labels change meaning per type (toggle = off/on,
+// momentary = released/pressed, else a plain range).
+const interactiveMinLabel = computed(() => {
+  const t = selectedWidget.value?.type
+  return t === 'toggle' ? 'Off value' : t === 'momentary' ? 'Released' : 'Min'
+})
+const interactiveMaxLabel = computed(() => {
+  const t = selectedWidget.value?.type
+  return t === 'toggle' ? 'On value' : t === 'momentary' ? 'Pressed' : 'Max'
+})
+// Nav destinations: the two relative moves plus every page id (combobox still
+// accepts a freely-typed id).
+const navTargetItems = computed(() => ['next', 'prev', ...pages.value.map((p) => p.id)])
+
 // ── Searchable, grouped variable picker ──────────────────────────────────────
 // Union of the REST snapshot (variableIds) and the live store, bucketed by the
 // firmware's `source` tag (with id-prefix fallbacks for weather./node.), filtered
@@ -685,6 +794,22 @@ function widgetStyle(widget) {
     }
     case 'sparkline':
       return { ...base, width: `${(widget.w || 60) * s}px`, height: `${(widget.h || 20) * s}px` }
+    case 'button':
+    case 'nav':
+    case 'momentary':
+    case 'setvalue':
+    case 'toggle':
+    case 'cycle':
+    case 'stepper': {
+      const size = Math.max(1, widget.textSize || 1)
+      return { ...base, width: `${(widget.w || 60) * s}px`, height: `${(widget.h || 24) * s}px`,
+        border: `${Math.max(1, s)}px solid ${col}`,
+        background: widget.bg != null ? previewColor(widget.bg) : 'transparent',
+        color: col, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: `${GFX_CHAR_H * size * s}px`, overflow: 'hidden', whiteSpace: 'nowrap' }
+    }
+    case 'slider':
+      return { ...base, color: col, width: `${(widget.w || 80) * s}px`, height: `${(widget.h || 16) * s}px` }
     case 'icon':
       return { ...base, color: col, fontSize: `${(widget.w || 12) * s}px`, lineHeight: 1 }
     default: {  // text / value / datetime
@@ -754,6 +879,19 @@ function widgetPreviewText(widget) {
   return `${widget.prefix || ''}${inner}${widget.suffix || ''}`
 }
 
+// Centred label shown on the box-style interactive widgets in the canvas preview.
+function previewLabel(widget) {
+  if (widget.text) return widget.text
+  switch (widget.type) {
+    case 'toggle':    return 'Toggle'
+    case 'momentary': return 'Hold'
+    case 'setvalue':  return 'Set'
+    case 'cycle':     return widget.variableId || 'Cycle'
+    case 'nav':       return widget.target === 'prev' ? '<' : '>'
+    default:          return 'Button'
+  }
+}
+
 // Fill missing fields on widgets loaded from the device so the inspector binds
 // cleanly (older pages have only text/value fields). bg stays absent unless set.
 function normalizeWidget(w) {
@@ -768,6 +906,9 @@ function normalizeWidget(w) {
     min: w.min ?? 0, max: w.max ?? 100,
   }
   if (w.bg != null) out.bg = w.bg
+  if (w.action != null) out.action = w.action   // button widgets only
+  if (w.target != null) out.target = w.target   // nav destination / cycle value list
+  if (w.step != null) out.step = w.step          // stepper / cycle numeric step
   return out
 }
 
@@ -790,6 +931,14 @@ function newWidget(type, x, y) {
     case 'image':    w.text = ''; w.w = 0; w.h = 0; break
     case 'gauge':    w.w = 24; w.color = '#22CCDD'; break
     case 'sparkline': w.w = 60; w.h = 20; w.color = '#44AAFF'; break
+    case 'button':   w.w = 60; w.h = 24; w.text = 'Button'; w.action = ''; break
+    case 'toggle':   w.w = 40; w.h = 20; w.text = 'Toggle'; w.min = 0; w.max = 1; break
+    case 'slider':   w.w = 80; w.h = 16; w.min = 0; w.max = 100; break
+    case 'stepper':  w.w = 70; w.h = 24; w.min = 0; w.max = 100; w.step = 1; break
+    case 'momentary': w.w = 60; w.h = 24; w.text = 'Hold'; w.min = 0; w.max = 1; break
+    case 'cycle':    w.w = 60; w.h = 24; w.target = ''; w.min = 0; w.max = 3; w.step = 1; break
+    case 'setvalue': w.w = 60; w.h = 24; w.text = 'Set'; w.max = 1; break
+    case 'nav':      w.w = 40; w.h = 24; w.text = ''; w.target = 'next'; break
     default: break
   }
   return w
@@ -897,7 +1046,8 @@ function onWidgetPointerUp() {
 // ── Resize by dragging the corner handle ─────────────────────────────────────
 // Same pointer math and snap step as move-drag, clamped by clampWidgetSize so the
 // widget stays on the panel. Gauges resize their radius; lines their ΔX/ΔY endpoint.
-const RESIZABLE_TYPES = ['rect', 'bar', 'image', 'sparkline', 'line', 'gauge']
+const RESIZABLE_TYPES = ['rect', 'bar', 'image', 'sparkline', 'line', 'gauge', 'button',
+  'toggle', 'slider', 'stepper', 'momentary', 'cycle', 'setvalue', 'nav']
 const isResizable = (w) => RESIZABLE_TYPES.includes(w?.type)
 let resizeState = null
 
@@ -1186,14 +1336,20 @@ async function refresh() {
   loading.value = true
   statusMessage.value = null
   try {
-    const [dispData, pageData, varData, imgData] = await Promise.all([
+    const [dispData, pageData, varData, imgData, actData] = await Promise.all([
       api.get('/api/displays').catch(() => ({ displays: [] })),
       api.get('/api/displays/pages').catch(() => ({ pages: [] })),
       api.get('/api/variables').catch(() => ({ variables: [] })),
       api.images.list().catch(() => ({ images: [] })),
+      api.get('/api/actions').catch(() => ({ actions: [] })),
     ])
     displayList.value = dispData.displays || []
     imagesList.value = imgData.images || []
+    // Actions for the Button widget's "action on tap" picker (id is what the
+    // device fires; show the friendly name when present).
+    actionItems.value = (actData.actions || [])
+      .filter((a) => a && a.id)
+      .map((a) => ({ title: a.name ? `${a.name} (${a.id})` : a.id, value: a.id }))
     // /api/variables returns variables as an id-keyed object (matching the live
     // store and variable_change frames), not an array — normalize either shape.
     const varList = Array.isArray(varData.variables)
@@ -1372,6 +1528,29 @@ onUnmounted(() => {
   color: rgba(207, 232, 255, 0.5);
 }
 .sd-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+/* Slider preview: a centred track with a draggable-looking knob. */
+.sd-slider-track {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.sd-slider-track::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: currentColor;
+  opacity: 0.6;
+}
+.sd-slider-knob {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 6px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+}
 
 /* Colour controls in the inspector. */
 .sd-color-row { display: flex; align-items: center; gap: 0.6rem; }

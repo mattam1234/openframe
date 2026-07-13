@@ -2,6 +2,7 @@
 #include "../OpenFrameConfig.h"
 #include "../core/PlatformCompat.h"  // of_i2c_begin — owns the shared I²C bus pins
 #include "../managers/TimeManager.h"  // DateTime widget formatting
+#include "TouchManager.h"             // button widgets publish their touch zones here
 #include <time.h>
 #include <math.h>
 
@@ -75,6 +76,14 @@ DisplayWidgetType widgetTypeFromString(const String& s) {
     if (s == "image")     return DisplayWidgetType::Image;
     if (s == "gauge")     return DisplayWidgetType::Gauge;
     if (s == "sparkline") return DisplayWidgetType::Sparkline;
+    if (s == "button")    return DisplayWidgetType::Button;
+    if (s == "toggle")    return DisplayWidgetType::Toggle;
+    if (s == "slider")    return DisplayWidgetType::Slider;
+    if (s == "stepper")   return DisplayWidgetType::Stepper;
+    if (s == "nav")       return DisplayWidgetType::Nav;
+    if (s == "momentary") return DisplayWidgetType::Momentary;
+    if (s == "cycle")     return DisplayWidgetType::Cycle;
+    if (s == "setvalue")  return DisplayWidgetType::SetValue;
     return DisplayWidgetType::Text;
 }
 
@@ -124,6 +133,14 @@ const char* widgetTypeToString(DisplayWidgetType t) {
         case DisplayWidgetType::Image:     return "image";
         case DisplayWidgetType::Gauge:     return "gauge";
         case DisplayWidgetType::Sparkline: return "sparkline";
+        case DisplayWidgetType::Button:    return "button";
+        case DisplayWidgetType::Toggle:    return "toggle";
+        case DisplayWidgetType::Slider:    return "slider";
+        case DisplayWidgetType::Stepper:   return "stepper";
+        case DisplayWidgetType::Nav:       return "nav";
+        case DisplayWidgetType::Momentary: return "momentary";
+        case DisplayWidgetType::Cycle:     return "cycle";
+        case DisplayWidgetType::SetValue:  return "setvalue";
         default:                           return "text";
     }
 }
@@ -1265,6 +1282,10 @@ bool DisplayManager::begin() {
         EventBus::instance().subscribe(EventType::VariableChanged, [](const Event& event) {
             DisplayManager::instance().onVariableChanged(event.sourceId);
         });
+        // Interactive widgets are driven off raw touch points from TouchManager.
+        TouchManager::instance().setInteractionHandler([](int16_t x, int16_t y, bool pressed) {
+            DisplayManager::instance().handleTouchInteraction(x, y, pressed);
+        });
     }
 
     LOG_I(TAG, "Initialised (" + String(_displays.size()) + " displays active, " + String(_pages.size()) + " pages)");
@@ -1291,8 +1312,220 @@ void DisplayManager::reload() {
     _nightCheckDue = true;   // re-evaluate the night window against the new configs
 }
 
+// Re-read only the page files and re-render. The display providers (and their
+// canvases / SPI) are left intact — page-content edits don't change the hardware,
+// so recreating providers on every designer keystroke was pure heap churn. Runs on
+// the loop task under the lock, same as reload().
+void DisplayManager::reloadPages() {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+
+    loadPages();
+    // A page's widget set may now reference different images or have dropped
+    // sparkline widgets — drop those caches so stale entries aren't reused. These
+    // are far cheaper to rebuild than the display providers.
+    clearImageCache();
+    _sparkHistory.clear();
+
+    for (auto& display : _displays) {
+        // Re-resolve the active page against the freshly loaded set (the old
+        // DisplayPage* is now dangling — _pages was rebuilt). Fall back to the
+        // display's first page if the current one was deleted.
+        const DisplayPage* page = findPageForDisplay(display.config, display.currentPageId);
+        if (!page) page = firstPageForDisplay(display.config);
+        if (page) {
+            if (page->id != display.currentPageId) {
+                display.currentPageId = page->id;
+                display.provider->setPage(page->id);
+            }
+            publishPageChange(display, *page);
+        }
+        display.dirty = true;   // force a redraw with the new widget content
+    }
+    refreshTouchZones();   // widget set changed → rebuild button touch zones
+}
+
+void DisplayManager::refreshTouchZones() {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    std::vector<TouchZone> zones;
+    for (const auto& display : _displays) {
+        const DisplayPage* page = findPageForDisplay(display.config, display.currentPageId);
+        if (!page) continue;
+        for (const auto& w : page->widgets) {
+            if (w.type != DisplayWidgetType::Button || !w.action.length()) continue;
+            TouchZone z;
+            z.id     = w.id;
+            z.pageId = page->id;
+            z.x      = w.x;
+            z.y      = w.y;
+            z.width  = w.w > 0 ? w.w : 60;   // match the render defaults so the
+            z.height = w.h > 0 ? w.h : 24;   // tappable area equals the drawn box
+            z.action = w.action;
+            zones.push_back(z);
+        }
+    }
+    TouchManager::instance().replaceAllZones(zones);
+}
+
+bool DisplayManager::isInteractiveType(DisplayWidgetType t) {
+    switch (t) {
+        case DisplayWidgetType::Toggle:
+        case DisplayWidgetType::Slider:
+        case DisplayWidgetType::Stepper:
+        case DisplayWidgetType::Nav:
+        case DisplayWidgetType::Momentary:
+        case DisplayWidgetType::Cycle:
+        case DisplayWidgetType::SetValue:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void DisplayManager::interactiveBounds(const DisplayWidget& w,
+                                       int16_t& x, int16_t& y, int16_t& bw, int16_t& bh) {
+    x = w.x;
+    y = w.y;
+    switch (w.type) {
+        case DisplayWidgetType::Slider:  bw = w.w > 0 ? w.w : 80; bh = w.h > 0 ? w.h : 16; break;
+        case DisplayWidgetType::Toggle:  bw = w.w > 0 ? w.w : 40; bh = w.h > 0 ? w.h : 20; break;
+        default:                         bw = w.w > 0 ? w.w : 60; bh = w.h > 0 ? w.h : 24; break;
+    }
+}
+
+float DisplayManager::readVarNumber(const String& id) const {
+    const Variable* var = VariableManager::instance().get(id);
+    if (!var) return 0.0f;
+    switch (var->type) {
+        case VarType::Integer: return static_cast<float>(var->valueInt);
+        case VarType::Float:   return var->valueFloat;
+        case VarType::Boolean: return var->valueBool ? 1.0f : 0.0f;
+        default:               return var->valueString.toFloat();
+    }
+}
+
+void DisplayManager::writeVarNumber(const DisplayWidget& w, float value) {
+    if (!w.variableId.length()) return;
+    const Variable* var = VariableManager::instance().get(w.variableId);
+    // Default to Float if the variable isn't defined yet.
+    const VarType type = var ? var->type : VarType::Float;
+    switch (type) {
+        case VarType::Integer: VariableManager::instance().setInt(w.variableId, static_cast<int32_t>(lroundf(value))); break;
+        case VarType::Boolean: VariableManager::instance().setBool(w.variableId, value != 0.0f); break;
+        case VarType::String:  VariableManager::instance().setString(w.variableId, String(value)); break;
+        default:               VariableManager::instance().setFloat(w.variableId, value); break;
+    }
+}
+
+void DisplayManager::cycleVariable(const DisplayWidget& w) {
+    // `target` as a comma-separated list → cycle those values (string or numeric);
+    // empty → numeric 0..max by `step`, wrapping.
+    if (w.target.length()) {
+        std::vector<String> opts;
+        int start = 0;
+        while (start <= w.target.length()) {
+            int comma = w.target.indexOf(',', start);
+            if (comma < 0) comma = w.target.length();
+            String tok = w.target.substring(start, comma); tok.trim();
+            if (tok.length()) opts.push_back(tok);
+            start = comma + 1;
+        }
+        if (opts.empty()) return;
+        const Variable* var = VariableManager::instance().get(w.variableId);
+        const String cur = var ? (var->type == VarType::String ? var->valueString
+                                                               : resolveWidgetText(w)) : String("");
+        size_t idx = 0;
+        for (size_t i = 0; i < opts.size(); ++i) if (opts[i] == cur) { idx = i + 1; break; }
+        const String& next = opts[idx % opts.size()];
+        if (var && var->type == VarType::String) VariableManager::instance().setString(w.variableId, next);
+        else                                     writeVarNumber(w, next.toFloat());
+        return;
+    }
+    float v = readVarNumber(w.variableId) + (w.step != 0 ? w.step : 1.0f);
+    if (v > w.maxVal) v = w.minVal;   // wrap
+    writeVarNumber(w, v);
+}
+
+void DisplayManager::applyTouchPress(const DisplayWidget& w, const String& displayId,
+                                     int16_t x, int16_t y) {
+    int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
+    switch (w.type) {
+        case DisplayWidgetType::Toggle: {
+            const float v = readVarNumber(w.variableId);
+            const bool on = v >= (w.minVal + w.maxVal) / 2.0f;
+            writeVarNumber(w, on ? w.minVal : w.maxVal);   // flip
+            break;
+        }
+        case DisplayWidgetType::Slider: {
+            float frac = bw > 0 ? static_cast<float>(x - bx) / static_cast<float>(bw) : 0.0f;
+            if (frac < 0) frac = 0; if (frac > 1) frac = 1;
+            writeVarNumber(w, w.minVal + frac * (w.maxVal - w.minVal));
+            break;
+        }
+        case DisplayWidgetType::Stepper: {
+            const bool minus = x < (bx + bw / 2);
+            float v = readVarNumber(w.variableId) + (minus ? -w.step : w.step);
+            if (v < w.minVal) v = w.minVal; if (v > w.maxVal) v = w.maxVal;
+            writeVarNumber(w, v);
+            break;
+        }
+        case DisplayWidgetType::Momentary: writeVarNumber(w, w.maxVal); break;
+        case DisplayWidgetType::SetValue:  writeVarNumber(w, w.maxVal); break;
+        case DisplayWidgetType::Cycle:     cycleVariable(w); break;
+        case DisplayWidgetType::Nav:
+            if (w.target == "next")      nextPage(displayId);
+            else if (w.target == "prev") previousPage(displayId);
+            else if (w.target.length())  setActivePage(displayId, w.target);
+            break;
+        default: break;
+    }
+    (void)y;
+}
+
+void DisplayManager::handleTouchInteraction(int16_t x, int16_t y, bool pressed) {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    const bool downEdge = pressed && !_touchDown;
+    const bool upEdge   = !pressed && _touchDown;
+
+    if (downEdge) {
+        _touchCaptured = false;
+        for (auto& display : _displays) {
+            const DisplayPage* page = findPageForDisplay(display.config, display.currentPageId);
+            if (!page) continue;
+            // Reverse order → the topmost (last-drawn) widget wins an overlap.
+            for (auto it = page->widgets.rbegin(); it != page->widgets.rend(); ++it) {
+                if (!isInteractiveType(it->type)) continue;
+                int16_t bx, by, bw, bh; interactiveBounds(*it, bx, by, bw, bh);
+                if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
+                    _touchWidget    = *it;
+                    _touchDisplayId = display.config.id;
+                    _touchCaptured  = true;
+                    applyTouchPress(_touchWidget, _touchDisplayId, x, y);
+                    break;
+                }
+            }
+            if (_touchCaptured) break;
+        }
+    } else if (pressed && _touchDown && _touchCaptured) {
+        // Drag: only the slider tracks the finger continuously.
+        if (_touchWidget.type == DisplayWidgetType::Slider) {
+            applyTouchPress(_touchWidget, _touchDisplayId, x, y);
+        }
+    } else if (upEdge && _touchCaptured) {
+        // Momentary releases back to its off value; others are one-shot.
+        if (_touchWidget.type == DisplayWidgetType::Momentary) {
+            writeVarNumber(_touchWidget, _touchWidget.minVal);
+        }
+        _touchCaptured = false;
+    }
+    _touchDown = pressed;
+}
+
 void DisplayManager::requestReload() {
     _reloadPending = true;   // consumed in loop() on the render task — no lock needed
+}
+
+void DisplayManager::requestPagesReload() {
+    _pagesReloadPending = true;   // consumed in loop(); a full reload supersedes it
 }
 
 std::vector<DisplayConfig> DisplayManager::displayConfigsCopy() const {
@@ -1305,7 +1538,11 @@ void DisplayManager::loop() {
     // web-task reader holding the lock.
     if (_reloadPending) {
         _reloadPending = false;
+        _pagesReloadPending = false;   // full rebuild covers any pending page reload
         reload();
+    } else if (_pagesReloadPending) {
+        _pagesReloadPending = false;
+        reloadPages();
     }
     const uint32_t nowMs = millis();
     updateNightAndBrightness(nowMs);   // no-op between the ~10 s checks
@@ -1334,6 +1571,7 @@ bool DisplayManager::setActivePage(const String& displayId, const String& pageId
     display.lastRotationMs = millis();
     if (display.provider) display.provider->setPage(page->id);
     publishPageChange(display, *page);
+    refreshTouchZones();   // the visible page changed → update tappable button zones
     return true;
 }
 
@@ -1614,6 +1852,9 @@ bool DisplayManager::loadPages() {
                 widget.align      = static_cast<TextAlign>(readUint8(item["align"], 0) % 3);
                 widget.text       = item["text"] | String("");
                 widget.variableId = item["variable"] | String("");
+                widget.action     = item["action"] | String("");
+                widget.target     = item["target"] | String("");
+                widget.step       = item["step"] | 1.0f;
                 widget.prefix     = item["prefix"] | String("");
                 widget.suffix     = item["suffix"] | String("");
                 widget.decimals   = readUint8(item["decimals"], 1);
@@ -1684,6 +1925,7 @@ void DisplayManager::startConfiguredDisplays() {
         LOG_I(TAG, "Registered display '" + cfg.id + "' (" + display.provider->describe() + ")");
         _displays.push_back(std::move(display));
     }
+    refreshTouchZones();   // register button zones for the initial pages
 }
 
 void DisplayManager::showNotification(const String& message, uint32_t durationMs) {
@@ -2031,6 +2273,91 @@ void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
         case DisplayWidgetType::Sparkline:
             renderSparkline(p, w);
             break;
+        case DisplayWidgetType::Button: {
+            const int16_t bw = w.w > 0 ? w.w : 60;
+            const int16_t bh = w.h > 0 ? w.h : 24;
+            if (w.hasBg) p.drawRectShape(w.x, w.y, bw, bh, w.bgColor, true);  // face
+            p.drawRectShape(w.x, w.y, bw, bh, w.color, false);               // border
+            // Centre the label in the button box (same 6px×size advance metric the
+            // text path uses, so it matches the web preview).
+            const uint8_t size = w.textSize ? w.textSize : 1;
+            const int16_t textW = static_cast<int16_t>(w.text.length()) * 6 * size;
+            const int16_t textH = static_cast<int16_t>(8 * size);
+            DisplayStyle s;
+            s.color = w.color; s.bgColor = w.bgColor; s.hasBg = false; s.size = size;
+            p.drawTextStyled(static_cast<int16_t>(w.x + (bw - textW) / 2),
+                             static_cast<int16_t>(w.y + (bh - textH) / 2), w.text, s);
+            break;
+        }
+        // ── Interactive widgets ──────────────────────────────────────────────
+        case DisplayWidgetType::Nav:
+        case DisplayWidgetType::Momentary:
+        case DisplayWidgetType::SetValue:
+        case DisplayWidgetType::Cycle: {
+            // All render as a bordered, centred label. Cycle shows the live value;
+            // Nav falls back to an arrow when unlabelled.
+            int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
+            if (w.hasBg) p.drawRectShape(bx, by, bw, bh, w.bgColor, true);
+            p.drawRectShape(bx, by, bw, bh, w.color, false);
+            String label = w.text;
+            if (w.type == DisplayWidgetType::Cycle) label = resolveWidgetText(w);
+            if (!label.length() && w.type == DisplayWidgetType::Nav) {
+                label = (w.target == "prev") ? "<" : ">";
+            }
+            const uint8_t size = w.textSize ? w.textSize : 1;
+            const int16_t tw = static_cast<int16_t>(label.length()) * 6 * size;
+            const int16_t th = static_cast<int16_t>(8 * size);
+            DisplayStyle s; s.color = w.color; s.size = size;
+            p.drawTextStyled(static_cast<int16_t>(bx + (bw - tw) / 2),
+                             static_cast<int16_t>(by + (bh - th) / 2), label, s);
+            break;
+        }
+        case DisplayWidgetType::Toggle: {
+            int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
+            const float v = resolveWidgetValue(w);
+            const bool on = v >= (w.minVal + w.maxVal) / 2.0f;
+            // A pill-ish track with the knob parked left (off) or right (on).
+            if (on) p.drawRectShape(bx, by, bw, bh, w.color, true);
+            else    p.drawRectShape(bx, by, bw, bh, w.color, false);
+            const int16_t knob = static_cast<int16_t>(bh - 4);
+            const int16_t kx = on ? static_cast<int16_t>(bx + bw - knob - 2)
+                                  : static_cast<int16_t>(bx + 2);
+            p.drawRectShape(kx, static_cast<int16_t>(by + 2), knob, knob,
+                            on ? w.bgColor : w.color, true);
+            break;
+        }
+        case DisplayWidgetType::Slider: {
+            int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
+            const int16_t midY = static_cast<int16_t>(by + bh / 2);
+            p.drawLineShape(bx, midY, static_cast<int16_t>(bx + bw), midY, w.color);  // track
+            float frac = (w.maxVal != w.minVal)
+                ? (resolveWidgetValue(w) - w.minVal) / (w.maxVal - w.minVal) : 0.0f;
+            if (frac < 0) frac = 0; if (frac > 1) frac = 1;
+            const int16_t kx = static_cast<int16_t>(bx + frac * bw);
+            const int16_t kw = 6;
+            p.drawRectShape(static_cast<int16_t>(kx - kw / 2), by, kw, bh, w.color, true);  // knob
+            break;
+        }
+        case DisplayWidgetType::Stepper: {
+            int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
+            p.drawRectShape(bx, by, bw, bh, w.color, false);
+            const int16_t midY = static_cast<int16_t>(by + bh / 2);
+            // "−" on the left third, "+" on the right third, value in the middle.
+            p.drawLineShape(static_cast<int16_t>(bx + 4), midY,
+                            static_cast<int16_t>(bx + bh - 4), midY, w.color);
+            const int16_t px = static_cast<int16_t>(bx + bw - bh / 2);
+            p.drawLineShape(static_cast<int16_t>(px - (bh / 2 - 4)), midY,
+                            static_cast<int16_t>(px + (bh / 2 - 4)), midY, w.color);
+            p.drawLineShape(px, static_cast<int16_t>(midY - (bh / 2 - 4)),
+                            px, static_cast<int16_t>(midY + (bh / 2 - 4)), w.color);
+            const uint8_t size = w.textSize ? w.textSize : 1;
+            String val = resolveWidgetText(w);
+            const int16_t tw = static_cast<int16_t>(val.length()) * 6 * size;
+            DisplayStyle s; s.color = w.color; s.size = size;
+            p.drawTextStyled(static_cast<int16_t>(bx + (bw - tw) / 2),
+                             static_cast<int16_t>(midY - 4 * size), val, s);
+            break;
+        }
     }
 }
 
@@ -2317,6 +2644,22 @@ void DisplayManager::fillScreensJson(JsonArray arr, size_t maxWidgets) const {
                         w["val"] = resolveWidgetValue(widget);
                         w["min"] = widget.minVal;
                         w["max"] = widget.maxVal;
+                    } else if (widget.type == DisplayWidgetType::Button
+                            || widget.type == DisplayWidgetType::Nav
+                            || widget.type == DisplayWidgetType::Momentary
+                            || widget.type == DisplayWidgetType::SetValue) {
+                        w["text"] = widget.text;   // label, so the CMS preview shows it
+                        w["size"] = widget.textSize;
+                        if (widget.type == DisplayWidgetType::Nav) w["target"] = widget.target;
+                    } else if (widget.type == DisplayWidgetType::Toggle
+                            || widget.type == DisplayWidgetType::Slider
+                            || widget.type == DisplayWidgetType::Stepper
+                            || widget.type == DisplayWidgetType::Cycle) {
+                        w["val"]  = resolveWidgetValue(widget);
+                        w["min"]  = widget.minVal;
+                        w["max"]  = widget.maxVal;
+                        w["text"] = resolveWidgetText(widget);
+                        w["size"] = widget.textSize;
                     }
                 }
                 --widgetBudget;

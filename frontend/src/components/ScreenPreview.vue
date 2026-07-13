@@ -86,6 +86,46 @@ function draw() {
       drawRect(ctx, w.x || 0, w.y || 0, w.w || 16, w.h || 16, color, false)
     } else if (type === 'gauge') {
       drawGauge(ctx, w, color)
+    } else if (type === 'button' || type === 'nav' || type === 'momentary'
+            || type === 'setvalue' || type === 'cycle') {
+      // Filled face (if a bg is set) + border + centred label — mirrors renderWidget.
+      const bw = w.w || 60, bh = w.h || 24
+      if (w.bg != null) drawRect(ctx, w.x || 0, w.y || 0, bw, bh, col(w.bg), true)
+      drawRect(ctx, w.x || 0, w.y || 0, bw, bh, color, false)
+      const size = w.size || 1
+      const text = w.text ?? ''
+      const tw = text.length * 6 * size
+      ctx.fillStyle = color
+      ctx.font = `${8 * size}px monospace`
+      ctx.fillText(text, (w.x || 0) + Math.max(0, (bw - tw) / 2),
+        (w.y || 0) + Math.max(0, (bh - 8 * size) / 2))
+    } else if (type === 'toggle') {
+      const bw = w.w || 40, bh = w.h || 20
+      const on = (w.val ?? 0) >= ((w.min ?? 0) + (w.max ?? 1)) / 2
+      drawRect(ctx, w.x || 0, w.y || 0, bw, bh, color, on)   // filled when on
+      const knob = bh - 4
+      const kx = on ? (w.x || 0) + bw - knob - 2 : (w.x || 0) + 2
+      drawRect(ctx, kx, (w.y || 0) + 2, knob, knob, on ? col(w.bg) || '#000' : color, true)
+    } else if (type === 'slider') {
+      const bw = w.w || 80, bh = w.h || 16
+      const midY = (w.y || 0) + bh / 2
+      ctx.strokeStyle = color; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(w.x || 0, midY); ctx.lineTo((w.x || 0) + bw, midY); ctx.stroke()
+      const span = (w.max ?? 100) - (w.min ?? 0)
+      let frac = span ? ((w.val ?? w.min ?? 0) - (w.min ?? 0)) / span : 0
+      frac = Math.max(0, Math.min(1, frac))
+      drawRect(ctx, (w.x || 0) + frac * bw - 3, w.y || 0, 6, bh, color, true)
+    } else if (type === 'stepper') {
+      const bw = w.w || 70, bh = w.h || 24
+      drawRect(ctx, w.x || 0, w.y || 0, bw, bh, color, false)
+      const size = w.size || 1
+      const text = w.text ?? ''
+      const tw = text.length * 6 * size
+      ctx.fillStyle = color
+      ctx.font = `${8 * size}px monospace`
+      ctx.fillText('-', (w.x || 0) + 3, (w.y || 0) + bh / 2 - 4 * size)
+      ctx.fillText('+', (w.x || 0) + bw - 8, (w.y || 0) + bh / 2 - 4 * size)
+      ctx.fillText(text, (w.x || 0) + Math.max(0, (bw - tw) / 2), (w.y || 0) + bh / 2 - 4 * size)
     } else if (type === 'sparkline') {
       // No history client-side — draw a flat baseline at the current value.
       const bw = w.w || 40, bh = w.h || 16

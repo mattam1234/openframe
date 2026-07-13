@@ -15,6 +15,7 @@
 #include "../hardware/OutputManager.h"
 #include "../hardware/SensorManager.h"
 #include "../hardware/DisplayManager.h"
+#include "../hardware/TouchManager.h"
 #include "../hardware/ModuleManager.h"
 #include "../hardware/HardwareInfo.h"
 #include "../hardware/SdCard.h"
@@ -526,6 +527,18 @@ void ApiServer::registerRoutes(AsyncWebServer& server) {
         ApiServer::instance().sendScreens(request);
     });
 
+#if defined(OF_ENABLE_XPT2046_TOUCH)
+    // Resistive-touch calibration (boards that drive an XPT2046 directly). GET
+    // returns the current calibration plus the last raw/mapped point for a live
+    // four-corner UI; POST merges + persists a new calibration and hot-applies it.
+    server.on("/api/touch", HTTP_GET, [](AsyncWebServerRequest* request) {
+        ApiServer::instance().sendTouchCalibration(request);
+    });
+    registerJsonPost(server, "/api/touch", [](AsyncWebServerRequest* request, const String& body) {
+        ApiServer::instance().handleTouchUpdate(request, body);
+    });
+#endif
+
     server.on("/api/modules", HTTP_GET, [](AsyncWebServerRequest* request) {
         ApiServer::instance().sendModules(request);
     });
@@ -988,14 +1001,19 @@ void ApiServer::sendWifiScan(AsyncWebServerRequest* request) const {
 }
 
 void ApiServer::sendVariables(AsyncWebServerRequest* request) const {
+    // Build the doc directly and serialize once. The old path went
+    // doc→String→doc→String (buildVariablesJson serialized, then we parsed it
+    // back, then sendJson serialized again) — three large heap blocks live at
+    // once, which is exactly what fails on a fragmented classic-ESP32 heap and
+    // closes the socket with no bytes sent (browser: ERR_EMPTY_RESPONSE).
     JsonDocument doc;
-    deserializeJson(doc, buildVariablesJson());
+    buildVariablesDoc(doc);
     sendJson(request, doc);
 }
 
 void ApiServer::sendLogs(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    deserializeJson(doc, buildLogsJson());
+    buildLogsDoc(doc);
     sendJson(request, doc);
 }
 
@@ -1234,7 +1252,7 @@ void ApiServer::handleVariablesUpdate(AsyncWebServerRequest* request, const Stri
     }
 
     JsonDocument response;
-    deserializeJson(response, buildVariablesJson());
+    buildVariablesDoc(response);
     sendJson(request, response);
 }
 
@@ -1666,24 +1684,32 @@ String ApiServer::buildStatusJson() const {
     return toJsonString(doc);
 }
 
-String ApiServer::buildVariablesJson() const {
-    JsonDocument doc;
+void ApiServer::buildVariablesDoc(JsonDocument& doc) const {
     auto variables = doc["variables"].to<JsonObject>();
     for (const Variable* var : VariableManager::instance().all()) {
         if (!var) continue;
         auto obj = variables[var->id].to<JsonObject>();
         serializeVariable(obj, *var);
     }
+}
+
+String ApiServer::buildVariablesJson() const {
+    JsonDocument doc;
+    buildVariablesDoc(doc);
     return toJsonString(doc);
 }
 
-String ApiServer::buildLogsJson(size_t maxCount) const {
-    JsonDocument doc;
+void ApiServer::buildLogsDoc(JsonDocument& doc, size_t maxCount) const {
     auto entries = doc["entries"].to<JsonArray>();
     Logger::instance().forEachEntry([&](const LogEntry& entry) {
         serializeLogEntry(entries.add<JsonObject>(), entry);
     }, maxCount);
     doc["count"] = Logger::instance().getEntryCount();
+}
+
+String ApiServer::buildLogsJson(size_t maxCount) const {
+    JsonDocument doc;
+    buildLogsDoc(doc, maxCount);
     return toJsonString(doc);
 }
 
@@ -1846,6 +1872,31 @@ void ApiServer::sendScreens(AsyncWebServerRequest* request) const {
     sendJson(request, doc);
 }
 
+#if defined(OF_ENABLE_XPT2046_TOUCH)
+void ApiServer::sendTouchCalibration(AsyncWebServerRequest* request) const {
+    JsonDocument doc;
+    TouchManager::instance().fillTouchCalibrationJson(doc.to<JsonObject>());
+    sendJson(request, doc);
+}
+
+void ApiServer::handleTouchUpdate(AsyncWebServerRequest* request, const String& body) {
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        sendError(request, 400, "Invalid JSON");
+        return;
+    }
+    String error;
+    if (!TouchManager::instance().applyTouchCalibration(doc.as<JsonVariantConst>(), error)) {
+        sendError(request, 400, error);
+        return;
+    }
+    JsonDocument response;
+    response["ok"] = true;
+    response["message"] = "Touch calibration saved and applied.";
+    sendJson(request, response);
+}
+#endif
+
 void ApiServer::sendDisplays(AsyncWebServerRequest* request) const {
     JsonDocument doc;
 
@@ -1949,6 +2000,9 @@ void ApiServer::sendDisplayPages(AsyncWebServerRequest* request) const {
                 out["suffix"] = item["suffix"] | String("");
                 out["decimals"] = item["decimals"] | 1;
                 out["maxChars"] = item["max_chars"] | 0;
+                if (!item["action"].isNull()) out["action"] = item["action"] | String("");
+                if (!item["target"].isNull()) out["target"] = item["target"] | String("");
+                if (!item["step"].isNull())   out["step"]   = item["step"].as<float>();
                 // Rich-widget geometry/style (camelCase back to the designer).
                 if (!item["w"].isNull())      out["w"]      = item["w"].as<int>();
                 if (!item["h"].isNull())      out["h"]      = item["h"].as<int>();
@@ -2313,7 +2367,8 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
         return;
     }
 
-    bool changed = false;
+    bool displaysChanged = false;
+    bool pagesChanged = false;
 
     if (source["displays"].is<JsonArrayConst>()) {
         JsonDocument cfgDoc;
@@ -2386,7 +2441,7 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
             sendError(request, 500, "Failed to save displays");
             return;
         }
-        changed = true;
+        displaysChanged = true;
     }
 
     if (source["pages"].is<JsonArrayConst>()) {
@@ -2417,6 +2472,12 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
                     out["suffix"] = w["suffix"] | String("");
                     out["decimals"] = w["decimals"] | 1;
                     out["max_chars"] = w["maxChars"] | 0;
+                    // Button widget: the action id fired on tap. Only persisted when
+                    // set so non-button widgets round-trip unchanged.
+                    if (!w["action"].isNull()) out["action"] = w["action"] | String("");
+                    // Interactive widgets: nav destination / cycle list + stepper step.
+                    if (!w["target"].isNull()) out["target"] = w["target"] | String("");
+                    if (!w["step"].isNull())   out["step"]   = w["step"].as<float>();
 
                     // Geometry/style for the richer widget types (rect/line/circle/bar/
                     // led/icon) and per-widget colour + alignment. Persist only when
@@ -2438,17 +2499,24 @@ void ApiServer::handleDisplaysUpdate(AsyncWebServerRequest* request, const Strin
                 return;
             }
         }
-        changed = true;
+        pagesChanged = true;
     }
 
-    if (!changed) {
+    if (!displaysChanged && !pagesChanged) {
         sendError(request, 400, "Payload must include displays or pages");
         return;
     }
 
-    // Apply live — no reboot. The render task rebuilds displays + pages from the
-    // files we just wrote (see DisplayManager::requestReload).
-    DisplayManager::instance().requestReload();
+    // Apply live — no reboot. A display *hardware* change needs a full provider
+    // rebuild; a page-content-only change (the common live-edit case) takes the
+    // light path that keeps the providers and just re-renders — avoiding the
+    // canvas/SPI reallocation churn that fragments the heap (see
+    // DisplayManager::requestReload / requestPagesReload).
+    if (displaysChanged) {
+        DisplayManager::instance().requestReload();
+    } else {
+        DisplayManager::instance().requestPagesReload();
+    }
 
     JsonDocument response;
     response["ok"] = true;

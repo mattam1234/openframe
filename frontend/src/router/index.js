@@ -4,6 +4,7 @@ const routes = [
   { path: '/',          component: () => import('../views/DashboardView.vue'),       name: 'dashboard'  },
   { path: '/layout',    component: () => import('../views/LayoutDesignerView.vue'),  name: 'layout'     },
   { path: '/screens',   component: () => import('../views/ScreenDesignerView.vue'),  name: 'screens'    },
+  { path: '/touch',     component: () => import('../views/TouchCalibrationView.vue'), name: 'touch'     },
   { path: '/sensors',   component: () => import('../views/SensorDashboardView.vue'), name: 'sensors'    },
   { path: '/variables', component: () => import('../views/VariablesView.vue'),       name: 'variables'  },
   { path: '/outputs',   component: () => import('../views/OutputsView.vue'),         name: 'outputs'    },

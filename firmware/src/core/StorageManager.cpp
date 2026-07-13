@@ -315,13 +315,41 @@ bool StorageManager::begin() {
 #if defined(ESP8266)
     // ESP8266 LittleFS does not accept a format-on-fail argument
     if (!LittleFS.begin()) {
-#else
-    if (!LittleFS.begin(true)) {
-#endif
         LOG_E(TAG, "Failed to mount LittleFS");
         return false;
     }
-    LOG_I(TAG, "LittleFS mounted");
+#else
+    // Try a NON-formatting mount first. LittleFS.begin(true) reformats on any
+    // mount failure, which silently wipes a freshly-uploaded image (e.g. after
+    // `uploadfs`) whenever the partition can't be read for any reason — the app
+    // then reports an empty /www ("No web assets found") with no hint why. Split
+    // the two steps so a reformat is loud and diagnosable.
+    if (!LittleFS.begin(false)) {
+        LOG_E(TAG, "LittleFS mount FAILED — partition could not be read. "
+                   "Reformatting (this ERASES any uploaded filesystem image; "
+                   "re-run `uploadfs` after this boot).");
+        if (!LittleFS.begin(true)) {
+            LOG_E(TAG, "Failed to mount LittleFS even after format");
+            return false;
+        }
+    }
+#endif
+    // Report what actually mounted so a missing /www is diagnosable from the log:
+    // an empty (freshly-formatted) partition shows usedBytes ~0 and no index.
+    // ESP8266's fs::FS exposes usage via FSInfo, not totalBytes()/usedBytes().
+#if defined(ESP8266)
+    FSInfo fsInfo;
+    LittleFS.info(fsInfo);
+    const size_t total = fsInfo.totalBytes;
+    const size_t used  = fsInfo.usedBytes;
+#else
+    const size_t total = LittleFS.totalBytes();
+    const size_t used  = LittleFS.usedBytes();
+#endif
+    const bool hasUi   = LittleFS.exists("/www/index.html.gz") ||
+                         LittleFS.exists("/www/index.html");
+    LOG_I(TAG, "LittleFS mounted: " + String(used) + "/" + String(total) +
+                   " bytes used, web UI " + (hasUi ? "present" : "MISSING (run `uploadfs`)"));
     restoreJsonBackupsFromNvs();
     initializeDefaults();
     return true;
