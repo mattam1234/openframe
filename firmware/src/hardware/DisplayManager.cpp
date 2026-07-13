@@ -1844,7 +1844,17 @@ void DisplayManager::onVariableChanged(const String& variableId) {
         if (!page) continue;
 
         for (const auto& widget : page->widgets) {
-            if (widget.type == DisplayWidgetType::Value && widget.variableId == variableId) {
+            // Every variable-bound widget must redraw when its variable changes —
+            // not just Value. Bar/Led/Gauge/Sparkline resolve the same variable
+            // (see resolveWidgetValue) and were previously only refreshed on the
+            // periodic refresh tick, so a longer refreshIntervalMs left them frozen
+            // while Value widgets updated instantly.
+            const bool bound = widget.type == DisplayWidgetType::Value
+                            || widget.type == DisplayWidgetType::Bar
+                            || widget.type == DisplayWidgetType::Led
+                            || widget.type == DisplayWidgetType::Gauge
+                            || widget.type == DisplayWidgetType::Sparkline;
+            if (bound && widget.variableId == variableId) {
                 display.dirty = true;
                 break;
             }
