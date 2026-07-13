@@ -1404,17 +1404,48 @@ float DisplayManager::readVarNumber(const String& id) const {
     }
 }
 
-void DisplayManager::writeVarNumber(const DisplayWidget& w, float value) {
-    if (!w.variableId.length()) return;
-    const Variable* var = VariableManager::instance().get(w.variableId);
+void DisplayManager::writeVarNumber(const String& id, float value) {
+    if (!id.length()) return;
+    const Variable* var = VariableManager::instance().get(id);
     // Default to Float if the variable isn't defined yet.
     const VarType type = var ? var->type : VarType::Float;
     switch (type) {
-        case VarType::Integer: VariableManager::instance().setInt(w.variableId, static_cast<int32_t>(lroundf(value))); break;
-        case VarType::Boolean: VariableManager::instance().setBool(w.variableId, value != 0.0f); break;
-        case VarType::String:  VariableManager::instance().setString(w.variableId, String(value)); break;
-        default:               VariableManager::instance().setFloat(w.variableId, value); break;
+        case VarType::Integer: VariableManager::instance().setInt(id, static_cast<int32_t>(lroundf(value))); break;
+        case VarType::Boolean: VariableManager::instance().setBool(id, value != 0.0f); break;
+        case VarType::String:  VariableManager::instance().setString(id, String(value)); break;
+        default:               VariableManager::instance().setFloat(id, value); break;
     }
+}
+
+float DisplayManager::getVariableNumber(const String& id) const { return readVarNumber(id); }
+void  DisplayManager::setVariableNumber(const String& id, float value) { writeVarNumber(id, value); }
+
+std::vector<DisplayManager::HaWidgetInfo> DisplayManager::collectHaWidgets() const {
+    of_lock_guard<of_recursive_mutex> lk(_mtx);
+    std::vector<HaWidgetInfo> out;
+    for (const auto& page : _pages) {
+        for (const auto& w : page.widgets) {
+            const bool isButton = w.type == DisplayWidgetType::Button && w.action.length();
+            const bool isToggle = w.type == DisplayWidgetType::Toggle && w.variableId.length();
+            if (!isButton && !isToggle) continue;
+
+            HaWidgetInfo info;
+            // HA-safe unique id: <page>_<widget>, lowercased, non-alnum → '_'.
+            String raw = page.id + "_" + w.id;
+            for (size_t i = 0; i < raw.length(); ++i) {
+                char c = raw[i];
+                info.entityId += (isalnum(c) ? static_cast<char>(tolower(c)) : '_');
+            }
+            info.name       = w.text.length() ? w.text : (isToggle ? String("Toggle ") : String("Button ")) + w.id;
+            info.isToggle   = isToggle;
+            info.action     = w.action;
+            info.variableId = w.variableId;
+            info.onVal      = w.maxVal;
+            info.offVal     = w.minVal;
+            out.push_back(info);
+        }
+    }
+    return out;
 }
 
 void DisplayManager::cycleVariable(const DisplayWidget& w) {

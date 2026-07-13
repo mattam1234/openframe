@@ -2,7 +2,9 @@
 
 #include "../hardware/SensorManager.h"
 #include "../hardware/OutputManager.h"
+#include "../hardware/DisplayManager.h"   // expose display button/toggle widgets to HA
 #include "../core/StorageManager.h"
+#include "ActionEngine.h"                 // HA button press → fire the widget's action
 #include "WiFiManager.h"
 #include "HealthMonitor.h"
 
@@ -93,6 +95,10 @@ void HaManager::begin() {
     });
     EventBus::instance().subscribe(EventType::InputDigitalChanged, [this](const Event& e) {
         onInputEvent(e.sourceId, e.payload);
+    });
+    // Reflect a display-toggle's bound variable back to its HA switch state.
+    EventBus::instance().subscribe(EventType::VariableChanged, [this](const Event& e) {
+        onVariableChanged(e.sourceId);
     });
 
     LOG_I(TAG, "HA manager ready");
@@ -467,6 +473,9 @@ void HaManager::buildEntities() {
         }
     }
 
+    // Display Button/Toggle widgets → HA button/switch entities.
+    buildDisplayWidgetEntities();
+
     // Device-level diagnostics + restart control.
     buildDeviceEntities();
 
@@ -512,6 +521,47 @@ void HaManager::buildDeviceEntities() {
         delay(200);
         ESP.restart();
     });
+}
+
+void HaManager::buildDisplayWidgetEntities() {
+    for (const auto& wgt : DisplayManager::instance().collectHaWidgets()) {
+        if (wgt.isToggle) {
+            HaEntity e;
+            e.type = HaEntityType::Switch;
+            e.id   = "disp_" + wgt.entityId;
+            e.name = wgt.name;
+            registerEntity(e);
+            const float onVal = wgt.onVal, offVal = wgt.offVal;
+            const String varId = wgt.variableId;
+            onCommand(e.id, [varId, onVal, offVal](const String&, const String& payload) {
+                DisplayManager::instance().setVariableNumber(varId, payload == "ON" ? onVal : offVal);
+            });
+            // Remember the binding so a variable change (device touch, action, HA)
+            // re-publishes the switch state. Threshold = midpoint of off..on.
+            _toggleByVar[varId] = HaToggleBinding{ e.id, (onVal + offVal) / 2.0f };
+        } else {
+            HaEntity e;
+            e.type = HaEntityType::Button;
+            e.id   = "disp_" + wgt.entityId;
+            e.name = wgt.name;
+            registerEntity(e);
+            const String actionId = wgt.action;
+            onCommand(e.id, [actionId](const String&, const String&) {
+                String err;
+                if (!ActionEngine::instance().triggerAction(actionId, err)) {
+                    LOG_W(TAG, "HA button action '" + actionId + "' failed: " + err);
+                }
+            });
+        }
+    }
+}
+
+void HaManager::onVariableChanged(const String& variableId) {
+    if (!isEnabled() || !MqttManager::instance().isConnected()) return;
+    auto it = _toggleByVar.find(variableId);
+    if (it == _toggleByVar.end()) return;
+    const float v = DisplayManager::instance().getVariableNumber(variableId);
+    publishState(it->second.entityId, v >= it->second.threshold ? "ON" : "OFF");
 }
 
 // Publish the current diagnostic values (retained, so HA recovers them on
@@ -580,6 +630,12 @@ void HaManager::publishAllStates() {
         if (kv.second.type == HaEntityType::BinarySensor) {
             publishState(kv.second.id, "OFF");
         }
+    }
+
+    // Display-toggle switches: current state from their bound variables.
+    for (const auto& kv : _toggleByVar) {
+        const float v = DisplayManager::instance().getVariableNumber(kv.first);
+        publishState(kv.second.entityId, v >= kv.second.threshold ? "ON" : "OFF");
     }
 
     // Device diagnostics (RSSI, uptime, heap, IP).

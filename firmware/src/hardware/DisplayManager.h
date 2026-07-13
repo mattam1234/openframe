@@ -137,6 +137,23 @@ public:
     // `truncated` is set on the affected screen.
     void fillScreensJson(JsonArray arr, size_t maxWidgets = 24) const;
 
+    // ── Home Assistant bridge (see HaManager) ────────────────────────────────
+    // A display widget worth exposing to HA: Button → HA button (fires `action`),
+    // Toggle → HA switch (drives `variableId` between offVal/onVal).
+    struct HaWidgetInfo {
+        String entityId;      // unique id per page+widget, HA-safe
+        String name;          // friendly label
+        bool   isToggle = false;
+        String action;        // button: action id to fire
+        String variableId;    // toggle: bound variable
+        float  onVal    = 1.0f;
+        float  offVal   = 0.0f;
+    };
+    std::vector<HaWidgetInfo> collectHaWidgets() const;
+    // Read/write a variable respecting its declared type (int/float/bool/string).
+    float getVariableNumber(const String& id) const;
+    void  setVariableNumber(const String& id, float value);
+
 private:
     struct DisplayInstance {
         DisplayConfig                   config;
@@ -177,7 +194,8 @@ private:
                                   int16_t& x, int16_t& y, int16_t& bw, int16_t& bh);
     // Variable read/write helpers that respect the target variable's type.
     float readVarNumber(const String& id) const;
-    void  writeVarNumber(const DisplayWidget& w, float value);
+    void  writeVarNumber(const String& id, float value);
+    void  writeVarNumber(const DisplayWidget& w, float value) { writeVarNumber(w.variableId, value); }
     void  applyTouchPress(const DisplayWidget& w, const String& displayId, int16_t x, int16_t y);
     void  cycleVariable(const DisplayWidget& w);
     void advanceRotations(uint32_t nowMs);   // F4: auto-advance rotating displays

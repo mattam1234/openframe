@@ -103,6 +103,12 @@ private:
     void onOutputEvent(const String& payload);
     void onInputEvent(const String& sourceId, const String& payload);
 
+    // Expose display Button/Toggle widgets as HA button/switch entities. Buttons
+    // fire the widget's action; toggles drive the bound variable (2-way).
+    void buildDisplayWidgetEntities();
+    // A variable changed → if a display-toggle switch is bound to it, push state.
+    void onVariableChanged(const String& variableId);
+
     // Device-level diagnostic + control entities (RSSI, uptime, heap, IP, restart).
     void buildDeviceEntities();
     void updateDiagnostics();
@@ -112,6 +118,11 @@ private:
     // Handle HA's birth message (<discoveryPrefix>/status == "online"): re-announce
     // discovery + state so entities recover immediately after a Home Assistant restart.
     void onHaStatus(const String& payload);
+
+    // Display-toggle switch entities: variableId → {switch entity id, on/off
+    // midpoint threshold}, so a variable change pushes the switch's HA state.
+    struct HaToggleBinding { String entityId; float threshold; };
+    std::map<String, HaToggleBinding>   _toggleByVar;
 
     std::map<String, HaEntity>          _entities;
     std::map<String, String>            _cmdTopicToEntityId;  // command topic → entity ID
