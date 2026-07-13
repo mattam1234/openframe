@@ -240,6 +240,8 @@ const char* contentTypeForPath(const String& path) {
     if (path.endsWith(".css")) return "text/css";
     if (path.endsWith(".js")) return "application/javascript";
     if (path.endsWith(".json")) return "application/json";
+    if (path.endsWith(".webmanifest")) return "application/manifest+json";
+    if (path.endsWith(".txt")) return "text/plain";
     if (path.endsWith(".svg")) return "image/svg+xml";
     if (path.endsWith(".png")) return "image/png";
     if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
@@ -326,11 +328,19 @@ void ApiServer::begin(AsyncWebServer& server) {
 
         server.onNotFound([hasIndexHtml](AsyncWebServerRequest* request) {
             const String url = request->url();
-            if (url.startsWith("/api/") || url.startsWith("/assets/") || url.indexOf('.') >= 0) {
+            // API + hashed assets have their own routes; a miss here is a real 404.
+            if (url.startsWith("/api/") || url.startsWith("/assets/")) {
                 request->send(404, "text/plain", "Not found");
                 return;
             }
-
+            // A dotted path is a file request (manifest.webmanifest, sw.js, PWA
+            // icons, robots.txt) — serve it from /www if present, else 404.
+            // sendStaticFile handles the .gz fallback and 404s on its own.
+            if (url.indexOf('.') >= 0) {
+                sendStaticFile(request, "/www" + url, "public, max-age=86400");
+                return;
+            }
+            // Extensionless path — an SPA route; hand back the app shell.
             sendStaticFile(request, hasIndexHtml ? "/www/index.html" : "/www/index.html.gz", "no-store");
         });
     } else {
@@ -1501,35 +1511,69 @@ static String buildWsFrame(const char* type, const String& payloadJson) {
     return frame;
 }
 
+// ESPAsyncWebServer's text()/textAll() copy the frame into a std::vector whose
+// allocation THROWS on failure — an uncaught bad_alloc that reboots the device
+// (decoded from a field crash: WS connect during a post-reboot asset re-stream).
+// The wsCanSend() gates make that allocation all but certain to succeed; this
+// wrapper closes the remaining check-to-alloc race (another task allocating in
+// between). Dropping the frame is always better than aborting the firmware.
+#if defined(__EXCEPTIONS)
+template <typename SendFn>
+static void wsGuardedSend(SendFn&& send) {
+    try {
+        send();
+    } catch (...) {
+        // Frame dropped — heap raced below the gate. Live updates resume once
+        // memory recovers; deliberately no logging here (logging allocates).
+    }
+}
+#else
+template <typename SendFn>
+static void wsGuardedSend(SendFn&& send) {
+    send();
+}
+#endif
+
 void ApiServer::sendFrame(AsyncWebSocketClient* client, const char* type, const JsonDocument& payload) const {
     if (!client) return;
-    client->text(buildWsFrame(type, toJsonString(payload)));
+    sendRawFrame(client, type, toJsonString(payload));
 }
 
 void ApiServer::sendRawFrame(AsyncWebSocketClient* client, const char* type, const String& rawPayloadJson) const {
     if (!client) return;
-    client->text(buildWsFrame(type, rawPayloadJson));
+    const String frame = buildWsFrame(type, rawPayloadJson);
+    if (!wsCanSend(frame.length())) return;
+    wsGuardedSend([&] { client->text(frame); });
 }
 
 bool ApiServer::wsSendSafe() const {
+    return wsCanSend(0);
+}
+
+bool ApiServer::wsCanSend(size_t frameLen) const {
 #if defined(ESP8266)
     const uint32_t largest = ESP.getMaxFreeBlockSize();
 #else
     const uint32_t largest = ESP.getMaxAllocHeap();
 #endif
-    return ESP.getFreeHeap() >= WS_MIN_FREE_HEAP && largest >= WS_MIN_ALLOC_BLOCK;
+    // The library copies the frame into one contiguous buffer, so the largest
+    // free block must fit the frame itself plus headroom for the send queue.
+    const uint32_t needBlock = std::max<uint32_t>(WS_MIN_ALLOC_BLOCK, frameLen + WS_SEND_HEADROOM);
+    return ESP.getFreeHeap() >= WS_MIN_FREE_HEAP + frameLen && largest >= needBlock;
 }
 
 void ApiServer::broadcastFrame(const char* type, const JsonDocument& payload) {
     if (_ws.count() == 0) return;   // no subscribers — skip serialize + send entirely
-    if (!wsSendSafe()) return;      // heap too low/fragmented to allocate the buffer
-    _ws.textAll(buildWsFrame(type, toJsonString(payload)));
+    if (!wsSendSafe()) return;      // heap too low/fragmented to even serialize
+    broadcastRawFrame(type, toJsonString(payload));
 }
 
 void ApiServer::broadcastRawFrame(const char* type, const String& rawPayloadJson) {
     if (_ws.count() == 0) return;
     if (!wsSendSafe()) return;
-    _ws.textAll(buildWsFrame(type, rawPayloadJson));
+    const String frame = buildWsFrame(type, rawPayloadJson);
+    if (!wsCanSend(frame.length())) return;
+    wsGuardedSend([&] { _ws.textAll(frame); });
 }
 
 String ApiServer::buildStatusJson() const {
@@ -3072,10 +3116,12 @@ void ApiServer::sendFsDownload(AsyncWebServerRequest* request) const {
         return;
     }
 
-    int slash = path.lastIndexOf('/');
-    const String name = slash >= 0 ? path.substring(slash + 1) : path;
-    auto* response = request->beginResponse(LittleFS, path, "application/octet-stream");
-    response->addHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
+    // The download=true overload makes AsyncFileResponse emit
+    // Content-Disposition: attachment; filename="…" itself. Adding our own here
+    // too produced TWO Content-Disposition headers, which Chrome rejects outright
+    // (net::ERR_RESPONSE_HEADERS_MULTIPLE_CONTENT_DISPOSITION) — the file never
+    // downloads. Let the library own that header.
+    auto* response = request->beginResponse(LittleFS, path, "application/octet-stream", true);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
 }

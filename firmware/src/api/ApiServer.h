@@ -122,8 +122,14 @@ private:
     // is gated on this. Floors are generous because the heap is fragmented, not just
     // low (a small largest-block with plenty of free heap still fails a big alloc).
     bool wsSendSafe() const;
+    // Frame-size-aware variant: wsSendSafe() plus room for THIS frame's buffer.
+    // wsSendSafe() alone isn't enough — it can pass and a multi-KB frame still
+    // fail (observed: bad_alloc → abort in sendInitialState's log snapshot while
+    // the browser was re-streaming assets after a reboot).
+    bool wsCanSend(size_t frameLen) const;
     static constexpr uint32_t WS_MIN_FREE_HEAP   = 24000;  // bytes
     static constexpr uint32_t WS_MIN_ALLOC_BLOCK = 8000;   // bytes (largest contiguous)
+    static constexpr uint32_t WS_SEND_HEADROOM   = 4096;   // slack beyond the frame itself
 
     String buildStatusJson() const;
     String buildVariablesJson() const;

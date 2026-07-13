@@ -1217,6 +1217,30 @@ bool appendBoardDefaultDisplays(std::vector<DisplayConfig>& configs) {
         configs.push_back(cfg);
         return true;
     }
+
+    // ESP32-2432S028 "Cheap Yellow Display": 2.8" ILI9341 320x240 on a dedicated
+    // HW-SPI bus (SCLK14/MOSI13, CS15, DC2) — distinct from the board's default
+    // VSPI, so mosi/sck are set explicitly to rebind the peripheral onto them
+    // (leaving them -1 would drive the panel on the wrong pins). RST is not wired
+    // (tied to the module reset), backlight on GPIO21 active-high. Native panel is
+    // 240x320 portrait; rotation=1 presents it as 320x240 landscape.
+    if (board == "esp32_2432s028") {
+        DisplayConfig cfg;
+        cfg.id           = "lcd";
+        cfg.type         = "ili9341";
+        cfg.width        = 320;   // effective (landscape) geometry for layouts/preview
+        cfg.height       = 240;
+        cfg.rotation     = 1;
+        cfg.csPin        = 15;
+        cfg.dcPin        = 2;
+        cfg.resetPin     = -1;
+        cfg.mosiPin      = 13;
+        cfg.sckPin       = 14;
+        cfg.backlightPin = 21;    // active-high (backlightActiveLow defaults false)
+        cfg.spiFrequency = 40000000;
+        configs.push_back(cfg);
+        return true;
+    }
 #else
     (void)configs;
 #endif

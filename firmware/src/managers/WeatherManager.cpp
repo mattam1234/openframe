@@ -173,12 +173,15 @@ bool WeatherManager::fetch() {
         lon      = c.time.longitude;
     }
 
-    // Open-Meteo serves both http and https; use TLS when it's compiled in.
-#if OF_ENABLE_TLS
-    String url = "https://api.open-meteo.com/v1/forecast";
-#else
+    // Deliberately plain HTTP even when TLS is compiled in. This is public,
+    // unauthenticated forecast data — nothing to protect in transit — and an
+    // mbedTLS handshake needs a ~16KB contiguous heap allocation for its RX
+    // buffer. On a fragmented heap (classic esp32 with WiFi + async server + WS
+    // + HA all resident, largest free block can drop to ~10KB) that alloc fails
+    // and the whole GET returns HTTP -1 (connection refused). HTTP has no such
+    // requirement, so weather keeps working under exactly the memory pressure
+    // that would otherwise kill it. Open-Meteo serves both schemes.
     String url = "http://api.open-meteo.com/v1/forecast";
-#endif
     url += "?latitude=" + String(lat, 4) + "&longitude=" + String(lon, 4);
     url += "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m";
     url += "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max";
