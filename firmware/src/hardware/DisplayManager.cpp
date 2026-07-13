@@ -3,6 +3,7 @@
 #include "../core/PlatformCompat.h"  // of_i2c_begin — owns the shared I²C bus pins
 #include "../managers/TimeManager.h"  // DateTime widget formatting
 #include "TouchManager.h"             // button widgets publish their touch zones here
+#include "OutputManager.h"            // buzzer "tick" feedback on interactive taps
 #include <time.h>
 #include <math.h>
 
@@ -1431,10 +1432,18 @@ void DisplayManager::cycleVariable(const DisplayWidget& w) {
         }
         if (opts.empty()) return;
         const Variable* var = VariableManager::instance().get(w.variableId);
-        const String cur = var ? (var->type == VarType::String ? var->valueString
-                                                               : resolveWidgetText(w)) : String("");
+        const bool numericVar = var && var->type != VarType::String;
+        // Find the current option's index → advance one (wrapping). Match numerically
+        // for numeric vars so "5" matches a float value of 5.0 (string compare of the
+        // formatted value would miss the decimals and never advance).
+        const String curStr  = var ? var->valueString : String("");
+        const float  curNum  = numericVar ? readVarNumber(w.variableId) : 0.0f;
         size_t idx = 0;
-        for (size_t i = 0; i < opts.size(); ++i) if (opts[i] == cur) { idx = i + 1; break; }
+        for (size_t i = 0; i < opts.size(); ++i) {
+            const bool match = numericVar ? (fabsf(opts[i].toFloat() - curNum) < 0.0001f)
+                                          : (opts[i] == curStr);
+            if (match) { idx = i + 1; break; }
+        }
         const String& next = opts[idx % opts.size()];
         if (var && var->type == VarType::String) VariableManager::instance().setString(w.variableId, next);
         else                                     writeVarNumber(w, next.toFloat());
@@ -1483,6 +1492,7 @@ void DisplayManager::applyTouchPress(const DisplayWidget& w, const String& displ
 
 void DisplayManager::handleTouchInteraction(int16_t x, int16_t y, bool pressed) {
     of_lock_guard<of_recursive_mutex> lk(_mtx);
+    const uint32_t now = millis();
     const bool downEdge = pressed && !_touchDown;
     const bool upEdge   = !pressed && _touchDown;
 
@@ -1496,18 +1506,32 @@ void DisplayManager::handleTouchInteraction(int16_t x, int16_t y, bool pressed) 
                 if (!isInteractiveType(it->type)) continue;
                 int16_t bx, by, bw, bh; interactiveBounds(*it, bx, by, bw, bh);
                 if (x >= bx && x < bx + bw && y >= by && y < by + bh) {
-                    _touchWidget    = *it;
-                    _touchDisplayId = display.config.id;
-                    _touchCaptured  = true;
+                    _touchWidget      = *it;
+                    _touchDisplayId   = display.config.id;
+                    _touchCaptured    = true;
+                    _pressedWidgetId  = it->id;
+                    _pressedDisplayId = display.config.id;
+                    _touchPressMs     = now;
+                    _touchRepeatMs    = now;
+                    display.dirty     = true;   // draw the pressed highlight now
                     applyTouchPress(_touchWidget, _touchDisplayId, x, y);
+                    // Audible tick — harmless no-op on devices without a buzzer.
+                    OutputManager::instance().beepFirstBuzzer(3000, 25);
                     break;
                 }
             }
             if (_touchCaptured) break;
         }
     } else if (pressed && _touchDown && _touchCaptured) {
-        // Drag: only the slider tracks the finger continuously.
         if (_touchWidget.type == DisplayWidgetType::Slider) {
+            // Slider tracks the finger continuously.
+            applyTouchPress(_touchWidget, _touchDisplayId, x, y);
+        } else if ((_touchWidget.type == DisplayWidgetType::Stepper
+                 || _touchWidget.type == DisplayWidgetType::Nav)
+                && now - _touchPressMs  >= TOUCH_REPEAT_DELAY_MS
+                && now - _touchRepeatMs >= TOUCH_REPEAT_INTERVAL_MS) {
+            // Hold-to-repeat: keep firing after the initial delay.
+            _touchRepeatMs = now;
             applyTouchPress(_touchWidget, _touchDisplayId, x, y);
         }
     } else if (upEdge && _touchCaptured) {
@@ -1516,6 +1540,12 @@ void DisplayManager::handleTouchInteraction(int16_t x, int16_t y, bool pressed) 
             writeVarNumber(_touchWidget, _touchWidget.minVal);
         }
         _touchCaptured = false;
+        // Drop the pressed highlight and redraw the owning display.
+        for (auto& display : _displays) {
+            if (display.config.id == _pressedDisplayId) { display.dirty = true; break; }
+        }
+        _pressedWidgetId  = "";
+        _pressedDisplayId = "";
     }
     _touchDown = pressed;
 }
@@ -2075,7 +2105,10 @@ void DisplayManager::renderDisplay(DisplayInstance& display, uint32_t nowMs) {
                 }
                 continue;
             }
-            renderWidget(*display.provider, widget, display.config.width, display.config.height);
+            const bool pressed = isInteractiveType(widget.type)
+                              && widget.id == _pressedWidgetId
+                              && display.config.id == _pressedDisplayId;
+            renderWidget(*display.provider, widget, display.config.width, display.config.height, pressed);
         }
     }
     display.provider->present();
@@ -2199,7 +2232,7 @@ float DisplayManager::resolveWidgetValue(const DisplayWidget& widget) const {
 // Interpret one widget into provider primitive calls. Runs only for pixel surfaces
 // (OLED + TFT); addressed displays (Nextion) are handled separately.
 void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
-                                  uint16_t dispW, uint16_t dispH) const {
+                                  uint16_t dispW, uint16_t dispH, bool pressed) const {
     (void)dispW; (void)dispH;
     switch (w.type) {
         case DisplayWidgetType::Text:
@@ -2297,7 +2330,9 @@ void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
             // All render as a bordered, centred label. Cycle shows the live value;
             // Nav falls back to an arrow when unlabelled.
             int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
-            if (w.hasBg) p.drawRectShape(bx, by, bw, bh, w.bgColor, true);
+            // Pressed feedback: invert (fill with the fg colour, label in bg).
+            if (pressed)       p.drawRectShape(bx, by, bw, bh, w.color, true);
+            else if (w.hasBg)  p.drawRectShape(bx, by, bw, bh, w.bgColor, true);
             p.drawRectShape(bx, by, bw, bh, w.color, false);
             String label = w.text;
             if (w.type == DisplayWidgetType::Cycle) label = resolveWidgetText(w);
@@ -2307,7 +2342,7 @@ void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
             const uint8_t size = w.textSize ? w.textSize : 1;
             const int16_t tw = static_cast<int16_t>(label.length()) * 6 * size;
             const int16_t th = static_cast<int16_t>(8 * size);
-            DisplayStyle s; s.color = w.color; s.size = size;
+            DisplayStyle s; s.color = pressed ? w.bgColor : w.color; s.size = size;
             p.drawTextStyled(static_cast<int16_t>(bx + (bw - tw) / 2),
                              static_cast<int16_t>(by + (bh - th) / 2), label, s);
             break;
@@ -2324,6 +2359,9 @@ void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
                                   : static_cast<int16_t>(bx + 2);
             p.drawRectShape(kx, static_cast<int16_t>(by + 2), knob, knob,
                             on ? w.bgColor : w.color, true);
+            if (pressed) p.drawRectShape(static_cast<int16_t>(bx + 1), static_cast<int16_t>(by + 1),
+                                         static_cast<int16_t>(bw - 2), static_cast<int16_t>(bh - 2),
+                                         w.color, false);  // inset ring while held
             break;
         }
         case DisplayWidgetType::Slider: {
@@ -2334,13 +2372,26 @@ void DisplayManager::renderWidget(DisplayProvider& p, const DisplayWidget& w,
                 ? (resolveWidgetValue(w) - w.minVal) / (w.maxVal - w.minVal) : 0.0f;
             if (frac < 0) frac = 0; if (frac > 1) frac = 1;
             const int16_t kx = static_cast<int16_t>(bx + frac * bw);
-            const int16_t kw = 6;
+            const int16_t kw = pressed ? 9 : 6;   // fatter knob while dragging
             p.drawRectShape(static_cast<int16_t>(kx - kw / 2), by, kw, bh, w.color, true);  // knob
+            if (pressed) {
+                // Live value bubble above the knob.
+                const uint8_t size = w.textSize ? w.textSize : 1;
+                const String val = resolveWidgetText(w);
+                const int16_t tw = static_cast<int16_t>(val.length()) * 6 * size;
+                int16_t tx = static_cast<int16_t>(kx - tw / 2);
+                if (tx < 0) tx = 0;
+                DisplayStyle s; s.color = w.color; s.size = size;
+                p.drawTextStyled(tx, static_cast<int16_t>(by - 8 * size - 1), val, s);
+            }
             break;
         }
         case DisplayWidgetType::Stepper: {
             int16_t bx, by, bw, bh; interactiveBounds(w, bx, by, bw, bh);
             p.drawRectShape(bx, by, bw, bh, w.color, false);
+            if (pressed) p.drawRectShape(static_cast<int16_t>(bx + 1), static_cast<int16_t>(by + 1),
+                                         static_cast<int16_t>(bw - 2), static_cast<int16_t>(bh - 2),
+                                         w.color, false);  // inset ring while held
             const int16_t midY = static_cast<int16_t>(by + bh / 2);
             // "−" on the left third, "+" on the right third, value in the middle.
             p.drawLineShape(static_cast<int16_t>(bx + 4), midY,

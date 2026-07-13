@@ -111,6 +111,17 @@ bool OutputManager::beep(const String& id, uint16_t frequency, uint16_t duration
     return applyBuzzer(static_cast<size_t>(index), frequency, durationMs);
 }
 
+bool OutputManager::beepFirstBuzzer(uint16_t frequency, uint16_t durationMs) {
+    // Pulse whatever buzzer is configured — used for UI feedback (e.g. a touch
+    // "tick"). No-op (false) when the device has no buzzer output.
+    for (size_t i = 0; i < _configs.size(); ++i) {
+        if (_configs[i].type == OutputType::Buzzer) {
+            return applyBuzzer(i, frequency, durationMs);
+        }
+    }
+    return false;
+}
+
 bool OutputManager::setAngle(const String& id, uint8_t angle) {
     const int index = findIndexById(id);
     if (index < 0) return false;

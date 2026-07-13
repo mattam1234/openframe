@@ -200,7 +200,7 @@ private:
     float  resolveWidgetValue(const DisplayWidget& widget) const;
     // Interpret a widget into provider primitive calls (pixel surfaces only).
     void   renderWidget(DisplayProvider& p, const DisplayWidget& w,
-                        uint16_t dispW, uint16_t dispH) const;
+                        uint16_t dispW, uint16_t dispH, bool pressed = false) const;
     void   renderIcon(DisplayProvider& p, const DisplayWidget& w) const;
     void   renderImage(DisplayProvider& p, const DisplayWidget& w) const;
     void   renderGauge(DisplayProvider& p, const DisplayWidget& w) const;
@@ -251,6 +251,14 @@ private:
     bool          _touchCaptured = false;
     DisplayWidget _touchWidget;              // copy of the captured widget
     String        _touchDisplayId;           // display that owns it (for nav)
+    // Press feedback: the widget currently drawn "pressed" (highlight + slider
+    // value bubble), and hold-repeat timing for stepper/nav.
+    String        _pressedWidgetId;
+    String        _pressedDisplayId;
+    uint32_t      _touchPressMs  = 0;        // when the current press began
+    uint32_t      _touchRepeatMs = 0;        // last auto-repeat fire
+    static constexpr uint32_t TOUCH_REPEAT_DELAY_MS    = 450;  // hold before repeat
+    static constexpr uint32_t TOUCH_REPEAT_INTERVAL_MS = 140;  // repeat cadence
 
     // Night-mode scheduler state (loop task only, like _reloadPending consumption).
     uint32_t _lastNightCheckMs = 0;

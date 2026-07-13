@@ -113,6 +113,8 @@ public:
     // false if id is not a WS2812 output.
     bool getAnimation(const String& id, LedAnimation& animation, uint8_t& speed) const;
     bool beep(const String& id, uint16_t frequency, uint16_t durationMs);
+    // Pulse the first configured buzzer (UI feedback tick); false if none exists.
+    bool beepFirstBuzzer(uint16_t frequency, uint16_t durationMs);
     bool setAngle(const String& id, uint8_t angle);  // Servo: 0–180°
     bool setPosition(const String& id, int32_t steps);  // Stepper: absolute target
 
