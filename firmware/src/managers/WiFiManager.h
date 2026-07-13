@@ -62,6 +62,11 @@ private:
     String   buildApSsid() const;
     bool     connectToBestConfiguredNetwork();
     bool     hasConfiguredNetworks() const;
+    // Advance a non-blocking STA connect started by startSTA(): adopt success or
+    // handle the per-attempt timeout (restoring the portal if it was a probe).
+    void     pumpConnecting();
+    // Apply the optional static-IP config (or clear to DHCP) before WiFi.begin().
+    void     applyStaticIp();
     // Apply radio power settings (modem sleep + configured TX-power cap). Called
     // after each (re)connect since the core can reset TX power on WiFi.begin().
     void     applyRadioTuning();
@@ -71,6 +76,18 @@ private:
     bool      _connected    = false;
     uint8_t   _retryCount   = 0;
     uint32_t  _lastAttempt  = 0;
+    // Non-blocking connect state: startSTA() kicks off WiFi.begin() and returns;
+    // loop()→pumpConnecting() watches for association or the per-attempt timeout.
+    bool      _staConnecting     = false;
+    bool      _connectingIsProbe = false;   // AP-fallback probe (keep the portal up)
+    uint32_t  _connectStartMs    = 0;
+    bool      _everConnected     = false;   // impatient cold-boot AP fallback vs patient warm
+    // Fast-reconnect cache: the last AP we associated with, so a reconnect can go
+    // straight to it (channel + BSSID) and skip the multi-second scan.
+    uint8_t   _lastBssid[6]  = {0};
+    int32_t   _lastChannel   = 0;
+    String    _lastSsid;
+    bool      _haveBssid     = false;
     // Fallback-AP STA-probe state: when a captive-portal client was last seen
     // associated (checked at most once per second), and how many consecutive
     // probes failed (drives the probe-interval back-off).
@@ -79,6 +96,12 @@ private:
     uint8_t   _probeFailures       = 0;
 
     static constexpr uint8_t  MAX_RETRIES         = 5;
+    // Cold boot (never connected this power-on): fall back to the AP portal after
+    // far fewer tries so a wrong/absent SSID gets the user to the setup page in
+    // ~30 s instead of ~3 min. A link that HAS connected keeps the patient count.
+    static constexpr uint8_t  MAX_RETRIES_COLD    = 2;
+    // Per-attempt association timeout for the non-blocking connect.
+    static constexpr uint32_t STA_CONNECT_TIMEOUT_MS = 12000;
     // Reconnect waits grow exponentially from RETRY_INTERVAL_MS and are capped
     // at RETRY_MAX_INTERVAL_MS (10 s → 20 s → 40 s → 60 s → 60 s), so a flapping
     // AP isn't hammered but a brief outage still recovers quickly.

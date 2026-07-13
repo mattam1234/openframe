@@ -6,6 +6,7 @@
 #include "../managers/VariableManager.h"
 
 ProfileManager& ProfileManager::instance() {
+    
     static ProfileManager inst;
     return inst;
 }
