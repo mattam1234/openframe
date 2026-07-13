@@ -1185,10 +1185,13 @@ bool appendBoardDefaultDisplays(std::vector<DisplayConfig>& configs) {
 #if OF_ENABLE_TFT && defined(BOARD_NAME)
     const String board = BOARD_NAME;
 
-    // Waveshare ESP32-S3-GEEK: 1.14" ST7789 240x135 IPS. SCK12/MOSI11 are this
-    // board's default hardware-SPI pins, so leave mosi/sck at -1 to use the fast
-    // 3-wire hardware-SPI path. Native panel is 135x240 portrait; rotation=1
-    // presents it as 240x135 landscape. Backlight on GPIO7.
+    // Waveshare ESP32-S3-GEEK: 1.14" ST7789 240x135 IPS. Panel is wired to SCK12/
+    // MOSI11 — these happen to be the variant's default SPI pins, but set them
+    // explicitly (like the S3-BOX/CYD below) so init doesn't depend on the Arduino
+    // core's default-pin behaviour: with mosi/sck set, bindTftHwSpi() runs an
+    // explicit SPI.begin(sck,-1,mosi,cs) and the panel binds deterministically.
+    // Native panel is 135x240 portrait; rotation=1 presents it as 240x135
+    // landscape. Backlight on GPIO7.
     if (board == "esp32s3geek") {
         DisplayConfig cfg;
         cfg.id           = "lcd";
@@ -1199,6 +1202,8 @@ bool appendBoardDefaultDisplays(std::vector<DisplayConfig>& configs) {
         cfg.csPin        = 10;
         cfg.dcPin        = 8;
         cfg.resetPin     = 9;
+        cfg.mosiPin      = 11;
+        cfg.sckPin       = 12;
         cfg.backlightPin = 7;
         cfg.spiFrequency = 40000000;  // ST7789 runs happily at 40 MHz
         configs.push_back(cfg);
