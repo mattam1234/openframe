@@ -295,11 +295,22 @@
             </div>
             <div class="ld-fields">
               <v-select v-model="disp.type" :items="displayTypes" label="Type" density="compact" variant="outlined" hide-details />
-              <v-text-field v-model="disp.address" label="Address" placeholder="0x3C" density="compact" variant="outlined" hide-details />
+              <!-- I²C displays (SSD1306, SH1106, etc.) -->
+              <v-text-field v-if="isI2cDisplay(disp.type)" v-model="disp.address" label="Address" placeholder="0x3C" density="compact" variant="outlined" hide-details />
+              <!-- Common fields -->
               <v-text-field v-model.number="disp.width" label="Width (px)" type="number" density="compact" variant="outlined" hide-details />
               <v-text-field v-model.number="disp.height" label="Height (px)" type="number" density="compact" variant="outlined" hide-details />
-              <v-select v-model="disp.sda_pin" :items="ioPins" label="SDA pin" density="compact" variant="outlined" hide-details clearable />
-              <v-select v-model="disp.scl_pin" :items="ioPins" label="SCL pin" density="compact" variant="outlined" hide-details clearable />
+              <!-- I²C pins -->
+              <template v-if="isI2cDisplay(disp.type)">
+                <v-select v-model="disp.sda_pin" :items="ioPins" label="SDA pin" density="compact" variant="outlined" hide-details clearable />
+                <v-select v-model="disp.scl_pin" :items="ioPins" label="SCL pin" density="compact" variant="outlined" hide-details clearable />
+              </template>
+              <!-- UART pins (Nextion) -->
+              <template v-if="isUartDisplay(disp.type)">
+                <v-select v-model="disp.rx_pin" :items="ioPins" label="RX pin" density="compact" variant="outlined" hide-details clearable />
+                <v-select v-model="disp.tx_pin" :items="ioPins" label="TX pin" density="compact" variant="outlined" hide-details clearable />
+                <v-text-field v-model.number="disp.baud_rate" label="Baud rate" placeholder="9600" type="number" density="compact" variant="outlined" hide-details />
+              </template>
               <v-switch v-model="disp.enabled" label="Enabled" density="compact" color="indigo" hide-details inset />
             </div>
             <!-- F4: cycle through this display's pages on a timer. Page order comes
@@ -337,26 +348,48 @@
                 </v-expansion-panel-text>
               </v-expansion-panel>
               <v-expansion-panel>
-                <v-expansion-panel-title>Advanced (sub-window &amp; pins)</v-expansion-panel-title>
+                <v-expansion-panel-title>Advanced (pins &amp; settings)</v-expansion-panel-title>
                 <v-expansion-panel-text>
                   <div class="ld-fields">
-                    <v-text-field v-model.number="disp.col_offset" label="Col offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
-                    <v-text-field v-model.number="disp.page_offset" label="Page offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
-                    <v-text-field v-model.number="disp.com_pins" label="COM pins (e.g. 18 = 0x12)" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
-                    <v-select v-model="disp.reset_pin" :items="ioPins" label="Reset pin" density="compact" variant="outlined" hide-details clearable />
-                    <v-select v-model="disp.cs_pin" :items="ioPins" label="CS pin (SPI)" density="compact" variant="outlined" hide-details clearable />
-                    <v-select v-model="disp.dc_pin" :items="ioPins" label="DC pin (SPI)" density="compact" variant="outlined" hide-details clearable />
-                    <v-select v-model="disp.mosi_pin" :items="ioPins" label="MOSI pin (SPI, blank = default bus)" density="compact" variant="outlined" hide-details clearable />
-                    <v-select v-model="disp.sck_pin" :items="ioPins" label="SCK pin (SPI, blank = default bus)" density="compact" variant="outlined" hide-details clearable />
-                    <v-select v-model="disp.bl_pin" :items="ioPins" label="Backlight pin (SPI TFT)" density="compact" variant="outlined" hide-details clearable />
-                    <v-text-field v-model.number="disp.spi_frequency" label="SPI frequency (Hz)" placeholder="27000000" type="number" density="compact" variant="outlined" hide-details />
-                    <v-text-field v-model.number="disp.contrast" label="Contrast (0-255)" placeholder="255" type="number" density="compact" variant="outlined" hide-details />
-                    <v-select v-model.number="disp.rotation" :items="rotationItems" label="Rotation" density="compact" variant="outlined" hide-details />
+                    <!-- OLED sub-window settings (SSD1306 only) -->
+                    <template v-if="isOledDisplay(disp.type)">
+                      <v-text-field v-model.number="disp.col_offset" label="Col offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="disp.page_offset" label="Page offset" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
+                      <v-text-field v-model.number="disp.com_pins" label="COM pins (e.g. 18 = 0x12)" placeholder="auto" type="number" density="compact" variant="outlined" hide-details />
+                    </template>
+                    <!-- SPI display pins (TFT + Nokia 5110) -->
+                    <template v-if="isSpiDisplay(disp.type)">
+                      <v-select v-model="disp.reset_pin" :items="ioPins" label="Reset pin" density="compact" variant="outlined" hide-details clearable />
+                      <v-select v-model="disp.cs_pin" :items="ioPins" label="CS pin (SPI)" density="compact" variant="outlined" hide-details clearable />
+                      <v-select v-model="disp.dc_pin" :items="ioPins" label="DC pin (SPI)" density="compact" variant="outlined" hide-details clearable />
+                      <v-select v-model="disp.mosi_pin" :items="ioPins" label="MOSI pin (SPI, blank = default bus)" density="compact" variant="outlined" hide-details clearable />
+                      <v-select v-model="disp.sck_pin" :items="ioPins" label="SCK pin (SPI, blank = default bus)" density="compact" variant="outlined" hide-details clearable />
+                    </template>
+                    <!-- TFT backlight pin -->
+                    <template v-if="isTftDisplay(disp.type)">
+                      <v-select v-model="disp.bl_pin" :items="ioPins" label="Backlight pin" density="compact" variant="outlined" hide-details clearable />
+                    </template>
+                    <!-- SPI frequency (SPI displays) -->
+                    <template v-if="isSpiDisplay(disp.type)">
+                      <v-text-field v-model.number="disp.spi_frequency" label="SPI frequency (Hz)" placeholder="27000000" type="number" density="compact" variant="outlined" hide-details />
+                    </template>
+                    <!-- Contrast (OLED) -->
+                    <template v-if="isOledDisplay(disp.type)">
+                      <v-text-field v-model.number="disp.contrast" label="Contrast (0-255)" placeholder="255" type="number" density="compact" variant="outlined" hide-details />
+                    </template>
+                    <!-- Rotation (not for Nextion) -->
+                    <template v-if="!isUartDisplay(disp.type)">
+                      <v-select v-model.number="disp.rotation" :items="rotationItems" label="Rotation" density="compact" variant="outlined" hide-details />
+                    </template>
                   </div>
                   <div class="text-caption text-medium-emphasis mt-1">
-                    Leave offsets blank for auto. The 0.42" 72×40 panel auto-derives col offset 28 / COM pins 0x12 from its geometry.
-                    For SPI TFTs (ST7789/ILI9341), set CS/DC and the backlight pin; leave MOSI/SCK blank to use the board's default SPI bus.
-                    The 1.14" 240×135 ST7789 uses width 240, height 135, rotation 90°.
+                    <template v-if="isOledDisplay(disp.type)">
+                      Leave offsets blank for auto. The 0.42" 72×40 panel auto-derives col offset 28 / COM pins 0x12 from its geometry.
+                    </template>
+                    <template v-if="isSpiDisplay(disp.type)">
+                      For SPI TFTs (ST7789/ILI9341), set CS/DC and the backlight pin; leave MOSI/SCK blank to use the board's default SPI bus.
+                      The 1.14" 240×135 ST7789 uses width 240, height 135, rotation 90°.
+                    </template>
                   </div>
                 </v-expansion-panel-text>
               </v-expansion-panel>
@@ -614,6 +647,27 @@ async function refresh() {
     }
   }
   loading.value = false
+}
+
+// Helper functions to determine which pins/settings are shown for each display type
+function isI2cDisplay(type) {
+  return ['ssd1306', 'ssd1306_72x40', 'sh1106', 'sh1107', 'ssd1309'].includes(type)
+}
+
+function isSpiDisplay(type) {
+  return ['nokia5110', 'st7789', 'ili9341'].includes(type)
+}
+
+function isTftDisplay(type) {
+  return ['st7789', 'ili9341'].includes(type)
+}
+
+function isOledDisplay(type) {
+  return ['ssd1306', 'ssd1306_72x40', 'sh1106', 'sh1107', 'ssd1309'].includes(type)
+}
+
+function isUartDisplay(type) {
+  return type === 'nextion'
 }
 
 onMounted(() => {
