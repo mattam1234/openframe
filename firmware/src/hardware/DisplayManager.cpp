@@ -809,6 +809,8 @@ public:
         if (_canvas) {
             _canvas->fillScreen(0x0000);
         } else if (_gfx) {
+            // When drawing directly to glass (no canvas), still clear but ensure proper
+            // state setup. The display controller may need initialization parameters reset.
             _gfx->fillScreen(0x0000);
             _gfx->setTextColor(0xFFFF);
             _gfx->setTextWrap(false);
@@ -918,6 +920,16 @@ public:
             return false;
         }
 
+        // Manually reset the display if reset pin is available; the Adafruit constructor
+        // may not reset it properly. A proper power-on reset is critical for ILI9341.
+        if (config.resetPin >= 0) {
+            pinMode(config.resetPin, OUTPUT);
+            digitalWrite(config.resetPin, LOW);
+            delay(10);
+            digitalWrite(config.resetPin, HIGH);
+            delay(120);  // Wait for display to stabilize after reset
+        }
+
         // On the ESP32, route the panel's pins through the hardware-SPI peripheral
         // (fast) instead of the Adafruit software-SPI constructor. On the ESP8266,
         // where pins can't be remapped, fall back to software SPI when custom pins
@@ -933,11 +945,13 @@ public:
         }
 
         _display->begin(config.spiFrequency);
+        delay(50);  // Brief stabilization delay after begin()
         _display->setRotation(config.rotation & 0x03);
         _display->fillScreen(ILI9341_BLACK);
         _display->setTextColor(ILI9341_WHITE);
         _display->setTextWrap(false);
         enableBacklight(config.backlightPin, config.backlightActiveLow);
+        delay(50);  // Allow backlight power to stabilize
 
         // Render through an off-screen canvas (config.width/height are the rotated,
         // effective dimensions) so per-frame redraws don't flicker the panel.
@@ -966,6 +980,15 @@ public:
             return false;
         }
 
+        // Manually reset the display if reset pin is available
+        if (config.resetPin >= 0) {
+            pinMode(config.resetPin, OUTPUT);
+            digitalWrite(config.resetPin, LOW);
+            delay(10);
+            digitalWrite(config.resetPin, HIGH);
+            delay(120);
+        }
+
         if (bindTftHwSpi(config)) {
             _display.reset(new Adafruit_ST7789(config.csPin, config.dcPin, config.resetPin));
         } else if (config.mosiPin >= 0 && config.sckPin >= 0) {
@@ -987,11 +1010,13 @@ public:
         uint16_t initH = config.height;
         if (config.rotation & 1) { initW = config.height; initH = config.width; }
         _display->init(initW, initH, SPI_MODE2);
+        delay(50);  // Stabilization delay after init()
         _display->setRotation(config.rotation & 0x03);
         _display->fillScreen(ST77XX_BLACK);
         _display->setTextColor(ST77XX_WHITE);
         _display->setTextWrap(false);
         enableBacklight(config.backlightPin, config.backlightActiveLow);
+        delay(50);  // Allow backlight power to stabilize
 
         // Render through an off-screen canvas (config.width/height are the rotated,
         // effective dimensions) so per-frame redraws don't flicker the panel.
