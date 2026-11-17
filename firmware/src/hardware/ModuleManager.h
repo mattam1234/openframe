@@ -77,7 +77,11 @@ private:
     ModuleManager() = default;
 
     void registerBuiltInHandlers();
-    void scanBus();
+    void scanBus();                 // full synchronous scan (boot only)
+    void ensureHandlers();
+    void beginScan();
+    bool scanStep(uint8_t maxProbes);   // true once the pass has finished
+    void finishScan();
     void checkProbe(uint8_t address);
     DiscoveredModule* findByAddress(uint8_t address);
     void onModuleAttached(const DiscoveredModule& module);
@@ -88,6 +92,12 @@ private:
     std::vector<DiscoveredModule>               _modules;
     uint32_t                                    _lastScanMs    = 0;
     uint32_t                                    _i2cErrorCount = 0;
+    std::vector<uint8_t>                        _scanFound;
+    uint8_t                                     _scanAddr      = 0;   // 0 = no scan in progress
+
+    static constexpr uint8_t  SCAN_FIRST_ADDR = 8;
+    static constexpr uint8_t  SCAN_END_ADDR   = 120;   // exclusive
+    static constexpr uint8_t  SCAN_CHUNK      = 8;     // addresses probed per loop() pass
 
     static constexpr uint32_t SCAN_INTERVAL_MS = 5000;
     static constexpr const char* TAG = "ModuleMgr";

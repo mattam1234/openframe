@@ -23,7 +23,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32dev, esp32s3dev, esp8266dev]
+        # Every env in platformio.ini, so a board-specific break (pin tables,
+        # partition layout, PSRAM mode) is caught here rather than at flash time.
+        env: [esp32dev, esp32_2432s028, esp32s3dev, esp32s3geek, esp32s3box, esp32c3, esp8266dev]
     steps:
       - uses: actions/checkout@v4
 

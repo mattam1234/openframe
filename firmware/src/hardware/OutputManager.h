@@ -149,7 +149,7 @@ private:
     void tickSteppers(uint32_t nowUs);
 
     bool initWs2812(size_t index);
-    void renderWs2812(size_t index);
+    void renderWs2812(size_t index, bool show = true);
     void tickAnimations(uint32_t nowMs);
     void emitOutputEvent(size_t index, const char* action);
 
