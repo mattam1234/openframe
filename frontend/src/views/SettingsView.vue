@@ -39,7 +39,8 @@
               v-model="form.device.api_token"
               label="API token (optional)"
               type="password"
-              hint="Set to require this token for API writes, uploads, deletes & config read. Blank = open on the LAN. Saved to this browser too so you stay logged in."
+              hint="Set to require this token for API writes, uploads, deletes & config read. Blank = open on the LAN. Saved to this browser too so you stay logged in. The device never shows a saved token again; leave it as is to keep it."
+              @focus="selectSecretOnFocus"
               persistent-hint
             />
           </v-card-text>
@@ -86,7 +87,7 @@
                     <v-text-field v-model="network.ssid" density="compact" hide-details variant="plain" />
                   </td>
                   <td style="min-width:180px">
-                    <v-text-field v-model="network.password" type="password" density="compact" hide-details variant="plain" />
+                    <v-text-field v-model="network.password" type="password" density="compact" hide-details variant="plain" @focus="selectSecretOnFocus" />
                   </td>
                   <td>
                     <v-btn icon="mdi-delete" variant="text" color="error" @click="removeNetwork(index)" />
@@ -140,7 +141,7 @@
             <v-text-field v-model="form.mqtt.host" label="Host" />
             <v-text-field v-model.number="form.mqtt.port" label="Port" type="number" />
             <v-text-field v-model="form.mqtt.user" label="Username" />
-            <v-text-field v-model="form.mqtt.password" label="Password" type="password" />
+            <v-text-field v-model="form.mqtt.password" label="Password" type="password" @focus="selectSecretOnFocus" />
             <v-text-field v-model="form.mqtt.base_topic" label="Base Topic" />
             <v-switch v-model="form.mqtt.tls" label="Use TLS (MQTTS)" color="primary" hide-details />
             <v-switch
@@ -179,6 +180,7 @@
             />
             <v-text-field
               v-model="form.nodelink.key"
+              @focus="selectSecretOnFocus"
               label="Shared key"
               type="password"
               hint="≤16 chars. Encrypts unicast mesh traffic; all nodes must match. Blank = off."
@@ -290,11 +292,11 @@
               <v-text-field v-model="form.notify.topic" label="Topic" hint="Subscribe to this topic in the ntfy app" persistent-hint />
             </template>
             <template v-else-if="form.notify.service === 'telegram'">
-              <v-text-field v-model="form.notify.token" label="Bot token" type="password" />
+              <v-text-field v-model="form.notify.token" label="Bot token" type="password" @focus="selectSecretOnFocus" />
               <v-text-field v-model="form.notify.chat_id" label="Chat ID" />
             </template>
             <template v-else-if="form.notify.service === 'pushover'">
-              <v-text-field v-model="form.notify.token" label="Application token" type="password" />
+              <v-text-field v-model="form.notify.token" label="Application token" type="password" @focus="selectSecretOnFocus" />
               <v-text-field v-model="form.notify.chat_id" label="User key" />
             </template>
             <template v-else>
@@ -460,7 +462,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useDeviceStore } from '../stores/device'
 import { useWebSocketStore } from '../stores/websocket'
-import api, { setApiToken } from '../api/client'
+import api, { setApiToken, SECRET_MASK, selectSecretOnFocus } from '../api/client'
 import { useRestartStore } from '../stores/restart'
 
 const deviceStore = useDeviceStore()
@@ -704,8 +706,9 @@ async function saveSettings() {
     payload.wifi.password = payload.wifi.networks[0]?.password || ''
 
     // Mirror the API token into this browser BEFORE the save reply so we keep
-    // access once the device starts enforcing it.
-    setApiToken(form.device.api_token)
+    // access once the device starts enforcing it. A masked value means the token
+    // is unchanged — keep whatever this browser already has stored.
+    if (form.device.api_token !== SECRET_MASK) setApiToken(form.device.api_token)
     const res = await deviceStore.saveConfig(payload)
     applyConfig(deviceStore.config)
     // MQTT/time-only changes apply live; WiFi/device/HA changes still reboot.

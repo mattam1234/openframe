@@ -8,6 +8,18 @@ const BASE = ''  // relative — proxied by Vite in dev, served from same origin
 // Bearer header on every request. Empty/unset → no header, so the LAN-trusted
 // default (no token configured on the device) is unaffected.
 const TOKEN_KEY = 'of_api_token'
+
+// The device never sends secrets back: a configured password/token/key arrives
+// as this mask, and posting the mask back means "keep the stored value" (see
+// ConfigManager::SECRET_MASK in the firmware). An empty string clears a secret.
+export const SECRET_MASK = '********'
+
+// Focus handler for secret inputs: select the whole value so typing replaces the
+// mask instead of appending to it (which would save "********abc" as the secret).
+export function selectSecretOnFocus(event) {
+  const input = event?.target
+  if (input && typeof input.select === 'function' && input.value === SECRET_MASK) input.select()
+}
 export function getApiToken() {
   try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
 }

@@ -201,6 +201,23 @@ public:
     void toJson(JsonDocument& doc) const;
     bool fromJson(const JsonDocument& doc);
 
+    // ── Secrets never leave the device ────────────────────────────────────────
+    // toJson() is the full config, secrets included: it is what gets written to
+    // flash and compared internally. Anything sent off the device (REST replies,
+    // WebSocket broadcasts, exported templates) must use toPublicJson(), which
+    // replaces every non-empty secret with SECRET_MASK.
+    //
+    // fromJson() understands the mask: a secret field that arrives holding
+    // SECRET_MASK keeps its stored value, so a client can read the config, change
+    // other fields and post it back without ever having seen the secrets. Sending
+    // "" still clears a secret; sending anything else replaces it.
+    //
+    // Secret fields: device.api_token, wifi.password, wifi.networks[].password,
+    // mqtt.password, ha.ws_token, nodelink.key, notify.token.
+    static constexpr const char* SECRET_MASK = "********";
+    void toPublicJson(JsonDocument& doc) const;
+    static void redactSecrets(JsonDocument& doc);
+
     // Mirror a config document into the NVS backup slot. Use after a code path
     // writes config.json directly (restore, raw FS upload) so the NVS shadow —
     // the boot-time fallback when LittleFS is unreadable — doesn't stay stale and

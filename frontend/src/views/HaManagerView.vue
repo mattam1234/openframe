@@ -160,6 +160,7 @@
               />
               <v-text-field
                 v-model="importForm.wsToken"
+                @focus="selectSecretOnFocus"
                 label="Long-lived access token"
                 type="password"
                 hint="HA → Profile → Long-lived access tokens. Stored on the device."
@@ -311,7 +312,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
-import api from '../api/client'
+import api, { selectSecretOnFocus } from '../api/client'
 import { useRestartStore } from '../stores/restart'
 
 const restartStore = useRestartStore()

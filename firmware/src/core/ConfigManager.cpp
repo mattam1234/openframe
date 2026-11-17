@@ -264,23 +264,58 @@ void ConfigManager::toJson(JsonDocument& doc) const {
     weather["units"]           = _config.weather.units;
 }
 
+void ConfigManager::toPublicJson(JsonDocument& doc) const {
+    toJson(doc);
+    redactSecrets(doc);
+}
+
+void ConfigManager::redactSecrets(JsonDocument& doc) {
+    // Mask a secret only when it is set, so "" still tells the UI "not configured".
+    auto mask = [](JsonVariant field) {
+        if (!field.is<const char*>()) return;
+        const char* value = field.as<const char*>();
+        if (value && value[0] != '\0') field.set(SECRET_MASK);
+    };
+    if (doc["device"].is<JsonObject>())   mask(doc["device"]["api_token"]);
+    if (doc["mqtt"].is<JsonObject>())     mask(doc["mqtt"]["password"]);
+    if (doc["ha"].is<JsonObject>())       mask(doc["ha"]["ws_token"]);
+    if (doc["nodelink"].is<JsonObject>()) mask(doc["nodelink"]["key"]);
+    if (doc["notify"].is<JsonObject>())   mask(doc["notify"]["token"]);
+    if (doc["wifi"].is<JsonObject>()) {
+        mask(doc["wifi"]["password"]);
+        if (doc["wifi"]["networks"].is<JsonArray>()) {
+            for (JsonVariant net : doc["wifi"]["networks"].as<JsonArray>()) {
+                if (net.is<JsonObject>()) mask(net["password"]);
+            }
+        }
+    }
+}
+
 bool ConfigManager::fromJson(const JsonDocument& doc) {
     of_lock_guard<of_recursive_mutex> lock(_mtx);
+    // A secret that arrives as the mask means "unchanged" (see SECRET_MASK).
+    auto secret = [](const String& incoming, const String& current) -> String {
+        return incoming == SECRET_MASK ? current : incoming;
+    };
     if (doc["device"].is<JsonObjectConst>()) {
         _config.device.name      = doc["device"]["name"]  | _config.device.name;
         _config.device.boardType = doc["device"]["board"] | _config.device.boardType;
-        _config.device.apiToken  = doc["device"]["api_token"] | _config.device.apiToken;
+        _config.device.apiToken  = secret(doc["device"]["api_token"] | _config.device.apiToken,
+                                          _config.device.apiToken);
         _config.device.resetPin    = doc["device"]["reset_pin"]     | _config.device.resetPin;
         _config.device.resetHoldMs = doc["device"]["reset_hold_ms"] | _config.device.resetHoldMs;
     }
     if (doc["wifi"].is<JsonObjectConst>()) {
         JsonObjectConst wifiObj = doc["wifi"].as<JsonObjectConst>();
         const String legacySsid = wifiObj["ssid"] | _config.wifi.ssid;
-        const String legacyPassword = wifiObj["password"] | _config.wifi.password;
+        const String legacyPassword = secret(wifiObj["password"] | _config.wifi.password,
+                                             _config.wifi.password);
 
         _config.wifi.apMode = wifiObj["ap_mode"] | _config.wifi.apMode;
 
         if (wifiObj["networks"].is<JsonArrayConst>()) {
+            // Masked passwords are matched back to the stored network by SSID.
+            const std::vector<WifiNetworkConfig> previousNetworks = _config.wifi.networks;
             _config.wifi.networks.clear();
             for (JsonVariantConst netVar : wifiObj["networks"].as<JsonArrayConst>()) {
                 if (!netVar.is<JsonObjectConst>()) continue;
@@ -290,6 +325,12 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
                 WifiNetworkConfig net;
                 net.ssid = ssid;
                 net.password = netVar["password"] | String("");
+                if (net.password == SECRET_MASK) {
+                    net.password = "";   // unknown SSID: nothing to keep
+                    for (const auto& old : previousNetworks) {
+                        if (old.ssid == ssid) { net.password = old.password; break; }
+                    }
+                }
                 _config.wifi.networks.push_back(net);
             }
 
@@ -333,7 +374,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.mqtt.host      = doc["mqtt"]["host"]       | String("");
         _config.mqtt.port      = doc["mqtt"]["port"]       | 1883;
         _config.mqtt.user      = doc["mqtt"]["user"]       | String("");
-        _config.mqtt.password  = doc["mqtt"]["password"]   | String("");
+        _config.mqtt.password  = secret(doc["mqtt"]["password"] | String(""), _config.mqtt.password);
         _config.mqtt.baseTopic = doc["mqtt"]["base_topic"] | String("openframe");
         _config.mqtt.tls         = doc["mqtt"]["tls"]          | false;
         _config.mqtt.tlsInsecure = doc["mqtt"]["tls_insecure"] | false;
@@ -346,7 +387,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.ha.importPrefix    = doc["ha"]["import_prefix"]    | String("homeassistant");
         _config.ha.wsHost          = doc["ha"]["ws_host"]          | String("");
         _config.ha.wsPort          = doc["ha"]["ws_port"]          | 8123;
-        _config.ha.wsToken         = doc["ha"]["ws_token"]         | String("");
+        _config.ha.wsToken         = secret(doc["ha"]["ws_token"] | String(""), _config.ha.wsToken);
         _config.ha.wsTls           = doc["ha"]["ws_tls"]           | false;
     }
     if (doc["ota"].is<JsonObjectConst>()) {
@@ -358,7 +399,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.nodelink.enabled = doc["nodelink"]["enabled"] | false;
         _config.nodelink.channel = doc["nodelink"]["channel"] | 0;
         _config.nodelink.gateway = doc["nodelink"]["gateway"] | false;
-        _config.nodelink.key     = doc["nodelink"]["key"] | String("");
+        _config.nodelink.key     = secret(doc["nodelink"]["key"] | String(""), _config.nodelink.key);
     }
     if (doc["time"].is<JsonObjectConst>()) {
         _config.time.ntpServer  = doc["time"]["ntp_server"]  | String("pool.ntp.org");
@@ -381,7 +422,7 @@ bool ConfigManager::fromJson(const JsonDocument& doc) {
         _config.notify.service  = doc["notify"]["service"]   | String("ntfy");
         _config.notify.url      = doc["notify"]["url"]       | String("");
         _config.notify.topic    = doc["notify"]["topic"]     | String("");
-        _config.notify.token    = doc["notify"]["token"]     | String("");
+        _config.notify.token    = secret(doc["notify"]["token"] | String(""), _config.notify.token);
         _config.notify.chatId   = doc["notify"]["chat_id"]   | String("");
         _config.notify.minLevel = static_cast<uint8_t>(doc["notify"]["min_level"] | 2);
         if (_config.notify.minLevel > 3) _config.notify.minLevel = 3;
