@@ -14,7 +14,19 @@ export class RateLimiter {
     }
     recent.push(now);
     this.hits.set(key, recent);
+    if (this.hits.size > RateLimiter.PRUNE_ABOVE) this.prune(now);
     return true;
+  }
+
+  // Keys are only trimmed when they are seen again, so a client that never
+  // returns would otherwise stay in the map forever. Drop fully-expired keys
+  // once the map gets large.
+  private static readonly PRUNE_ABOVE = 1000;
+
+  private prune(now: number): void {
+    for (const [key, times] of this.hits) {
+      if (!times.some((t) => now - t < this.windowMs)) this.hits.delete(key);
+    }
   }
 }
 

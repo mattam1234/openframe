@@ -94,6 +94,9 @@ export function createServer(
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   if (haveWeb) {
+    // Vite content-hashes everything under assets/, so those can be cached
+    // forever; index.html (below) keeps the default revalidate-every-load.
+    app.use('/app/assets', express.static(path.join(webDist, 'assets'), { immutable: true, maxAge: '1y' }));
     app.use('/app', express.static(webDist));
     app.get('/app/*', (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
   }
@@ -143,7 +146,7 @@ export function createServer(
   });
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, mqtt: bridge.connected, devices: registry.list().length });
+    res.json({ ok: true, mqtt: bridge.connected, devices: registry.size });
   });
 
   // Prometheus exposition for the whole fleet (#65). Not under /api, so it's

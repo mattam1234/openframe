@@ -11,6 +11,10 @@ export class DeviceRegistry extends EventEmitter {
     super();
   }
 
+  get size(): number {
+    return this.devices.size;
+  }
+
   list(): Device[] {
     return [...this.devices.values()].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
   }
