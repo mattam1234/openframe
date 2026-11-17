@@ -130,7 +130,7 @@
           </button>
         </div>
         <div class="ld-savebar">
-          <v-btn color="primary" :loading="savingInputs" :disabled="!loaded.inputs" prepend-icon="mdi-content-save" @click="saveInputs">
+          <v-btn color="primary" :loading="savingInputs" :disabled="!loaded.inputs || restartStore.restarting" prepend-icon="mdi-content-save" @click="saveInputs">
             Save inputs
           </v-btn>
         </div>
@@ -245,7 +245,7 @@
           </button>
         </div>
         <div class="ld-savebar">
-          <v-btn color="amber-darken-2" :loading="savingOutputs" :disabled="!loaded.outputs" prepend-icon="mdi-content-save" @click="saveOutputs">
+          <v-btn color="amber-darken-2" :loading="savingOutputs" :disabled="!loaded.outputs || restartStore.restarting" prepend-icon="mdi-content-save" @click="saveOutputs">
             Save outputs
           </v-btn>
         </div>
@@ -273,7 +273,7 @@
           </button>
         </div>
         <div class="ld-savebar">
-          <v-btn color="teal" :loading="savingSensors" :disabled="!loaded.sensors" prepend-icon="mdi-content-save" @click="saveSensors">
+          <v-btn color="teal" :loading="savingSensors" :disabled="!loaded.sensors || restartStore.restarting" prepend-icon="mdi-content-save" @click="saveSensors">
             Save sensors
           </v-btn>
         </div>
@@ -401,7 +401,7 @@
           </button>
         </div>
         <div class="ld-savebar">
-          <v-btn color="indigo" :loading="savingDisplays" :disabled="!loaded.displays" prepend-icon="mdi-content-save" @click="saveDisplays">
+          <v-btn color="indigo" :loading="savingDisplays" :disabled="!loaded.displays || restartStore.restarting" prepend-icon="mdi-content-save" @click="saveDisplays">
             Save displays
           </v-btn>
         </div>
@@ -415,9 +415,28 @@ import { computed, onMounted, ref } from 'vue'
 import api from '../api/client'
 import { minutesToHhmm, hhmmToMinutes } from '../lib/timeFormat'
 import { pinItems } from '../utils/boardPins'
+import { useRestartStore } from '../stores/restart'
 
 const loading = ref(false)
 const statusMessage = ref(null)
+const restartStore = useRestartStore()
+
+// Report a finished save. Outputs (and anything else the device answers with
+// restartRequired) reboot the device ~1.5 s after the reply; rather than leave
+// the page firing requests into the reboot, wait here until it answers again.
+// The form already holds what was just saved, so nothing is reloaded — unsaved
+// edits in the other sections are left alone.
+async function finishSave(res, label) {
+  if (!res?.restartRequired) {
+    statusMessage.value = { type: 'success', text: res?.message || `${label} saved and applied.` }
+    return
+  }
+  statusMessage.value = { type: 'info', text: `${label} saved. The device is restarting to apply — this takes a few seconds…` }
+  const back = await restartStore.awaitRestart()
+  statusMessage.value = back
+    ? { type: 'success', text: `${label} saved. The device has restarted and the change is applied.` }
+    : { type: 'warning', text: `${label} saved, but the device has not come back online yet. Check its power and network, then press Refresh.` }
+}
 const savingInputs = ref(false)
 const savingOutputs = ref(false)
 const savingSensors = ref(false)
@@ -536,7 +555,7 @@ async function saveInputs() {
     const encoders = inputs.value.filter(i => i.subtype === 'encoder')
       .map(({ subtype, ...rest }) => ({ pullup: true, ...rest }))
     const res = await api.post('/api/inputs', { digital, analog, encoders, keypads: keypadsRaw.value })
-    statusMessage.value = { type: 'success', text: res?.message || (res?.restartRequired ? 'Inputs saved. Restart device to apply.' : 'Inputs saved and applied.') }
+    await finishSave(res, 'Inputs')
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -553,7 +572,7 @@ async function saveOutputs() {
   statusMessage.value = null
   try {
     const res = await api.post('/api/outputs', { outputs: outputs.value })
-    statusMessage.value = { type: 'success', text: res?.message || 'Outputs saved. Restart device to apply.' }
+    await finishSave(res, 'Outputs')
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -570,7 +589,7 @@ async function saveSensors() {
   statusMessage.value = null
   try {
     const res = await api.post('/api/sensors', { sensors: sensors.value })
-    statusMessage.value = { type: 'success', text: res?.message || (res?.restartRequired ? 'Sensors saved. Restart device to apply.' : 'Sensors saved and applied.') }
+    await finishSave(res, 'Sensors')
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {
@@ -588,7 +607,7 @@ async function saveDisplays() {
   try {
     const res = await api.post('/api/displays', { displays: displays.value })
     displaysSeeded.value = false  // now persisted — no longer a board default
-    statusMessage.value = { type: 'success', text: res?.message || (res?.restartRequired ? 'Displays saved. Restart device to apply.' : 'Displays saved and applied.') }
+    await finishSave(res, 'Displays')
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Save failed' }
   } finally {

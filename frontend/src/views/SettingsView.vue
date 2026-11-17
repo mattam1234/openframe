@@ -461,8 +461,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useDeviceStore } from '../stores/device'
 import { useWebSocketStore } from '../stores/websocket'
 import api, { setApiToken } from '../api/client'
+import { useRestartStore } from '../stores/restart'
 
 const deviceStore = useDeviceStore()
+const restartStore = useRestartStore()
 const wsStore = useWebSocketStore()
 
 // Board capability flags from GET /api/status `features` (weather, push, …).
@@ -707,11 +709,16 @@ async function saveSettings() {
     const res = await deviceStore.saveConfig(payload)
     applyConfig(deviceStore.config)
     // MQTT/time-only changes apply live; WiFi/device/HA changes still reboot.
-    statusMessage.value = {
-      type: 'success',
-      text: res?.restartRequired
-        ? 'Settings saved. The device is restarting to apply changes.'
-        : (res?.message || 'Settings saved and applied.'),
+    if (res?.restartRequired) {
+      // The device reboots ~1.5 s after replying. Wait for it rather than leave
+      // the page talking to a device that is down.
+      statusMessage.value = { type: 'info', text: 'Settings saved. The device is restarting to apply changes…' }
+      const back = await restartStore.awaitRestart()
+      statusMessage.value = back
+        ? { type: 'success', text: 'Settings saved. The device has restarted and the changes are applied.' }
+        : { type: 'warning', text: 'Settings saved, but the device has not come back at this address. If you changed WiFi or network settings it may have a new IP.' }
+    } else {
+      statusMessage.value = { type: 'success', text: res?.message || 'Settings saved and applied.' }
     }
   } catch (error) {
     statusMessage.value = {

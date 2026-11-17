@@ -55,11 +55,11 @@
           @click="toggleTheme"
         />
         <v-chip
-          :color="wsStore.connected ? 'success' : 'error'"
+          :color="restartStore.restarting ? 'warning' : (wsStore.connected ? 'success' : 'error')"
           size="small"
           class="mr-2"
         >
-          {{ wsStore.connected ? 'Connected' : 'Offline' }}
+          {{ restartStore.restarting ? 'Restarting…' : (wsStore.connected ? 'Connected' : 'Offline') }}
         </v-chip>
       </template>
     </v-app-bar>
@@ -78,6 +78,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useDisplay, useTheme } from 'vuetify'
 import { useWebSocketStore } from './stores/websocket'
+import { useRestartStore } from './stores/restart'
 import api from './api/client'
 import CommandPalette from './components/CommandPalette.vue'
 
@@ -107,6 +108,8 @@ function handleNavClick() {
 
 const wsStore = useWebSocketStore()
 wsStore.connect()
+// A save that reboots the device flips this, so the status chip says so.
+const restartStore = useRestartStore()
 
 // Touch calibration is only meaningful on builds that drive a touch controller
 // (the /api/touch endpoint 404s elsewhere), so the nav item appears only after a
