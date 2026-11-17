@@ -4,6 +4,8 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import zlib from 'node:zlib';
+import { WebSocket } from 'ws';
 import { createServer as createBrokerServer } from 'aedes-server-factory';
 import { Aedes } from 'aedes';
 import mqtt, { MqttClient } from 'mqtt';
@@ -28,6 +30,17 @@ const api = (p: string) => `http://127.0.0.1:${PORT}${p}`;
 const getJson = async (p: string) => (await fetch(api(p))).json() as any;
 const postJson = async (p: string, body: unknown) =>
   fetch(api(p), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+// Raw GET (no transparent decompression, unlike fetch) so tests can inspect the
+// bytes and headers actually sent on the wire.
+const rawGet = (p: string, headers: Record<string, string> = {}) =>
+  new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+    http.get(api(p), { headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
 
 describe('CMS integration', () => {
   let aedes: any;
@@ -180,6 +193,59 @@ describe('CMS integration', () => {
     assert.equal(dep.url, expected);
     assert.equal(lastCmd.type, 'ota_url');
     assert.equal(lastCmd.payload.url, expected);
+  });
+
+  it('gzips large API JSON when the client accepts it; small bodies stay plain', async () => {
+    // Push /api/devices well over the 1 kB compression threshold.
+    const notes = 'lobby frame, north wall. '.repeat(60);
+    const put = await fetch(api(`/api/devices/${DEV}/notes`), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes }),
+    });
+    assert.equal(put.status, 200);
+
+    const gz = await rawGet('/api/devices', { 'Accept-Encoding': 'gzip' });
+    assert.equal(gz.status, 200);
+    assert.equal(gz.headers['content-encoding'], 'gzip');
+    assert.match(String(gz.headers.vary), /Accept-Encoding/i);
+    const decoded = JSON.parse(zlib.gunzipSync(gz.body).toString('utf8'));
+    assert.equal(decoded.devices.find((x: any) => x.deviceId === DEV).notes, notes);
+    assert.ok(gz.body.length < Buffer.byteLength(JSON.stringify(decoded)), 'compressed is smaller on the wire');
+
+    // Client does not accept compression -> identity.
+    const plain = await rawGet('/api/devices', { 'Accept-Encoding': 'identity' });
+    assert.equal(plain.headers['content-encoding'], undefined);
+    assert.equal(JSON.parse(plain.body.toString('utf8')).devices.length, decoded.devices.length);
+
+    // Under the threshold -> not worth compressing.
+    const small = await rawGet('/api/health', { 'Accept-Encoding': 'gzip' });
+    assert.equal(small.headers['content-encoding'], undefined);
+  });
+
+  it('firmware downloads are never compressed and keep their Content-Length', async () => {
+    const bytes = Buffer.alloc(8192, 0x41); // highly compressible on purpose
+    const fd = new FormData();
+    fd.append('file', new Blob([bytes]), 'fw-big.bin');
+    assert.equal((await fetch(api('/api/firmware'), { method: 'POST', body: fd })).status, 201);
+
+    const dl = await rawGet('/firmware/fw-big.bin', { 'Accept-Encoding': 'gzip, deflate, br' });
+    assert.equal(dl.status, 200);
+    assert.equal(dl.headers['content-encoding'], undefined);
+    assert.equal(dl.headers['content-length'], String(bytes.length));
+    assert.ok(dl.body.equals(bytes), 'raw image bytes served untouched');
+  });
+
+  it('WebSocket upgrade still works behind the compression middleware', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+    try {
+      const first = await new Promise<any>((resolve, reject) => {
+        ws.once('message', (m) => resolve(JSON.parse(m.toString())));
+        ws.once('error', reject);
+      });
+      assert.equal(first.type, 'snapshot');
+      assert.ok(first.devices.some((x: any) => x.deviceId === DEV));
+    } finally {
+      ws.terminate();
+    }
   });
 
   it('provision endpoint returns a QR data URL and a decodable link', async () => {
