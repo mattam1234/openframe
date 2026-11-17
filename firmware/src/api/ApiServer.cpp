@@ -381,7 +381,14 @@ void ApiServer::loop() {
     }
 
     if (_lastHealthPublishMs == 0 || (nowMs - _lastHealthPublishMs) >= HEALTH_PUBLISH_INTERVAL_MS) {
-        publishHealthUpdate();
+        // The periodic health frame only feeds WebSocket clients. With none
+        // connected, skip building the ~1 KB status JSON (and the event copy of
+        // it) every 5 s — that churn fragments the heap for nothing.
+        if (_ws.count() == 0) {
+            _lastHealthPublishMs = nowMs;
+        } else {
+            publishHealthUpdate();
+        }
     }
 }
 
@@ -811,9 +818,11 @@ void ApiServer::registerWebSocket(AsyncWebServer& server) {
 }
 
 void ApiServer::sendStatus(AsyncWebServerRequest* request) const {
-    JsonDocument doc;
-    deserializeJson(doc, buildStatusJson());
-    sendJson(request, doc);
+    if (!request) return;
+    // Send the built JSON as-is. Parsing it back into a document just to
+    // serialize it again kept three status-sized heap blocks alive at once (see
+    // sendVariables for what that does on a fragmented heap).
+    request->send(200, "application/json", buildStatusJson());
 }
 
 void ApiServer::sendMetrics(AsyncWebServerRequest* request) const {
@@ -1338,9 +1347,7 @@ void ApiServer::handleWebSocketMessage(AsyncWebSocketClient* client, const Strin
         serializeJson(payload, payloadString);
         EventBus::instance().publish(EventType::ActionTriggered, sourceId, payloadString);
     } else if (type == "ping") {
-        JsonDocument healthDoc;
-        deserializeJson(healthDoc, buildStatusJson());
-        sendFrame(client, "health", healthDoc);
+        sendRawFrame(client, "health", buildStatusJson());
         return;
     } else {
         response["ok"] = false;
@@ -1368,13 +1375,13 @@ void ApiServer::sendInitialState(AsyncWebSocketClient* client) const {
     // once memory recovers.
     if (!wsSendSafe()) return;
 
-    JsonDocument statusDoc;
-    deserializeJson(statusDoc, buildStatusJson());
-    sendFrame(client, "health", statusDoc);
+    // Each snapshot is built once and sent as-is — no string → re-parse →
+    // re-serialize round trips, which held several large blocks alive at once on
+    // every WebSocket connect (the async task's worst-case heap moment).
+    sendRawFrame(client, "health", buildStatusJson());
 
-    const String variablesJson = buildVariablesJson();
     JsonDocument variablesDoc;
-    deserializeJson(variablesDoc, variablesJson);
+    buildVariablesDoc(variablesDoc);
     String variablePayload;
     serializeJson(variablesDoc["variables"], variablePayload);
     sendRawFrame(client, "variable_snapshot", variablePayload);
@@ -1401,6 +1408,10 @@ void ApiServer::publishHealthUpdate() {
 
 void ApiServer::onEvent(const Event& event) {
     if (!_started) return;
+    // Everything below only builds and broadcasts WebSocket frames. This runs
+    // for every event on the bus (each variable change, sensor poll, analog
+    // sample), so don't build JSON that nobody is connected to receive.
+    if (_ws.count() == 0) return;
 
     if (event.type == EventType::SystemHealthUpdate) {
         broadcastRawFrame("health", event.payload);
