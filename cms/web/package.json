@@ -13,7 +13,7 @@
     "lint": "eslint . --ext .vue,.js"
   },
   "dependencies": {
-    "@mdi/font": "^7.4.47",
+    "@mdi/js": "^7.4.47",
     "vue": "^3.4.0",
     "vue-router": "^4.3.0",
     "vuetify": "^3.6.0"
