@@ -2259,6 +2259,28 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
         }
     }
 
+    // Applying outputs needs a reboot, so don't pay for one when the save changes
+    // nothing (re-saving the form, or saving after an edit that was undone). The
+    // stored file was written by this same code, so identical config serializes
+    // identically; any difference just takes the normal save-and-restart path.
+    source.clear();
+    {
+        JsonDocument current;
+        if (StorageManager::instance().readJson(OF_OUTPUTS_PATH, current)) {
+            String currentText, newText;
+            serializeJson(current, currentText);
+            serializeJson(toSave, newText);
+            if (currentText == newText) {
+                JsonDocument unchanged;
+                unchanged["ok"] = true;
+                unchanged["restartRequired"] = false;
+                unchanged["message"] = "Outputs unchanged — nothing to apply.";
+                sendJson(request, unchanged);
+                return;
+            }
+        }
+    }
+
     if (!StorageManager::instance().writeJson(OF_OUTPUTS_PATH, toSave)) {
         sendError(request, 500, "Failed to save outputs");
         return;
