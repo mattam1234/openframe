@@ -4,6 +4,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import api from './api'
 import { filterBySite, sitesOf } from './lib/fleet'
+import { buildIndex, createDeviceBatcher, upsertInto } from './lib/deviceBatch'
+import { pushLog, seedLog } from './lib/logWindow'
 
 const devices = ref([])
 const connected = ref(false)
@@ -22,21 +24,21 @@ const heapHistory = reactive({})
 
 // Per-device rolling window of the Warning+ log lines devices mirror over MQTT,
 // fed live from `log` WS frames; DeviceView seeds it from GET /api/devices/:id/logs.
+// Entries carry a client-side `_seq` (see lib/logWindow) for use as a list key.
 const deviceLogs = reactive({})
 const MAX_LOG_LINES = 250
 
 function recordLog(deviceId, entry) {
   if (!deviceId || !entry) return
   const buf = deviceLogs[deviceId] || (deviceLogs[deviceId] = [])
-  buf.push(entry)
-  if (buf.length > MAX_LOG_LINES) buf.shift()
+  pushLog(buf, entry, MAX_LOG_LINES)
 }
 
 // Replace the window with the server's copy (REST seed) — it already contains
 // anything that also arrived over the WS, so replacing avoids duplicates.
 function seedLogs(deviceId, entries) {
   if (!deviceId) return
-  deviceLogs[deviceId] = (entries || []).slice(-MAX_LOG_LINES)
+  deviceLogs[deviceId] = seedLog(entries, MAX_LOG_LINES)
 }
 
 let socket = null
@@ -53,11 +55,40 @@ function recordHeap(d) {
   if (buf.length > 20) buf.shift()
 }
 
+// deviceId → index into `devices`, rebuilt whenever the list is replaced, so a
+// live update doesn't scan the fleet to find its row.
+let deviceIndex = new Map()
+
+// Live `device` frames are coalesced per deviceId and applied together once per
+// animation frame, so the computeds that iterate the fleet (sites, the grid's
+// filter/sort, topology) re-run once per frame rather than once per WS message.
+const batcher = createDeviceBatcher((batch) => {
+  const list = devices.value
+  for (const d of batch) upsertInto(list, deviceIndex, d)
+})
+
+// Replace the whole list (REST seed / WS snapshot). Anything still queued is
+// older than the new list, so it is dropped.
+function setDevices(list) {
+  batcher.clear()
+  devices.value = list
+  deviceIndex = buildIndex(list)
+  for (const d of list) recordHeap(d)
+}
+
+// Synchronous single-device update for callers that need it applied now.
 function upsert(device) {
-  const i = devices.value.findIndex((d) => d.deviceId === device.deviceId)
-  if (i >= 0) devices.value[i] = device
-  else devices.value.push(device)
+  batcher.discard(device.deviceId)
+  upsertInto(devices.value, deviceIndex, device)
   recordHeap(device)
+}
+
+// A live frame: sample the heap sparkline per frame received (not per flush),
+// but defer the list update to the next batch.
+function onDeviceFrame(device) {
+  if (!device || device.deviceId == null) return
+  recordHeap(device)
+  batcher.queue(device)
 }
 
 function connect() {
@@ -73,10 +104,9 @@ function connect() {
     let msg
     try { msg = JSON.parse(ev.data) } catch { return }
     if (msg.type === 'snapshot') {
-      devices.value = msg.devices || []
-      for (const d of devices.value) recordHeap(d)
+      setDevices(msg.devices || [])
     } else if (msg.type === 'device') {
-      upsert(msg.device)
+      onDeviceFrame(msg.device)
     } else if (msg.type === 'alerts') {
       activeAlerts.value = msg.active || []
     } else if (msg.type === 'alert') {
@@ -95,8 +125,7 @@ function connect() {
 async function init() {
   if (started) return
   started = true
-  try { devices.value = (await api.get('/api/devices')).devices || [] } catch { /* WS fills in */ }
-  for (const d of devices.value) recordHeap(d)
+  try { setDevices((await api.get('/api/devices')).devices || []) } catch { /* WS fills in */ }
   connect()
 }
 
