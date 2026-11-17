@@ -71,7 +71,7 @@ jobs:
 
       - name: Lint
         working-directory: frontend
-        run: npx eslint . --ext .vue,.js
+        run: npm run lint
 
       - name: Unit tests (Vitest)
         working-directory: frontend
