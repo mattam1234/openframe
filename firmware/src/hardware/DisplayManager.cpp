@@ -1122,7 +1122,15 @@ public:
         }
 
         _port = &_selectSerial(config.uartNum);
+#if defined(ESP8266)
+        // The ESP8266 core's begin() takes (baud, config, mode, tx_pin): RX pins are
+        // fixed per UART and only TX is selectable. The ESP32-style call below
+        // compiled here only under -fpermissive, passing rx_pin as the UART *mode*.
+        _port->begin(config.baudRate, SERIAL_8N1, SERIAL_FULL,
+                     static_cast<uint8_t>(config.txPin));
+#else
         _port->begin(config.baudRate, SERIAL_8N1, config.rxPin, config.txPin);
+#endif
         delay(100);
 
         // Suppress startup splash
