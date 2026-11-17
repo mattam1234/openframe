@@ -809,9 +809,29 @@ async function factoryReset() {
   confirmReset.value = false
   try {
     await api.post('/api/factory-reset')
-    statusMessage.value = { type: 'success', text: 'Factory reset done (WiFi kept) — device is rebooting.' }
+    await reloadAfterRestart('Factory reset done (WiFi kept)')
   } catch (e) {
     statusMessage.value = { type: 'error', text: e.message || 'Factory reset failed' }
+  }
+}
+
+// Factory reset and restore both reboot the device and change its config under
+// us: wait for it to answer again, then reload the form so it shows what the
+// device is actually running rather than the pre-reset values.
+async function reloadAfterRestart(label) {
+  statusMessage.value = { type: 'info', text: `${label}. The device is restarting…` }
+  const back = await restartStore.awaitRestart()
+  if (!back) {
+    statusMessage.value = { type: 'warning', text: `${label}, but the device has not come back at this address yet. Reload this page once it is online.` }
+    return
+  }
+  try {
+    await deviceStore.fetchConfig()
+    applyConfig(deviceStore.config)
+    await loadBackups()
+    statusMessage.value = { type: 'success', text: `${label}. The device has restarted.` }
+  } catch (e) {
+    statusMessage.value = { type: 'warning', text: `${label} and the device restarted, but reloading the settings failed: ${e.message || e}` }
   }
 }
 
@@ -834,7 +854,7 @@ async function createBackup() {
 async function restoreBackup(id) {
   try {
     await api.post('/api/config/restore', { id })
-    statusMessage.value = { type: 'success', text: 'Config restored — device is rebooting.' }
+    await reloadAfterRestart('Config restored')
   } catch (e) {
     statusMessage.value = { type: 'error', text: e.message || 'Restore failed' }
   }
