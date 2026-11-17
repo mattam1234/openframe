@@ -15,6 +15,11 @@ export default defineConfig({
     // Shared component library, consumed as source by both the device UI and CMS (#45).
     alias: { '@shared': fileURLToPath(new URL('../../shared/ui', import.meta.url)) },
   },
+  // Vitest: unit specs live under src/. The Playwright E2E specs in e2e/ (which
+  // import @playwright/test) run separately via `npm run test:e2e`.
+  test: {
+    include: ['src/**/*.{test,spec}.js'],
+  },
   server: {
     // Allow reading the shared lib, which lives outside this app's root.
     fs: { allow: ['../..'] },
