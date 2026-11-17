@@ -2207,6 +2207,24 @@ void ApiServer::handleInputsUpdate(AsyncWebServerRequest* request, const String&
     sendJson(request, response);
 }
 
+// True when every WS2812 strip in `before` is still a WS2812 on the same data
+// pin in `after` (see handleOutputsUpdate for why that matters).
+static bool outputsHotAppliable(JsonArrayConst before, JsonArrayConst after) {
+    for (JsonObjectConst oldOut : before) {
+        if (String(oldOut["type"] | "") != "ws2812") continue;
+        const int pin = oldOut["pin"] | 0;
+        bool stillThere = false;
+        for (JsonObjectConst newOut : after) {
+            if (String(newOut["type"] | "") == "ws2812" && (newOut["pin"] | 0) == pin) {
+                stillThere = true;
+                break;
+            }
+        }
+        if (!stillThere) return false;
+    }
+    return true;
+}
+
 void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String& body) {
     JsonDocument source;
     if (deserializeJson(source, body)) {
@@ -2259,14 +2277,25 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
         }
     }
 
-    // Applying outputs needs a reboot, so don't pay for one when the save changes
-    // nothing (re-saving the form, or saving after an edit that was undone). The
-    // stored file was written by this same code, so identical config serializes
-    // identically; any difference just takes the normal save-and-restart path.
+    // A save that changes nothing needs no work at all (re-saving the form, or
+    // saving after an edit that was undone). The stored file was written by this
+    // same code, so identical config serializes identically.
+    //
+    // Otherwise outputs are re-applied live (OutputManager::requestReload), with
+    // two exceptions that still need a reboot:
+    //  - a WS2812 strip was removed or moved to another pin: FastLED cannot
+    //    unregister a strip, so it would keep driving the old pin;
+    //  - Home Assistant is enabled: its entities are registered from the
+    //    outputs at startup and are not re-announced at runtime.
     source.clear();
+    bool hotApplicable = false;
     {
         JsonDocument current;
         if (StorageManager::instance().readJson(OF_OUTPUTS_PATH, current)) {
+            hotApplicable = !ConfigManager::instance().config().ha.enabled
+                         && !HealthMonitor::instance().inSafeMode()   // outputs aren't running
+                         && outputsHotAppliable(current["outputs"].as<JsonArrayConst>(),
+                                                toSave["outputs"].as<JsonArrayConst>());
             String currentText, newText;
             serializeJson(current, currentText);
             serializeJson(toSave, newText);
@@ -2288,6 +2317,13 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
 
     JsonDocument response;
     response["ok"] = true;
+    if (hotApplicable) {
+        OutputManager::instance().requestReload();   // apply live - no reboot
+        response["restartRequired"] = false;
+        response["message"] = "Outputs saved and applied.";
+        sendJson(request, response);
+        return;
+    }
     response["restartRequired"] = true;
     response["message"] = "Outputs saved. Restarting to apply.";
     sendJson(request, response);

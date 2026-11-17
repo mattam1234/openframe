@@ -3,7 +3,12 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <vector>
+#include <map>
+#include <set>
+#include <memory>
+#include <functional>
 #include <FastLED.h>
+#include "../core/Lock.h"
 #include "../core/StorageManager.h"
 #include "../core/EventBus.h"
 #include "../core/Logger.h"
@@ -105,6 +110,11 @@ public:
     bool begin();
     void loop();
 
+    // Re-read outputs.json and re-apply it without a reboot. Safe to call from
+    // any task; the work happens in loop() on the main task. Not every change
+    // can be applied live — see ApiServer::handleOutputsUpdate for the rule.
+    void requestReload();
+
     bool setDigital(const String& id, bool on);
     bool setBrightness(const String& id, uint8_t brightness);
     bool setRgb(const String& id, uint8_t r, uint8_t g, uint8_t b);
@@ -134,7 +144,38 @@ public:
 private:
     OutputManager() = default;
 
-    bool loadConfig();
+    // ── Threading model ───────────────────────────────────────────────────────
+    // Output state, the pins and FastLED are only ever touched from the loop
+    // task. The public setters can be called from anywhere (the web server and
+    // WebSocket handlers run on the AsyncTCP task on ESP32): off the loop task
+    // they are queued and executed by loop(), and the caller waits briefly for
+    // the result. That removes the web-task/loop-task races on FastLED and the
+    // state vectors without holding a lock across event dispatch, and it is
+    // what makes reload() safe: nothing else can be mid-operation while the
+    // loop task swaps the configuration.
+    //
+    // The few read-only accessors used off the loop task (fillStateJson,
+    // getAnimation) take _structMtx, which reload() holds only for the instant
+    // it swaps the vectors - never while calling out to other managers.
+    struct PendingResult {
+        volatile bool done  = false;
+        bool          value = false;
+    };
+    struct PendingCall {
+        std::function<bool()>          fn;
+        std::shared_ptr<PendingResult> result;
+    };
+    bool onLoopTask() const;
+    bool runOnLoop(std::function<bool()> fn);
+    void drainPending();
+
+    void reload();
+    void teardownOutputs();
+    bool setAnimationNow(const String& id, LedAnimation animation, uint8_t speed);
+    bool setPositionNow(const String& id, int32_t steps);
+    void onMirrorVariable(const class Variable& var);
+
+    bool loadConfig(std::vector<OutputConfig>& out);
     void setupOutputs();
     void setupOutput(size_t index);
 
@@ -169,7 +210,30 @@ private:
 
     std::vector<OutputConfig> _configs;
     std::vector<OutputState>  _states;
-    std::vector<std::vector<CRGB>> _wsLedsPerOutput;
 
+    // WS2812 strips, keyed by data pin. FastLED keeps a pointer to each strip's
+    // buffer forever and offers no way to unregister a controller, so both live
+    // here for the lifetime of the firmware: a reload re-points the existing
+    // controller at the (possibly resized) buffer instead of adding a second one.
+    struct WsStrip {
+        CLEDController*   controller = nullptr;
+        std::vector<CRGB> leds;
+    };
+    std::map<uint8_t, WsStrip> _wsStrips;
+
+    // Mirror variables we defined (removed + re-defined on reload) and the ids we
+    // have subscribed to (subscriptions outlive remove(), so subscribe only once).
+    std::vector<String> _definedVarIds;
+    std::set<String>    _subscribedVarIds;
+
+    mutable of_recursive_mutex _structMtx;   // guards the shape of _configs/_states
+    of_recursive_mutex         _queueMtx;    // guards _pending
+    std::vector<PendingCall>   _pending;
+    volatile bool              _reloadPending = false;
+#if defined(ESP32)
+    TaskHandle_t               _loopTask = nullptr;
+#endif
+
+    static constexpr uint32_t RUN_ON_LOOP_WAIT_MS = 300;
     static constexpr const char* TAG = "OutputMgr";
 };
