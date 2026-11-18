@@ -3,6 +3,7 @@ import { DeviceRegistry } from './registry';
 import { MqttBridge } from './mqtt';
 import { createServer, resolveTargets, fanOut } from './server';
 import { JsonStore } from './store';
+import { persistDevices } from './device-persistence';
 import { Job, JobStore, JobScheduler } from './jobs';
 import { TemplateStore, Template } from './templates';
 import { HistoryStore, Sample } from './history';
@@ -56,9 +57,12 @@ const scheduler = new JobScheduler(jobs, async (job) => {
 });
 scheduler.start();
 
-// On every fleet-state change: persist, record telemetry, and re-evaluate alerts.
+// devices.json: heartbeat-driven changes are written at most every 5 s; operator
+// edits (tags/notes/site) are written immediately.
+persistDevices(registry, store, 5_000);
+
+// On every fleet-state change: record telemetry and re-evaluate alerts.
 registry.on('change', (device) => {
-  store.saveDebounced(() => ({ devices: registry.list() }));
   if (history.record(device)) history.persist();
   alerts.evaluate(device);
 });
@@ -77,6 +81,8 @@ function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[cms] ${signal} received — shutting down`);
+  // Persist anything still waiting on a debounce timer before we exit.
+  try { store.flush(); history.flush(); } catch (err) { console.error('[cms] flush failed', err); }
   server.close(() => { bridge.close(); process.exit(0); });
   // Don't hang forever if a connection is stuck.
   setTimeout(() => process.exit(0), 3000).unref();

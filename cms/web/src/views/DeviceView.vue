@@ -193,7 +193,7 @@
               No log lines received yet.
             </p>
             <div v-else class="logbox">
-              <div v-for="(e, i) in logEntries" :key="i" class="d-flex ga-2 align-baseline py-1">
+              <div v-for="e in logEntries" :key="e._seq" class="d-flex ga-2 align-baseline py-1">
                 <span class="text-caption text-medium-emphasis text-no-wrap">{{ fmtLogTime(e.t) }}</span>
                 <v-chip :color="logColor(e.level)" size="x-small" variant="flat">{{ e.level }}</v-chip>
                 <span v-if="e.tag" class="text-caption text-medium-emphasis text-no-wrap">{{ e.tag }}</span>

@@ -312,6 +312,9 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useWebSocketStore } from '../stores/websocket'
 import { useDeviceStore } from '../stores/device'
 import api from '../api/client'
+import { useRestartStore } from '../stores/restart'
+
+const restartStore = useRestartStore()
 
 const wsStore = useWebSocketStore()
 const deviceStore = useDeviceStore()
@@ -414,7 +417,15 @@ async function saveEntities() {
       }))
       .filter(e => e.entity_id.includes('.'))
     const res = await api.post('/api/ha/import', { entities: clean })
-    statusMessage.value = { type: 'success', text: res.message || 'Saved. Restarting…' }
+    if (res?.restartRequired) {
+      statusMessage.value = { type: 'info', text: 'Entities saved. The device is restarting to apply…' }
+      const back = await restartStore.awaitRestart()
+      statusMessage.value = back
+        ? { type: 'success', text: 'Entities saved. The device has restarted and the change is applied.' }
+        : { type: 'warning', text: 'Entities saved, but the device has not come back online yet.' }
+    } else {
+      statusMessage.value = { type: 'success', text: res?.message || 'Entities saved.' }
+    }
   } catch (err) {
     statusMessage.value = { type: 'error', text: err.message || 'Failed to save entities' }
   } finally {

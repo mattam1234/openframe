@@ -29,7 +29,7 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the MVP com
 
 ### Firmware
 
-- PlatformIO firmware for `esp32dev`, `esp32s3dev`, and `esp8266dev`
+- PlatformIO firmware for `esp32dev`, `esp32s3dev`, and `esp8266dev`, plus board-specific builds: `esp32c3`, `esp32s3geek` (Waveshare ESP32-S3-GEEK), `esp32s3box`, and `esp32_2432s028` ("Cheap Yellow Display")
 - JSON-backed configuration and variable persistence with LittleFS
 - WiFi first-boot AP + captive portal with reconnect and fallback logic
 - MQTT integration and Home Assistant MQTT discovery/service handling
@@ -101,17 +101,25 @@ openframe/
 │       ├── hardware/
 │       ├── managers/
 │       └── plugin/
-├── frontend/               # Vue 3 + Vite + Pinia + Vuetify UI
+├── frontend/               # Device web UI: Vue 3 + Vite + Pinia + Vuetify
 │   ├── package.json
-│   └── src/
+│   ├── src/
+│   ├── e2e/                # Playwright tests against a stubbed device
+│   └── tools/              # mock device, post-build gzip
 ├── cms/                    # Self-hosted Central Management System (Node + TypeScript)
 │   ├── src/                # MQTT bridge, device registry, REST/WS API, templates, alerts
-│   ├── public/             # Fleet dashboard, device drill-in, templates, alerts pages
+│   ├── web/                # Fleet UI: Vue 3 + Vuetify app, served at /app
+│   ├── public/             # Older plain-JS fleet pages (fallback when web/ isn't built)
+│   ├── test/               # node:test suite
 │   └── docker-compose.yml  # CMS + bundled Mosquitto broker
+├── shared/ui/              # Vue components shared by the device UI and the CMS UI
 └── docs/
+    ├── first-automation-tutorial.md
+    ├── hardware-guide.md
     ├── implementation-plan.md
     ├── fleet-and-mesh-roadmap.md
     ├── plugin-architecture.md
+    ├── plugin-authoring-guide.md
     └── product-specifications.md
 ```
 

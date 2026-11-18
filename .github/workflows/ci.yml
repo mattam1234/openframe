@@ -7,6 +7,10 @@ on:
     branches: ["**"]
   pull_request:
 
+# Node 24 matches local development. Its npm (11) and npm 10 disagree about
+# what a valid lockfile is, so a lockfile written on a developer machine failed
+# `npm ci` here while CI was on Node 20.
+
 # Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,7 +23,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [esp32dev, esp32s3dev, esp8266dev]
+        # Every env in platformio.ini, so a board-specific break (pin tables,
+        # partition layout, PSRAM mode) is caught here rather than at flash time.
+        env: [esp32dev, esp32_2432s028, esp32s3dev, esp32s3geek, esp32s3box, esp32c3, esp8266dev]
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +61,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -65,7 +71,7 @@ jobs:
 
       - name: Lint
         working-directory: frontend
-        run: npx eslint . --ext .vue,.js
+        run: npm run lint
 
       - name: Unit tests (Vitest)
         working-directory: frontend
@@ -87,7 +93,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -149,12 +155,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dir: [frontend, cms]
+        dir: [frontend, cms, cms/web]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Audit
         working-directory: ${{ matrix.dir }}
         run: npm audit --audit-level=high
@@ -167,7 +173,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: cms/package-lock.json
 

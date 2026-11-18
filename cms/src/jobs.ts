@@ -144,7 +144,7 @@ export class JobScheduler {
 
   // Run a single job immediately (also used by the "run now" REST endpoint).
   async runOne(job: Job, now: number = Date.now()): Promise<{ ok: number; failed: number }> {
-    let result = { ok: 0, failed: 0 };
+    let result: { ok: number; failed: number };
     try {
       result = await this.runner(job);
     } catch {

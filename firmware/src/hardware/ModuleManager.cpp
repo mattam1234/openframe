@@ -231,16 +231,23 @@ void ModuleManager::registerBuiltInHandlers() {
 
 void ModuleManager::loop() {
     const uint32_t nowMs = millis();
-    if (_lastScanMs == 0 || (nowMs - _lastScanMs) >= SCAN_INTERVAL_MS) {
+    if (_scanAddr == 0 && (_lastScanMs == 0 || (nowMs - _lastScanMs) >= SCAN_INTERVAL_MS)) {
         _lastScanMs = nowMs;
-        scanBus();
+        beginScan();
+    }
+    if (_scanAddr == 0) return;
 
-        for (const auto& module : _modules) {
-            if (!module.online) continue;
-            for (const auto& handler : _handlers) {
-                if (handler->type() == module.type) {
-                    handler->loop(module.address);
-                }
+    // Probe a few addresses per pass rather than all 112 in one go: a full sweep
+    // held the main loop for the whole bus scan every 5 s (far longer on a bus
+    // that is misbehaving), stalling inputs, steppers and animations.
+    if (!scanStep(SCAN_CHUNK)) return;
+    finishScan();
+
+    for (const auto& module : _modules) {
+        if (!module.online) continue;
+        for (const auto& handler : _handlers) {
+            if (handler->type() == module.type) {
+                handler->loop(module.address);
             }
         }
     }
@@ -249,10 +256,19 @@ void ModuleManager::loop() {
 void ModuleManager::registerHandler(const String& name, HandlerFactory factory) {
     if (!name.length() || !factory) return;
     _handlerFactories[name] = std::move(factory);
+    _handlers.clear();   // rebuilt (with the new handler) on the next scan
 }
 
 void ModuleManager::scanBus() {
-    _handlers.clear();
+    beginScan();
+    while (!scanStep(SCAN_CHUNK)) {}
+    finishScan();
+}
+
+// Handlers are stateless, so build them once instead of re-creating and
+// re-sorting all of them on every scan.
+void ModuleManager::ensureHandlers() {
+    if (!_handlers.empty()) return;
     for (auto& kv : _handlerFactories) {
         auto handler = kv.second();
         if (handler) _handlers.push_back(std::move(handler));
@@ -263,19 +279,32 @@ void ModuleManager::scanBus() {
                      [](const std::unique_ptr<ModuleHandler>& a, const std::unique_ptr<ModuleHandler>& b) {
                          return a->priority() < b->priority();
                      });
+}
 
-    std::vector<uint8_t> found;
-    for (uint8_t addr = 8; addr < 120; ++addr) {
-        Wire.beginTransmission(addr);
+void ModuleManager::beginScan() {
+    ensureHandlers();
+    _scanFound.clear();
+    _scanAddr = SCAN_FIRST_ADDR;
+}
+
+bool ModuleManager::scanStep(uint8_t maxProbes) {
+    for (uint8_t n = 0; n < maxProbes && _scanAddr < SCAN_END_ADDR; ++n, ++_scanAddr) {
+        Wire.beginTransmission(_scanAddr);
         const uint8_t result = Wire.endTransmission();
         if (result == 0) {
-            found.push_back(addr);
+            _scanFound.push_back(_scanAddr);
         } else if (result != 2) {
             // result == 2 means NACK (no device), which is normal.
             // Any other non-zero result indicates a bus error.
             _i2cErrorCount++;
         }
     }
+    return _scanAddr >= SCAN_END_ADDR;
+}
+
+void ModuleManager::finishScan() {
+    _scanAddr = 0;
+    const std::vector<uint8_t>& found = _scanFound;
 
     for (auto& module : _modules) {
         const bool nowOnline = std::find(found.begin(), found.end(), module.address) != found.end();

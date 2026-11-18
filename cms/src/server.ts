@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -79,6 +80,14 @@ export function createServer(
   // Role attached by auth.middleware; 'open' when auth is disabled on the LAN.
   const roleOf = (req: unknown): string =>
     (req as { role?: string }).role ?? (auth.enabled ? 'unknown' : 'open');
+  // gzip/deflate/brotli for everything compressible above ~1 kB: the SPA bundle,
+  // /api JSON (device list, history) and /metrics. Mounted before the static
+  // mounts and routes so it wraps all of them. Firmware images are excluded
+  // explicitly: devices stream them straight into flash and rely on the
+  // Content-Length of the raw image. (WebSocket upgrades never reach Express.)
+  app.use(compression({
+    filter: (req, res) => !req.path.startsWith('/firmware/') && compression.filter(req, res),
+  }));
   app.use(express.json({ limit: '256kb' }));
 
   // Vue CMS app (#45): served at /app when it's been built (cms/web/dist). Once
@@ -94,6 +103,9 @@ export function createServer(
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   if (haveWeb) {
+    // Vite content-hashes everything under assets/, so those can be cached
+    // forever; index.html (below) keeps the default revalidate-every-load.
+    app.use('/app/assets', express.static(path.join(webDist, 'assets'), { immutable: true, maxAge: '1y' }));
     app.use('/app', express.static(webDist));
     app.get('/app/*', (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
   }
@@ -143,7 +155,7 @@ export function createServer(
   });
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, mqtt: bridge.connected, devices: registry.list().length });
+    res.json({ ok: true, mqtt: bridge.connected, devices: registry.size });
   });
 
   // Prometheus exposition for the whole fleet (#65). Not under /api, so it's

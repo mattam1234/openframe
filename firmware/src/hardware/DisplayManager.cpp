@@ -25,6 +25,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 
 namespace {
@@ -242,6 +243,47 @@ bool bindTftHwSpi(const DisplayConfig& config) {
 }
 #endif  // OF_ENABLE_TFT
 
+// ── Unchanged-frame gate ─────────────────────────────────────────────────────
+//
+// The render loop redraws every display each refresh interval (250 ms by
+// default) whether or not anything on screen changed. Drawing into the
+// framebuffer is cheap; pushing it to the panel is the slow part and it blocks
+// the main loop (a 320x240 TFT is ~150 KB over SPI, an OLED ~1 KB over I²C) —
+// time taken from inputs, steppers and the network stack several times a second.
+//
+// Framebuffer-backed providers ask this gate before pushing: it hashes the
+// finished frame and reports false when it is identical to the last one sent.
+// A push is still forced every FORCE_MS so a panel that glitched (ESD, a brief
+// brown-out) repaints itself without a reboot.
+class FrameGate {
+public:
+    bool shouldPush(const uint8_t* data, size_t len) {
+        if (!data || !len) return true;
+        // FNV-1a, four bytes per round — plenty to tell "same frame" from "not".
+        uint32_t h = 2166136261u;
+        size_t i = 0;
+        for (; i + 4 <= len; i += 4) {
+            uint32_t w;
+            memcpy(&w, data + i, 4);
+            h = (h ^ w) * 16777619u;
+        }
+        for (; i < len; ++i) h = (h ^ data[i]) * 16777619u;
+
+        const uint32_t nowMs = millis();
+        if (_valid && h == _hash && (nowMs - _lastPushMs) < FORCE_MS) return false;
+        _valid = true;
+        _hash = h;
+        _lastPushMs = nowMs;
+        return true;
+    }
+
+private:
+    static constexpr uint32_t FORCE_MS = 5000;
+    uint32_t _hash = 0;
+    uint32_t _lastPushMs = 0;
+    bool     _valid = false;
+};
+
 // ── OLED: SSD1306 ────────────────────────────────────────────────────────────
 
 class Ssd1306DisplayProvider final : public DisplayProvider {
@@ -283,6 +325,7 @@ public:
         _display->setTextColor(SSD1306_WHITE);
         _display->ssd1306_command(SSD1306_SETCONTRAST);
         _display->ssd1306_command(config.contrast);
+        _frameGate = FrameGate();   // freshly initialised panel: always push the first frame
         present();
         return true;
     }
@@ -329,6 +372,10 @@ public:
 
     void present() override {
         if (!_display) return;
+        // Skip the I²C push when the frame is identical to the one on the glass.
+        const size_t frameBytes = static_cast<size_t>(_config.width)
+                                * static_cast<size_t>((_config.height + 7) / 8);
+        if (!_frameGate.shouldPush(_display->getBuffer(), frameBytes)) return;
         // No offset → the library's own column addressing is correct; use it.
         if (_colOffset == 0 && _pageOffset == 0) {
             _display->display();
@@ -371,6 +418,7 @@ private:
 
     DisplayConfig                      _config;
     std::unique_ptr<Adafruit_SSD1306> _display;
+    FrameGate                         _frameGate;
     uint8_t                            _colOffset  = 0;
     uint8_t                            _pageOffset = 0;
     int16_t                            _comPins    = -1;
@@ -874,6 +922,11 @@ public:
         // native uint16_t MSB-first, the same convention drawPixel/fillRect use, so
         // colours are correct.
         if (_canvas && _gfx) {
+            // Skip the (slow, loop-blocking) SPI blit when nothing changed.
+            if (!_frameGate.shouldPush(reinterpret_cast<const uint8_t*>(_canvas->getBuffer()),
+                                       static_cast<size_t>(_w) * _h * sizeof(uint16_t))) {
+                return;
+            }
             _gfx->drawRGBBitmap(0, 0, _canvas->getBuffer(),
                                 static_cast<int16_t>(_w), static_cast<int16_t>(_h));
         }
@@ -889,6 +942,7 @@ protected:
         _gfx = panel;
         _w = w;
         _h = h;
+        _frameGate = FrameGate();   // freshly initialised panel: always push the first frame
         _canvas.reset(new PsramCanvas16(w, h));
         if (!_canvas || !_canvas->getBuffer()) {
             _canvas.reset();
@@ -906,6 +960,7 @@ protected:
     uint16_t                      _w = 0;
     uint16_t                      _h = 0;
     bool                          _blPwm = false;  // backlight moved from GPIO to LEDC
+    FrameGate                     _frameGate;
 };
 
 // ── TFT: ILI9341 ─────────────────────────────────────────────────────────────
@@ -1067,7 +1122,15 @@ public:
         }
 
         _port = &_selectSerial(config.uartNum);
+#if defined(ESP8266)
+        // The ESP8266 core's begin() takes (baud, config, mode, tx_pin): RX pins are
+        // fixed per UART and only TX is selectable. The ESP32-style call below
+        // compiled here only under -fpermissive, passing rx_pin as the UART *mode*.
+        _port->begin(config.baudRate, SERIAL_8N1, SERIAL_FULL,
+                     static_cast<uint8_t>(config.txPin));
+#else
         _port->begin(config.baudRate, SERIAL_8N1, config.rxPin, config.txPin);
+#endif
         delay(100);
 
         // Suppress startup splash
@@ -2172,10 +2235,9 @@ void DisplayManager::renderDisplay(DisplayInstance& display, uint32_t nowMs) {
             renderWidget(*display.provider, widget, display.config.width, display.config.height, pressed);
         }
     }
-    display.provider->present();
-
-    // Notification overlay: draw on top after the page content has been
-    // pushed, then force another present so the overlay is visible.
+    // Notification overlay: drawn on top of the page content, then the finished
+    // frame is pushed once. (It used to be pushed before and after the overlay —
+    // two full panel writes per render, and a visible overlay-less flash.)
     const bool notifActive = _notifMessage.length() && nowMs < _notifExpireMs;
     if (notifActive) {
         // Draw at the bottom row (y = height - 8) with text size 1.
@@ -2183,13 +2245,12 @@ void DisplayManager::renderDisplay(DisplayInstance& display, uint32_t nowMs) {
                                     ? static_cast<int16_t>(display.config.height) - 8
                                     : 0);
         display.provider->drawWidget("_notif", 0, overlayY, _notifMessage, 1);
-        display.provider->present();
     } else if (_notifMessage.length() && nowMs >= _notifExpireMs) {
-        // Overlay expired — clear the stored message and redraw cleanly.
+        // Overlay expired — this frame is already drawn without it.
         _notifMessage  = "";
         _notifExpireMs = 0;
-        display.dirty  = true;
     }
+    display.provider->present();
 
     display.lastRenderMs = nowMs;
     display.dirty = false;

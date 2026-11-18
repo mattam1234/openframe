@@ -1104,11 +1104,19 @@ void SensorManager::pollSensor(SensorInstance& sensor, uint32_t nowMs) {
     std::vector<SensorMetricValue> values;
     String error;
     if (!sensor.driver->read(values, error)) {
-        LOG_W(TAG, "Read failed for sensor '" + sensor.config.id + "': " + error);
+        // Announce a failure once, when the sensor goes from working to failing.
+        // A sensor that stays broken used to log, raise a notification (display
+        // overlay, push message) and publish an event on every poll - every few
+        // seconds, forever. The error count and last error still update each poll
+        // and are visible in the health report.
+        const bool wasHealthy = sensor.healthy;
         sensor.errorCount++;
         sensor.lastError = error;
         sensor.healthy   = false;
-        publishError(sensor.config, error, nowMs);
+        if (wasHealthy) {
+            LOG_W(TAG, "Read failed for sensor '" + sensor.config.id + "': " + error);
+            publishError(sensor.config, error, nowMs);
+        }
         return;
     }
 

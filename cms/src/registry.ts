@@ -3,12 +3,17 @@ import { Device, Heartbeat } from './types';
 
 // In-memory fleet registry. Emits 'change' (with the updated Device) whenever a
 // device's record changes, so the WebSocket layer and the persistence layer can
-// react without polling.
+// react without polling. Operator edits (tags, notes, site) additionally emit
+// 'edit' after their 'change'.
 export class DeviceRegistry extends EventEmitter {
   private readonly devices = new Map<string, Device>();
 
   constructor(private readonly offlineTimeoutMs: number) {
     super();
+  }
+
+  get size(): number {
+    return this.devices.size;
   }
 
   list(): Device[] {
@@ -44,14 +49,22 @@ export class DeviceRegistry extends EventEmitter {
     return d;
   }
 
+  // An operator changed a device record by hand (tags/notes/site). Besides the
+  // usual 'change', emit 'edit' so persistence can write these straight away:
+  // unlike heartbeat state they cannot be re-learned from the device.
+  private edited(d: Device): void {
+    d.updatedAt = Date.now();
+    this.emit('change', d);
+    this.emit('edit', d);
+  }
+
   // Set a device's tags (deduped, trimmed). Returns false if the device is unknown.
   setTags(id: string, tags: string[]): boolean {
     const d = this.devices.get(id);
     if (!d) return false;
     const clean = [...new Set(tags.map((t) => String(t).trim()).filter(Boolean))];
     d.tags = clean;
-    d.updatedAt = Date.now();
-    this.emit('change', d);
+    this.edited(d);
     return true;
   }
 
@@ -60,8 +73,7 @@ export class DeviceRegistry extends EventEmitter {
     const d = this.devices.get(id);
     if (!d) return false;
     d.notes = String(notes);
-    d.updatedAt = Date.now();
-    this.emit('change', d);
+    this.edited(d);
     return true;
   }
 
@@ -72,8 +84,7 @@ export class DeviceRegistry extends EventEmitter {
     if (!d) return false;
     const clean = String(site).trim();
     d.site = clean || undefined;
-    d.updatedAt = Date.now();
-    this.emit('change', d);
+    this.edited(d);
     return true;
   }
 

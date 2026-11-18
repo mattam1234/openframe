@@ -558,7 +558,7 @@ bool OutputManager::initWs2812(size_t index) {
 // Render the current frame for one strip and push it to the hardware. Honours
 // state.on, the active animation, the current colour, the animation phase and
 // the per-strip master brightness.
-void OutputManager::renderWs2812(size_t index) {
+void OutputManager::renderWs2812(size_t index, bool show) {
     const auto& cfg = _configs[index];
     const auto& state = _states[index];
     auto& leds = _wsLedsPerOutput[index];
@@ -572,7 +572,7 @@ void OutputManager::renderWs2812(size_t index) {
 
     if (!state.on || state.animation == LedAnimation::Off) {
         fillBlack();
-        FastLED.show();
+        if (show) FastLED.show();
         return;
     }
 
@@ -631,10 +631,14 @@ void OutputManager::renderWs2812(size_t index) {
         case LedAnimation::Off:
             break;  // handled above
     }
-    FastLED.show();
+    if (show) FastLED.show();
 }
 
 void OutputManager::tickAnimations(uint32_t nowMs) {
+    // FastLED.show() transmits every registered strip, so calling it once per
+    // animated strip sent N strips N times per tick. Render the due strips into
+    // their buffers first, then push them all with a single show().
+    bool anyRendered = false;
     for (size_t i = 0; i < _configs.size(); ++i) {
         const auto& cfg = _configs[i];
         auto& state = _states[i];
@@ -647,8 +651,10 @@ void OutputManager::tickAnimations(uint32_t nowMs) {
         if (state.animLastMs != 0 && (nowMs - state.animLastMs) < interval) continue;
         state.animLastMs = nowMs;
         state.animPhase++;
-        renderWs2812(i);
+        renderWs2812(i, /*show=*/false);
+        anyRendered = true;
     }
+    if (anyRendered) FastLED.show();
 }
 
 void OutputManager::fillStateJson(JsonArray& arr) const {

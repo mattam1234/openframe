@@ -158,7 +158,16 @@ function render() {
   updateSelectionUI();
 }
 
-function upsert(device) { devices.set(device.deviceId, device); render(); }
+// Live device frames arrive one per heartbeat; render() rebuilds the whole
+// table, so coalesce a burst of them into a single rebuild per animation frame.
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+function upsert(device) { devices.set(device.deviceId, device); scheduleRender(); }
 
 async function loadTemplates() {
   try {

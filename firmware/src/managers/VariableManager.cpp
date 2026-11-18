@@ -179,11 +179,9 @@ void VariableManager::notifyChange(const Variable& var) {
         for (auto& cb : it->second) cb(var);
     }
     // Publish to global event bus
-    JsonDocument doc;
-    doc["id"] = var.id;
-    String payload;
-    serializeJson(doc, payload);
-    EventBus::instance().publish(EventType::VariableChanged, var.id, payload);
+    // The id travels as the event's sourceId, which is all any subscriber reads
+    // — no JSON payload to build on this (very hot) path.
+    EventBus::instance().publish(EventType::VariableChanged, var.id);
 }
 
 // ── Serialisation ─────────────────────────────────────────────────────────────

@@ -461,8 +461,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useDeviceStore } from '../stores/device'
 import { useWebSocketStore } from '../stores/websocket'
 import api, { setApiToken } from '../api/client'
+import { useRestartStore } from '../stores/restart'
 
 const deviceStore = useDeviceStore()
+const restartStore = useRestartStore()
 const wsStore = useWebSocketStore()
 
 // Board capability flags from GET /api/status `features` (weather, push, …).
@@ -707,11 +709,16 @@ async function saveSettings() {
     const res = await deviceStore.saveConfig(payload)
     applyConfig(deviceStore.config)
     // MQTT/time-only changes apply live; WiFi/device/HA changes still reboot.
-    statusMessage.value = {
-      type: 'success',
-      text: res?.restartRequired
-        ? 'Settings saved. The device is restarting to apply changes.'
-        : (res?.message || 'Settings saved and applied.'),
+    if (res?.restartRequired) {
+      // The device reboots ~1.5 s after replying. Wait for it rather than leave
+      // the page talking to a device that is down.
+      statusMessage.value = { type: 'info', text: 'Settings saved. The device is restarting to apply changes…' }
+      const back = await restartStore.awaitRestart()
+      statusMessage.value = back
+        ? { type: 'success', text: 'Settings saved. The device has restarted and the changes are applied.' }
+        : { type: 'warning', text: 'Settings saved, but the device has not come back at this address. If you changed WiFi or network settings it may have a new IP.' }
+    } else {
+      statusMessage.value = { type: 'success', text: res?.message || 'Settings saved and applied.' }
     }
   } catch (error) {
     statusMessage.value = {
@@ -802,9 +809,29 @@ async function factoryReset() {
   confirmReset.value = false
   try {
     await api.post('/api/factory-reset')
-    statusMessage.value = { type: 'success', text: 'Factory reset done (WiFi kept) — device is rebooting.' }
+    await reloadAfterRestart('Factory reset done (WiFi kept)')
   } catch (e) {
     statusMessage.value = { type: 'error', text: e.message || 'Factory reset failed' }
+  }
+}
+
+// Factory reset and restore both reboot the device and change its config under
+// us: wait for it to answer again, then reload the form so it shows what the
+// device is actually running rather than the pre-reset values.
+async function reloadAfterRestart(label) {
+  statusMessage.value = { type: 'info', text: `${label}. The device is restarting…` }
+  const back = await restartStore.awaitRestart()
+  if (!back) {
+    statusMessage.value = { type: 'warning', text: `${label}, but the device has not come back at this address yet. Reload this page once it is online.` }
+    return
+  }
+  try {
+    await deviceStore.fetchConfig()
+    applyConfig(deviceStore.config)
+    await loadBackups()
+    statusMessage.value = { type: 'success', text: `${label}. The device has restarted.` }
+  } catch (e) {
+    statusMessage.value = { type: 'warning', text: `${label} and the device restarted, but reloading the settings failed: ${e.message || e}` }
   }
 }
 
@@ -827,7 +854,7 @@ async function createBackup() {
 async function restoreBackup(id) {
   try {
     await api.post('/api/config/restore', { id })
-    statusMessage.value = { type: 'success', text: 'Config restored — device is rebooting.' }
+    await reloadAfterRestart('Config restored')
   } catch (e) {
     statusMessage.value = { type: 'error', text: e.message || 'Restore failed' }
   }

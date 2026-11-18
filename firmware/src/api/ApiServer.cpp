@@ -381,7 +381,14 @@ void ApiServer::loop() {
     }
 
     if (_lastHealthPublishMs == 0 || (nowMs - _lastHealthPublishMs) >= HEALTH_PUBLISH_INTERVAL_MS) {
-        publishHealthUpdate();
+        // The periodic health frame only feeds WebSocket clients. With none
+        // connected, skip building the ~1 KB status JSON (and the event copy of
+        // it) every 5 s — that churn fragments the heap for nothing.
+        if (_ws.count() == 0) {
+            _lastHealthPublishMs = nowMs;
+        } else {
+            publishHealthUpdate();
+        }
     }
 }
 
@@ -811,9 +818,11 @@ void ApiServer::registerWebSocket(AsyncWebServer& server) {
 }
 
 void ApiServer::sendStatus(AsyncWebServerRequest* request) const {
-    JsonDocument doc;
-    deserializeJson(doc, buildStatusJson());
-    sendJson(request, doc);
+    if (!request) return;
+    // Send the built JSON as-is. Parsing it back into a document just to
+    // serialize it again kept three status-sized heap blocks alive at once (see
+    // sendVariables for what that does on a fragmented heap).
+    request->send(200, "application/json", buildStatusJson());
 }
 
 void ApiServer::sendMetrics(AsyncWebServerRequest* request) const {
@@ -1338,9 +1347,7 @@ void ApiServer::handleWebSocketMessage(AsyncWebSocketClient* client, const Strin
         serializeJson(payload, payloadString);
         EventBus::instance().publish(EventType::ActionTriggered, sourceId, payloadString);
     } else if (type == "ping") {
-        JsonDocument healthDoc;
-        deserializeJson(healthDoc, buildStatusJson());
-        sendFrame(client, "health", healthDoc);
+        sendRawFrame(client, "health", buildStatusJson());
         return;
     } else {
         response["ok"] = false;
@@ -1368,13 +1375,13 @@ void ApiServer::sendInitialState(AsyncWebSocketClient* client) const {
     // once memory recovers.
     if (!wsSendSafe()) return;
 
-    JsonDocument statusDoc;
-    deserializeJson(statusDoc, buildStatusJson());
-    sendFrame(client, "health", statusDoc);
+    // Each snapshot is built once and sent as-is — no string → re-parse →
+    // re-serialize round trips, which held several large blocks alive at once on
+    // every WebSocket connect (the async task's worst-case heap moment).
+    sendRawFrame(client, "health", buildStatusJson());
 
-    const String variablesJson = buildVariablesJson();
     JsonDocument variablesDoc;
-    deserializeJson(variablesDoc, variablesJson);
+    buildVariablesDoc(variablesDoc);
     String variablePayload;
     serializeJson(variablesDoc["variables"], variablePayload);
     sendRawFrame(client, "variable_snapshot", variablePayload);
@@ -1401,6 +1408,10 @@ void ApiServer::publishHealthUpdate() {
 
 void ApiServer::onEvent(const Event& event) {
     if (!_started) return;
+    // Everything below only builds and broadcasts WebSocket frames. This runs
+    // for every event on the bus (each variable change, sensor poll, analog
+    // sample), so don't build JSON that nobody is connected to receive.
+    if (_ws.count() == 0) return;
 
     if (event.type == EventType::SystemHealthUpdate) {
         broadcastRawFrame("health", event.payload);
@@ -2245,6 +2256,28 @@ void ApiServer::handleOutputsUpdate(AsyncWebServerRequest* request, const String
             if (item["pin_enable"].is<int>()) out["pin_enable"] = item["pin_enable"].as<int>();
             if (item["steps_per_rev"].is<int>()) out["steps_per_rev"] = item["steps_per_rev"].as<int>();
             if (item["max_step_hz"].is<int>()) out["max_step_hz"] = item["max_step_hz"].as<int>();
+        }
+    }
+
+    // Applying outputs needs a reboot, so don't pay for one when the save changes
+    // nothing (re-saving the form, or saving after an edit that was undone). The
+    // stored file was written by this same code, so identical config serializes
+    // identically; any difference just takes the normal save-and-restart path.
+    source.clear();
+    {
+        JsonDocument current;
+        if (StorageManager::instance().readJson(OF_OUTPUTS_PATH, current)) {
+            String currentText, newText;
+            serializeJson(current, currentText);
+            serializeJson(toSave, newText);
+            if (currentText == newText) {
+                JsonDocument unchanged;
+                unchanged["ok"] = true;
+                unchanged["restartRequired"] = false;
+                unchanged["message"] = "Outputs unchanged — nothing to apply.";
+                sendJson(request, unchanged);
+                return;
+            }
         }
     }
 

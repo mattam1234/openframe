@@ -47,7 +47,14 @@ export class HistoryStore {
     return this.series.get(deviceId) ?? [];
   }
 
+  // The whole history (devices x maxSamples) is rewritten on each save, so save
+  // at most every 30 s rather than on (nearly) every heartbeat. A crash loses at
+  // most that much chart data; a clean shutdown flushes.
   persist(): void {
-    this.store.saveDebounced(() => ({ series: Object.fromEntries(this.series) }));
+    this.store.saveDebounced(() => ({ series: Object.fromEntries(this.series) }), 30_000);
+  }
+
+  flush(): void {
+    this.store.flush();
   }
 }

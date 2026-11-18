@@ -31,4 +31,29 @@ test.describe('Layout Designer', () => {
   test('Save inputs is enabled once data has loaded', async ({ page }) => {
     await expect(page.getByRole('button', { name: 'Save inputs' })).toBeEnabled()
   })
+
+  test('saving outputs waits for the device to restart, then confirms', async ({ page }) => {
+    // The device replies, then reboots: /api/status fails twice before answering.
+    let probes = 0
+    await page.route((url) => url.pathname === '/api/outputs', (route) => {
+      if (route.request().method() === 'POST') {
+        return route.fulfill({ json: { ok: true, restartRequired: true, message: 'Outputs saved. Restarting to apply.' } })
+      }
+      return route.fallback()
+    })
+    await page.route((url) => url.pathname === '/api/status', (route) => {
+      probes += 1
+      return probes <= 2 ? route.abort() : route.fulfill({ json: { ok: true } })
+    })
+
+    await page.getByRole('tab', { name: /Outputs/ }).click()
+    await page.getByRole('button', { name: 'Save outputs' }).click()
+
+    await expect(page.getByText(/device is restarting to apply/i)).toBeVisible()
+    await expect(page.getByText('Restarting…')).toBeVisible()
+    await expect(page.getByText(/device has restarted and the change is applied/i)).toBeVisible({ timeout: 15_000 })
+    expect(probes).toBeGreaterThanOrEqual(3)
+    // The form still holds what was saved — nothing was reloaded or lost.
+    await expect(page.locator('.ld-item--output')).toHaveCount(2)
+  })
 })

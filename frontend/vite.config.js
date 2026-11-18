@@ -18,6 +18,12 @@ export default defineConfig({
   test: {
     include: ['src/**/*.{test,spec}.js'],
   },
+  // Vuetify components are auto-imported per view, so the dev server keeps
+  // discovering new 'vuetify/components/…' entries as lazy routes load. Each
+  // discovery re-optimizes dependencies and force-reloads the page, which made
+  // the first (cold-cache) E2E run fail. Vuetify ships ESM, so skip pre-bundling
+  // (same as cms/web).
+  optimizeDeps: { exclude: ['vuetify'] },
   server: {
     // Allow reading the shared lib, which lives outside this app's root.
     fs: { allow: ['..'] },
