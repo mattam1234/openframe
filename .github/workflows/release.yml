@@ -19,9 +19,9 @@ jobs:
       matrix:
         env: [esp32dev, esp32_2432s028, esp32s3dev, esp32s3geek, esp32s3box, esp32c3, esp8266dev]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -37,7 +37,7 @@ jobs:
       - name: Check LittleFS size budget
         run: node firmware/tools/check-fs-size.mjs
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install PlatformIO
@@ -61,7 +61,7 @@ jobs:
           fi
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           fail_on_unmatched_files: true
