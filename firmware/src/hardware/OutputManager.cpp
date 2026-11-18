@@ -61,17 +61,148 @@ OutputManager& OutputManager::instance() {
 }
 
 bool OutputManager::begin() {
-    if (!loadConfig()) {
+#if defined(ESP32)
+    _loopTask = xTaskGetCurrentTaskHandle();   // setup() runs on the loop task
+#endif
+    if (!loadConfig(_configs)) {
         LOG_W(TAG, "Using empty output configuration");
     }
     _states.assign(_configs.size(), OutputState{});
-    _wsLedsPerOutput.assign(_configs.size(), std::vector<CRGB>{});
     setupOutputs();
     LOG_I(TAG, "Initialised (" + String(_configs.size()) + " outputs)");
     return true;
 }
 
+// ── Loop-task marshalling ─────────────────────────────────────────────────────
+
+bool OutputManager::onLoopTask() const {
+#if defined(ESP32)
+    return _loopTask == nullptr || xTaskGetCurrentTaskHandle() == _loopTask;
+#else
+    return true;   // ESP8266: everything runs cooperatively on one task
+#endif
+}
+
+bool OutputManager::runOnLoop(std::function<bool()> fn) {
+    if (onLoopTask()) return fn();
+
+    auto result = std::make_shared<PendingResult>();
+    {
+        of_lock_guard<of_recursive_mutex> lock(_queueMtx);
+        PendingCall call;
+        call.fn     = std::move(fn);
+        call.result = result;
+        _pending.push_back(std::move(call));
+    }
+    // Wait for the loop task to run it so the caller gets the real result and
+    // any state it reads back is current. The loop normally gets to it within a
+    // pass (~10 ms). If the loop is busy for longer we stop waiting and report
+    // "accepted": the call stays queued and still runs.
+    const uint32_t startMs = millis();
+    while (!result->done && (millis() - startMs) < RUN_ON_LOOP_WAIT_MS) {
+        delay(1);
+    }
+    return result->done ? result->value : true;
+}
+
+void OutputManager::drainPending() {
+    std::vector<PendingCall> calls;
+    {
+        of_lock_guard<of_recursive_mutex> lock(_queueMtx);
+        if (_pending.empty()) return;
+        calls.swap(_pending);
+    }
+    for (auto& call : calls) {
+        const bool value = call.fn ? call.fn() : false;
+        call.result->value = value;
+        call.result->done  = true;
+    }
+}
+
+// ── Hot reload ────────────────────────────────────────────────────────────────
+
+void OutputManager::requestReload() {
+    _reloadPending = true;   // consumed in loop() on the main task
+}
+
+// Release every pin the current configuration drives, so the new configuration
+// starts from the same blank slate it would have after a reboot.
+void OutputManager::teardownOutputs() {
+    for (size_t i = 0; i < _configs.size(); ++i) {
+        const auto& cfg = _configs[i];
+        switch (cfg.type) {
+            case OutputType::Led:
+            case OutputType::Relay:
+                if (cfg.pwm) of_pwm_detach(cfg.pin);
+                pinMode(cfg.pin, INPUT);
+                break;
+            case OutputType::Rgb:
+                of_pwm_detach(cfg.pinR); pinMode(cfg.pinR, INPUT);
+                of_pwm_detach(cfg.pinG); pinMode(cfg.pinG, INPUT);
+                of_pwm_detach(cfg.pinB); pinMode(cfg.pinB, INPUT);
+                break;
+            case OutputType::Buzzer:
+                of_tone_write(cfg.pin, cfg.pwmChannel, 0);
+                of_pwm_detach(cfg.pin);
+                pinMode(cfg.pin, INPUT);
+                break;
+            case OutputType::Servo:
+                of_pwm_detach(cfg.pin);
+                pinMode(cfg.pin, INPUT);
+                break;
+            case OutputType::Stepper:
+                pinMode(cfg.pin, INPUT);
+                pinMode(cfg.pinDir, INPUT);
+                if (cfg.pinEnable) pinMode(cfg.pinEnable, INPUT);
+                break;
+            case OutputType::Ws2812: {
+                // The pin stays with FastLED (see WsStrip); just blank the strip.
+                auto it = _wsStrips.find(cfg.pin);
+                if (it != _wsStrips.end()) {
+                    for (auto& led : it->second.leds) led = CRGB::Black;
+                }
+                break;
+            }
+        }
+    }
+    if (!_wsStrips.empty()) FastLED.show();
+}
+
+void OutputManager::reload() {
+    // Read the new configuration first (flash I/O is the slow part) so the pins
+    // are only released for the instant between teardown and setup.
+    std::vector<OutputConfig> next;
+    const bool loaded = loadConfig(next);
+    if (!loaded) LOG_W(TAG, "Reload: using empty output configuration");
+
+    teardownOutputs();
+
+    // Drop the mirror variables of the old configuration; setupOutput() defines
+    // the new set. (Their change subscriptions are id-keyed and survive.)
+#if OF_ENABLE_HW_VARIABLES
+    for (const auto& id : _definedVarIds) VariableManager::instance().remove(id);
+#endif
+    _definedVarIds.clear();
+
+    {
+        // Readers on other tasks are locked out only while the shape changes.
+        of_lock_guard<of_recursive_mutex> lock(_structMtx);
+        _configs.swap(next);
+        _states.assign(_configs.size(), OutputState{});
+    }
+
+    // As after a reboot, every output starts in its off state.
+    setupOutputs();
+    LOG_I(TAG, "Reloaded (" + String(_configs.size()) + " outputs)");
+}
+
 void OutputManager::loop() {
+    if (_reloadPending) {
+        _reloadPending = false;
+        reload();
+    }
+    drainPending();
+
     const uint32_t nowMs = millis();
     for (size_t i = 0; i < _configs.size(); ++i) {
         const auto& cfg = _configs[i];
@@ -88,47 +219,72 @@ void OutputManager::loop() {
 }
 
 bool OutputManager::setDigital(const String& id, bool on) {
-    const int index = findIndexById(id);
-    if (index < 0) return false;
-    return applyDigital(static_cast<size_t>(index), on);
+    return runOnLoop([this, id, on]() -> bool {
+        const int index = findIndexById(id);
+        if (index < 0) return false;
+        return applyDigital(static_cast<size_t>(index), on);
+    });
 }
 
 bool OutputManager::setBrightness(const String& id, uint8_t brightness) {
-    const int index = findIndexById(id);
-    if (index < 0) return false;
-    return applyBrightness(static_cast<size_t>(index), brightness);
+    return runOnLoop([this, id, brightness]() -> bool {
+        const int index = findIndexById(id);
+        if (index < 0) return false;
+        return applyBrightness(static_cast<size_t>(index), brightness);
+    });
 }
 
 bool OutputManager::setRgb(const String& id, uint8_t r, uint8_t g, uint8_t b) {
-    const int index = findIndexById(id);
-    if (index < 0) return false;
-    return applyRgb(static_cast<size_t>(index), r, g, b);
+    return runOnLoop([this, id, r, g, b]() -> bool {
+        const int index = findIndexById(id);
+        if (index < 0) return false;
+        return applyRgb(static_cast<size_t>(index), r, g, b);
+    });
 }
 
 bool OutputManager::beep(const String& id, uint16_t frequency, uint16_t durationMs) {
-    const int index = findIndexById(id);
-    if (index < 0) return false;
-    return applyBuzzer(static_cast<size_t>(index), frequency, durationMs);
+    return runOnLoop([this, id, frequency, durationMs]() -> bool {
+        const int index = findIndexById(id);
+        if (index < 0) return false;
+        return applyBuzzer(static_cast<size_t>(index), frequency, durationMs);
+    });
 }
 
 bool OutputManager::beepFirstBuzzer(uint16_t frequency, uint16_t durationMs) {
     // Pulse whatever buzzer is configured — used for UI feedback (e.g. a touch
     // "tick"). No-op (false) when the device has no buzzer output.
-    for (size_t i = 0; i < _configs.size(); ++i) {
-        if (_configs[i].type == OutputType::Buzzer) {
-            return applyBuzzer(i, frequency, durationMs);
+    return runOnLoop([this, frequency, durationMs]() -> bool {
+        for (size_t i = 0; i < _configs.size(); ++i) {
+            if (_configs[i].type == OutputType::Buzzer) {
+                return applyBuzzer(i, frequency, durationMs);
+            }
         }
-    }
-    return false;
+        return false;
+    });
 }
 
 bool OutputManager::setAngle(const String& id, uint8_t angle) {
-    const int index = findIndexById(id);
-    if (index < 0) return false;
-    return applyServo(static_cast<size_t>(index), angle);
+    return runOnLoop([this, id, angle]() -> bool {
+        const int index = findIndexById(id);
+        if (index < 0) return false;
+        return applyServo(static_cast<size_t>(index), angle);
+    });
+}
+
+bool OutputManager::setAnimation(const String& id, LedAnimation animation, uint8_t speed) {
+    return runOnLoop([this, id, animation, speed]() -> bool {
+        return setAnimationNow(id, animation, speed);
+    });
+}
+
+bool OutputManager::setPosition(const String& id, int32_t steps) {
+    return runOnLoop([this, id, steps]() -> bool {
+        return setPositionNow(id, steps);
+    });
 }
 
 bool OutputManager::getAnimation(const String& id, LedAnimation& animation, uint8_t& speed) const {
+    of_lock_guard<of_recursive_mutex> lock(_structMtx);
     const int index = findIndexById(id);
     if (index < 0 || _configs[index].type != OutputType::Ws2812) return false;
     animation = _states[index].animation;
@@ -136,7 +292,7 @@ bool OutputManager::getAnimation(const String& id, LedAnimation& animation, uint
     return true;
 }
 
-bool OutputManager::setPosition(const String& id, int32_t steps) {
+bool OutputManager::setPositionNow(const String& id, int32_t steps) {
     const int index = findIndexById(id);
     if (index < 0) return false;
     if (_configs[index].type != OutputType::Stepper) return false;
@@ -167,8 +323,8 @@ void OutputManager::tickSteppers(uint32_t nowUs) {
     }
 }
 
-bool OutputManager::loadConfig() {
-    _configs.clear();
+bool OutputManager::loadConfig(std::vector<OutputConfig>& out) {
+    out.clear();
     std::map<String, uint16_t> idUsage;
     auto ensureUniqueId = [&](const String& requested, const String& fallbackPrefix, uint8_t pin) {
         String base = requested;
@@ -266,7 +422,7 @@ bool OutputManager::loadConfig() {
         }
 #endif
 
-        _configs.push_back(cfg);
+        out.push_back(cfg);
     }
     return true;
 }
@@ -406,7 +562,7 @@ bool OutputManager::applyRgb(size_t index, uint8_t r, uint8_t g, uint8_t b) {
     return true;
 }
 
-bool OutputManager::setAnimation(const String& id, LedAnimation animation, uint8_t speed) {
+bool OutputManager::setAnimationNow(const String& id, LedAnimation animation, uint8_t speed) {
     const int index = findIndexById(id);
     if (index < 0) return false;
     const auto& cfg = _configs[index];
@@ -459,6 +615,10 @@ bool OutputManager::applyServo(size_t index, uint8_t angle) {
 }
 
 void OutputManager::identify() {
+    if (!onLoopTask()) {
+        runOnLoop([this]() -> bool { identify(); return true; });
+        return;
+    }
     // Remember the on-state of simple digital outputs so we can restore them
     // after the attention-grabbing blink pattern.
     std::vector<std::pair<size_t, bool>> savedDigital;
@@ -497,10 +657,17 @@ bool OutputManager::initWs2812(size_t index) {
     auto& state = _states[index];
     if (cfg.ledCount == 0) return false;
 
-    auto& leds = _wsLedsPerOutput[index];
+    WsStrip& strip = _wsStrips[cfg.pin];
+    auto& leds = strip.leds;
     leds.assign(cfg.ledCount, CRGB::Black);
 
+    // Already registered with FastLED (this is a reload): re-point the existing
+    // controller at the buffer, which assign() may have moved or resized.
     bool attached = false;
+    if (strip.controller) {
+        strip.controller->setLeds(leds.data(), cfg.ledCount);
+        attached = true;
+    }
     // FastLED's clockless WS2812 driver takes the data pin as a compile-time
     // template parameter, so runtime pin selection is done via this switch. Each
     // case instantiates FastPin<PIN>, which static-asserts if the pin is invalid
@@ -529,13 +696,15 @@ bool OutputManager::initWs2812(size_t index) {
 #endif
 
     #define OF_WS2812_CASE(PIN) \
-        case PIN: FastLED.addLeds<WS2812B, PIN, GRB>(leds.data(), cfg.ledCount); attached = true; break;
+        case PIN: strip.controller = &FastLED.addLeds<WS2812B, PIN, GRB>(leds.data(), cfg.ledCount); attached = true; break;
 
-    switch (cfg.pin) {
-        OF_WS2812_PIN_LIST(OF_WS2812_CASE)
-        default:
-            LOG_W(TAG, "WS2812 pin " + String(cfg.pin) + " not supported on this board");
-            break;
+    if (!attached) {
+        switch (cfg.pin) {
+            OF_WS2812_PIN_LIST(OF_WS2812_CASE)
+            default:
+                LOG_W(TAG, "WS2812 pin " + String(cfg.pin) + " not supported on this board");
+                break;
+        }
     }
 
     #undef OF_WS2812_CASE
@@ -561,8 +730,11 @@ bool OutputManager::initWs2812(size_t index) {
 void OutputManager::renderWs2812(size_t index, bool show) {
     const auto& cfg = _configs[index];
     const auto& state = _states[index];
-    auto& leds = _wsLedsPerOutput[index];
-    if (cfg.type != OutputType::Ws2812 || !state.wsReady || leds.empty()) return;
+    if (cfg.type != OutputType::Ws2812 || !state.wsReady) return;
+    auto stripIt = _wsStrips.find(cfg.pin);
+    if (stripIt == _wsStrips.end()) return;
+    auto& leds = stripIt->second.leds;
+    if (leds.empty()) return;
 
     const uint8_t  master = state.brightness;
     const uint16_t n      = static_cast<uint16_t>(leds.size());
@@ -658,6 +830,7 @@ void OutputManager::tickAnimations(uint32_t nowMs) {
 }
 
 void OutputManager::fillStateJson(JsonArray& arr) const {
+    of_lock_guard<of_recursive_mutex> lock(_structMtx);
     for (size_t i = 0; i < _configs.size(); ++i) {
         const auto& cfg = _configs[i];
         const auto& state = _states[i];
@@ -696,9 +869,15 @@ void OutputManager::applyStateJson(JsonArrayConst arr) {
     for (JsonObjectConst obj : arr) {
         const String id = obj["id"] | String("");
         if (!id.length()) continue;
-        const int index = findIndexById(id);
-        if (index < 0) continue;
-        const OutputType type = _configs[index].type;
+        OutputType type;
+        {
+            // May run off the loop task (scene restore from the API): read the
+            // type under the lock; the setters below marshal themselves.
+            of_lock_guard<of_recursive_mutex> lock(_structMtx);
+            const int index = findIndexById(id);
+            if (index < 0) continue;
+            type = _configs[index].type;
+        }
 
         // Apply type-specific attributes first, then the on/off state last so the
         // final digital level reflects the restored colour/brightness.
@@ -758,20 +937,26 @@ void OutputManager::registerVariables(size_t index) {
     const String base  = "output." + cfg.id + ".";
     const String label = cfg.id + " ";
 
-    auto subWritable = [this, index](const String& id) {
-        VariableManager::instance().subscribe(id, [this, index](const Variable& v) {
+    // Subscriptions can't be removed and outlive the variable, so subscribe to
+    // each id only once and resolve the output by id when the change arrives -
+    // an index captured here would be stale after a reload.
+    auto subWritable = [this](const String& id) {
+        if (!_subscribedVarIds.insert(id).second) return;
+        VariableManager::instance().subscribe(id, [this](const Variable& v) {
             if (_suppressVarRouting) return;   // ignore our own mirror pushes
-            applyVariable(index, v);
+            onMirrorVariable(v);
         });
     };
     auto defBool = [&](const char* prop) {
         const String id = base + prop;
         vm.define(id, VarType::Boolean, label + prop, /*persistent*/ false, /*readOnly*/ false);
+        _definedVarIds.push_back(id);
         subWritable(id);
     };
     auto defInt = [&](const char* prop, float mn, float mx, bool writable, const char* unit = "") {
         const String id = base + prop;
         vm.define(id, VarType::Integer, label + prop, false, /*readOnly*/ !writable);
+        _definedVarIds.push_back(id);
         vm.setMeta(id, mn, mx, unit);
         if (writable) subWritable(id);
     };
@@ -794,6 +979,7 @@ void OutputManager::registerVariables(size_t index) {
             defInt("led_count", 0, 65535, false);   // read-only
             const String animId = base + "animation";
             vm.define(animId, VarType::String, label + "animation", false, false);
+            _definedVarIds.push_back(animId);
             vm.setOptions(animId, { "solid", "off", "blink", "breathe",
                                     "rainbow", "chase", "colorwipe", "fire" });
             subWritable(animId);
@@ -858,6 +1044,23 @@ void OutputManager::pushVariables(size_t index) {
     _suppressVarRouting = false;
 }
 
+// A writable mirror variable (output.<id>.<prop>) changed. Find the output it
+// belongs to by id and apply it on the loop task.
+void OutputManager::onMirrorVariable(const Variable& var) {
+    static const char PREFIX[] = "output.";
+    const size_t prefixLen = sizeof(PREFIX) - 1;
+    const int dot = var.id.lastIndexOf('.');
+    if (!var.id.startsWith(PREFIX) || dot <= static_cast<int>(prefixLen)) return;
+    const String outputId = var.id.substring(prefixLen, dot);
+    const Variable copy = var;   // the caller's reference may not outlive a queued call
+    runOnLoop([this, outputId, copy]() -> bool {
+        const int index = findIndexById(outputId);
+        if (index < 0) return false;   // output removed by a reload
+        applyVariable(static_cast<size_t>(index), copy);
+        return true;
+    });
+}
+
 void OutputManager::applyVariable(size_t index, const Variable& v) {
     const auto& cfg = _configs[index];
     const auto& st  = _states[index];
@@ -877,6 +1080,7 @@ void OutputManager::applyVariable(size_t index, const Variable& v) {
 }
 
 #else  // OF_ENABLE_HW_VARIABLES — no-ops on constrained boards
+void OutputManager::onMirrorVariable(const Variable&) {}
 void OutputManager::registerVariables(size_t) {}
 void OutputManager::pushVariables(size_t) {}
 void OutputManager::applyVariable(size_t, const Variable&) {}

@@ -120,6 +120,11 @@
     inline void of_pwm_write(uint8_t pin, uint8_t /*channel*/, uint32_t duty) {
         analogWrite(pin, static_cast<int>(duty));
     }
+    // Stop PWM/tone on a pin so it can be reconfigured (output hot reload).
+    inline void of_pwm_detach(uint8_t pin) {
+        noTone(pin);
+        digitalWrite(pin, LOW);   // on the ESP8266 core this also stops analogWrite PWM
+    }
     inline void of_tone_setup(uint8_t pin, uint8_t /*channel*/, uint32_t /*freq*/, uint8_t /*resolution*/) {
         pinMode(pin, OUTPUT);
     }
@@ -268,6 +273,10 @@
     }
     inline void of_pwm_write(uint8_t /*pin*/, uint8_t channel, uint32_t duty) {
         ledcWrite(channel, duty);
+    }
+    // Release a pin from its LEDC channel so it can be reconfigured (output hot reload).
+    inline void of_pwm_detach(uint8_t pin) {
+        ledcDetachPin(pin);
     }
     inline void of_tone_setup(uint8_t pin, uint8_t channel, uint32_t freq, uint8_t resolution) {
         ledcSetup(channel, freq, resolution);
