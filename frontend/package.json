@@ -19,7 +19,7 @@
     "vue": "^3.5.45",
     "vue-i18n": "^11.4.22",
     "vue-router": "^5.5.1",
-    "vuetify": "^3.13.8"
+    "vuetify": "^4.3.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
