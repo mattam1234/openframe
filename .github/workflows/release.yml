@@ -41,7 +41,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install --upgrade platformio intelhex
 
       - name: Build firmware
         working-directory: firmware
