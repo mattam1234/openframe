@@ -981,7 +981,7 @@ void ApiServer::sendNetDiag(AsyncWebServerRequest* request) const {
 
 void ApiServer::sendConfig(AsyncWebServerRequest* request) const {
     JsonDocument doc;
-    ConfigManager::instance().toJson(doc);
+    ConfigManager::instance().toPublicJson(doc);   // secrets masked - never sent back
     // Read-only runtime identity, surfaced alongside config for the Settings UI.
     doc["device"]["id"] = WiFiManager::instance().deviceId();
 
@@ -1094,6 +1094,9 @@ void ApiServer::handleConfigUpdate(AsyncWebServerRequest* request, const String&
     // the fresh full config) — release the pre-change snapshot.
     before.clear();
 
+    // `after` held the real secrets for the diff above; mask them before it goes
+    // out as the reply and as a broadcast to every WebSocket client.
+    ConfigManager::redactSecrets(after);
     JsonDocument& response = after;
     if (hotApplicable) {
         response["restartRequired"] = false;
@@ -1337,7 +1340,7 @@ void ApiServer::handleWebSocketMessage(AsyncWebSocketClient* client, const Strin
             response["error"] = "Failed to save config";
         } else {
             JsonDocument configResponse;
-            ConfigManager::instance().toJson(configResponse);
+            ConfigManager::instance().toPublicJson(configResponse);   // secrets masked
             broadcastFrame("config_change", configResponse);
             publishHealthUpdate();
         }
@@ -3085,9 +3088,11 @@ void ApiServer::handleTemplateExport(AsyncWebServerRequest* request, const Strin
     tmplDoc["name"]      = name;
     tmplDoc["createdMs"] = millis();
 
-    // Embed device config (minus Wi-Fi credentials for security)
+    // Embed device config without credentials: Wi-Fi is dropped entirely and the
+    // remaining secrets (MQTT password, tokens, keys) are masked, so a template
+    // file can be shared. (Import applies the template's state, not this config.)
     JsonDocument cfgDoc;
-    ConfigManager::instance().toJson(cfgDoc);
+    ConfigManager::instance().toPublicJson(cfgDoc);
     cfgDoc.remove("wifi");
     tmplDoc["config"].set(cfgDoc);
 

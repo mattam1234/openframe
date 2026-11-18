@@ -39,7 +39,7 @@ See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the MVP com
 - Time: configurable NTP servers + POSIX timezone/DST, and optional DS3231 RTC; static-IP networking
 - Macro execution and action history tracking
 - Health monitoring for heap (incl. fragmentation + leak warning), PSRAM, CPU, WiFi RSSI, reboot reason, and uptime; boot self-test, network diagnostics, Prometheus `/metrics`, and structured remote logging over MQTT
-- Security: per-device API token, same-origin/CSRF guard on state-changing endpoints, config-read ETag
+- Security: per-device API token, same-origin/CSRF guard on state-changing endpoints, config-read ETag; saved secrets (WiFi/MQTT passwords, tokens, keys) are never sent back by the API — they read as `********`, and posting that mask keeps the stored value
 - Notification delivery to displays and the web UI
 - Fleet telemetry: stable MAC-derived `deviceId`, MQTT presence (retained birth + Last-Will) and a periodic heartbeat
 - Remote control over MQTT (`identify`, `get_status`, `reboot`, `activate_profile`, `apply_config`)
