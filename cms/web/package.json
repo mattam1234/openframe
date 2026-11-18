@@ -16,7 +16,7 @@
     "@mdi/js": "^7.4.47",
     "vue": "^3.5.45",
     "vue-router": "^5.5.1",
-    "vuetify": "^3.13.8"
+    "vuetify": "^4.3.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
